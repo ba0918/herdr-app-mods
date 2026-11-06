@@ -24,3 +24,8 @@ export function restoredDraft(draft) {
   const { bom, text } = splitBom(draft.content);
   return { text, bom: draft.bom ?? bom };
 }
+
+// 「復元 / 破棄」を聞けるタブか。読み取り専用でなく、Editor で中身を出しているか、ファイルが無くなったことの案内のタブ。
+export function offersDrafts(file) {
+  return !file.readonly && Boolean(file.editor || (file.missing && file.view?.reason === "missing"));
+}

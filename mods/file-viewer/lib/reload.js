@@ -1,3 +1,5 @@
+import { offersDrafts } from "./drafts.js";
+
 // タブの内容をディスクから読み直した結果の扱い。
 //   editor: タブが Editor で中身を表示しているか。image: 画像のコピーで中身を表示しているか。
 //   edited: 読み込みの間に編集されたか。missing: 読み直したらファイルが無かったか。
@@ -7,4 +9,10 @@ export function reloadOutcome({ editor, image, edited, missing }) {
   if (missing && (editor || image)) return "missing";
   if (edited) return "keep-edits";
   return "replace";
+}
+
+// 読み直した内容（next）に置き換えるとき、前の file（prev）から引き継ぐもの: 画像の拡大と位置、答えていない「復元 / 破棄」の下書き。
+export function carryOver(prev, next) {
+  if (next.zoom && prev.zoom) next.zoom = prev.zoom;
+  if (prev.drafts?.length && offersDrafts(next)) next.drafts = prev.drafts;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { reloadOutcome } from "../mods/file-viewer/lib/reload.js";
+import { reloadOutcome, carryOver } from "../mods/file-viewer/lib/reload.js";
 
 // editor: タブが Editor で中身を表示しているか。image: 画像のコピーで中身を表示しているか。
 // edited: 読み込みの間に編集されたか。missing: 読み直したらファイルが無かったか。
@@ -26,5 +26,22 @@ describe("reloadOutcome", () => {
     expect(outcome({ editor: true })).toBe("replace");
     expect(outcome({ image: true })).toBe("replace");
     expect(outcome({})).toBe("replace");
+  });
+});
+
+describe("carryOver", () => {
+  const drafts = [{ name: "d1" }];
+
+  test("読み直した内容に置き換えても、答えていない「復元 / 破棄」の下書きは残る", () => {
+    const next = { editor: {} };
+    carryOver({ editor: {}, drafts }, next);
+    expect(next.drafts).toEqual(drafts);
+  });
+
+  test("読み直したら読み取り専用になったか、Editor で中身を出せなくなったタブには残さない", () => {
+    for (const next of [{ editor: {}, readonly: true }, { view: { type: "unopenable", reason: "binary" } }]) {
+      carryOver({ editor: {}, drafts }, next);
+      expect(next.drafts).toBeUndefined();
+    }
   });
 });

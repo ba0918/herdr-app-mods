@@ -8,10 +8,10 @@ import { kind, languageFor } from "./lib/kind.js";
 import { formatSize, limitMessage } from "./lib/size.js";
 import { tabTitles } from "./lib/tabs.js";
 import { splitBom, contentToSave, looksNonUtf8 } from "./lib/save.js";
-import { draftsFor, expiredDrafts, restoredDraft } from "./lib/drafts.js";
+import { draftsFor, expiredDrafts, restoredDraft, offersDrafts } from "./lib/drafts.js";
 import { resolveLink } from "./lib/markdown.js";
 import { externalNoticeAction, showsDraftChanged } from "./lib/notices.js";
-import { reloadOutcome } from "./lib/reload.js";
+import { reloadOutcome, carryOver } from "./lib/reload.js";
 import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { parseMermaid } from "./lib/mermaid/parse.js";
@@ -309,7 +309,7 @@ export default class FileViewer extends View {
         return;
       }
       file.editor?.release();
-      if (next.zoom && file.zoom) next.zoom = file.zoom;
+      carryOver(file, next);
       this.file = next;
       this.setDirty(false);
       cx.notify();
@@ -359,7 +359,7 @@ export default class FileViewer extends View {
   // 開いたファイルに、開いているほかの viewer のタブのものでない下書きがあれば「復元 / 破棄」を聞く。
   // ファイルが無いとき（無くなった後の再起動など）も、そのファイルの下書きがあれば聞く。
   async offerDrafts(file) {
-    if (file.readonly || (!file.editor && !(file.missing && file.view?.reason === "missing"))) return;
+    if (!offersDrafts(file)) return;
     const list = draftsFor({ drafts: await listDrafts(), machine: file.machine, path: file.path, openTokens: openTokens(), selfToken: this.token });
     if (this.file !== file || !list.length) return;
     file.drafts = list;
