@@ -275,6 +275,8 @@ export default class FileViewer extends View {
       cx.notify();
       // 捨てた編集の下書きも消す（新しい file は下書きを持っていないので、keepDraft では消えない）。
       if (file.dirty || file.drafted !== undefined) await deleteDraft(draftName(this.token, file.machine, file.path));
+      // 無くなっていたファイルが戻ってきたら、そのファイルの下書きをもう一度聞く。
+      if (file.missing && !next.missing) { await this.offerDrafts(next); cx.notify(); }
     });
   }
 
@@ -306,8 +308,9 @@ export default class FileViewer extends View {
   }
 
   // 開いたファイルに、開いているほかの viewer のタブのものでない下書きがあれば「復元 / 破棄」を聞く。
+  // ファイルが無いとき（無くなった後の再起動など）も、そのファイルの下書きがあれば聞く。
   async offerDrafts(file) {
-    if (!file.editor || file.readonly) return;
+    if (file.readonly || (!file.editor && !(file.missing && file.view?.reason === "missing"))) return;
     const list = draftsFor({ drafts: await listDrafts(), machine: file.machine, path: file.path, openTokens: openTokens(), selfToken: this.token });
     if (this.file !== file || !list.length) return;
     file.drafts = list;
@@ -316,7 +319,15 @@ export default class FileViewer extends View {
   restoreDraft(name, cx) {
     const file = this.file;
     const draft = file?.drafts?.find((d) => d.name === name);
-    if (!draft || !file.editor) return;
+    if (!draft || (!file.editor && !file.missing)) return;
+    if (!file.editor) {
+      // ファイルが無いときは、下書きの内容を入れる Editor を作る。未保存の編集として入れるため空で作る。
+      // 改行と末尾の改行は下書きのものを保つ。SVG は画像のコピーが無いので、ソースとして出す。
+      const view = kind({ path: file.path, size: 0, text: draft.content });
+      file.view = view.type === "image" ? { type: "code", source: true } : view;
+      file.text = draft.content;
+      this.attachEditor(file, "");
+    }
     file.drafts = file.drafts.filter((d) => d !== draft);
     file.editor.set_value(draft.content);
     // 復元は編集として扱う（プレビュータブなら固定タブになる）。保存前の確認の基準は下書きに記録したディスクの状態。
