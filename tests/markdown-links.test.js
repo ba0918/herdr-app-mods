@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { resolveLink, rewriteImages, collectDefinitions, splitMermaidBlocks } from "../mods/file-viewer/lib/markdown.js";
 
-// 書き換えた Markdown の中の押せるリンク（Markdown のリンクと HTML の <a>）の名前と、押したときの行き先。
+// 書き換えた Markdown の中の押せるリンク（Markdown のリンクと HTML の <a>。画像の ![..](..) は含めない）の名前と、押したときの行き先。
 function linksIn(text, from = "/r/README.md") {
   const unHtml = (t) => t.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   const unMd = (t) => t.replace(/\\([\\[\]])/g, "$1");
-  return [...text.matchAll(/<a href="([^"]*)">([^<]*)<\/a>|\[((?:\\.|[^\]\\])*)\]\((<[^>]*>|[^)\s]+)\)/g)].map((m) => {
+  return [...text.matchAll(/<a href="([^"]*)">([^<]*)<\/a>|(?<!!)\[((?:\\.|[^\]\\])*)\]\((<[^>]*>|[^)\s]+)\)/g)].map((m) => {
     const href = m[1] !== undefined ? unHtml(m[1]) : m[4].replace(/^<(.*)>$/, "$1");
     return { name: m[1] !== undefined ? unHtml(m[2]) : unMd(m[3]), to: resolveLink({ from, href }) };
   });
@@ -127,6 +127,35 @@ describe("rewriteImages", () => {
   test("コードブロック・インラインコード・<!-- --> の中は書き換えない", () => {
     const md = "```md\n![x](a.png)\n```\n`![y](b.png)` ![z](c.png)\n<!-- ![c](d.png)\n<img src=\"e.png\"> -->\n後 <!-- <img src=\"f.png\"> --> ![g](g.png)";
     expect(rewriteImages(md)).toBe("```md\n![x](a.png)\n```\n`![y](b.png)` [z](fv-image:c.png)\n<!-- ![c](d.png)\n<img src=\"e.png\"> -->\n後 <!-- <img src=\"f.png\"> --> [g](fv-image:g.png)");
+  });
+
+  // コードの中を書き換えていなければ、押せるリンクは z の画像だけになる。
+  const onlyZ = (md) => expect(linksIn(rewriteImages(md)).map((l) => l.name)).toEqual(["z"]);
+
+  test("コードブロックは、開いた並びと同じ文字で、同じ長さ以上の、後ろに何も無い並びでだけ閉じる", () => {
+    onlyZ("````md\n```\n![x](a.png)\n```\n````\n![z](c.png)");
+    onlyZ("```\ncode\n```js\n![x](a.png)\n```\n![z](c.png)");
+    onlyZ("~~~\n```\n![x](a.png)\n~~~\n![z](c.png)");
+    onlyZ("```\r\n![x](a.png)\r\n```\r\n![z](c.png)");
+  });
+
+  test("空行のあとや文書の先頭の、4 つ以上の空白で下げた行はコードブロックで、書き換えない", () => {
+    onlyZ("    ![x](a.png)\n\n![z](c.png)");
+    onlyZ("本文\n\n    ![x](a.png)\n\n    ![y](b.png)\n![z](c.png)");
+    onlyZ("# 見出し\n    ![x](a.png)\n![z](c.png)");
+  });
+
+  test("段落の続きやリストの中の、下げた行はコードブロックではない", () => {
+    expect(linksIn(rewriteImages("本文\n    ![x](a.png)")).map((l) => l.name)).toEqual(["x"]);
+    expect(linksIn(rewriteImages("- 項目\n\n    ![x](a.png)\n\n    - ![y](b.png)")).map((l) => l.name)).toEqual(["x", "y"]);
+  });
+
+  test("インラインコードは、段落の中なら改行をまたいでも書き換えない", () => {
+    onlyZ("前 `![x](a.png)\n![y](b.png)` 後 ![z](c.png)");
+  });
+
+  test("コードブロックの中の定義は、閉じ方や下げた書き方でも集めない", () => {
+    expect(linksIn(rewriteImages("````\n```\n[x]: a.png\n```\n````\n\n    [y]: b.png\n\n![x] ![y]"))).toEqual([]);
   });
 
   // <picture> の中は押せない文字になる（文言は仕様が任せている）。押せるリンクが無く、名前と場所が出ることだけを見る。

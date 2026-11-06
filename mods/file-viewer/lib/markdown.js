@@ -160,81 +160,187 @@ function aroundPictures(text, state, rewrite) {
   return out;
 }
 
-const FENCE = /^ {0,3}(```|~~~)/;
+// ---- 文書のかたまり ----
+// CommonMark にならい、行を、コードブロック（フェンスと、4 つ以上の空白で下げた形）、HTML のかたまり、文章に分ける。
 
-// 1 行を、書き換えてよい部分と、インラインコード・HTML のコメントの部分に分ける。state.comment は行をまたぐコメントの中か。
-function segments(line, state) {
+const FENCE_OPEN = /^( *)(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE = /^( *)(`{3,}|~{3,})\s*$/;
+const ATX_HEADING = /^ {0,3}#{1,6}(?:\s|$)/;
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}\s*$/;
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)\s*$/;
+const LIST_MARKER = /^\s*(?:[-+*]|\d{1,9}[.)])(?:\s|$)/;
+
+// フェンスの始まり。{ char, length, info, maxIndent } か null。` のフェンスの言語の欄に ` があればフェンスではない。
+// maxIndent は行頭の空白の上限（閉じる行にも使う）。
+function fenceOpen(line, maxIndent = 3) {
+  const m = FENCE_OPEN.exec(line);
+  if (!m || m[1].length > maxIndent || (m[2][0] === "`" && m[3].includes("`"))) return null;
+  return { char: m[2][0], length: m[2].length, info: m[3].trim().split(/\s+/)[0], maxIndent };
+}
+
+// フェンスを閉じる行か。開いた並びと同じ文字で、同じ長さ以上の並びのあとに空白しか無い行だけが閉じる。
+function closesFence(line, fence) {
+  const m = FENCE_CLOSE.exec(line);
+  return Boolean(m) && m[1].length <= fence.maxIndent && m[2][0] === fence.char && m[2].length >= fence.length;
+}
+
+// 行頭の空白の幅（タブは 4 の倍数の位置まで）。
+function indentOf(line) {
+  let width = 0;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === " ") width++;
+    else if (line[i] === "\t") width += 4 - (width % 4);
+    else break;
+  }
+  return width;
+}
+
+// 文書の行を、かたまり { kind, lines } の並びに分ける。kind: "code"（書き換えない）・"html"・"text"・"blank"。
+// 文章のかたまりは段落の単位（見出し・区切りの線・リストの項目の行で新しく始める）で、インラインコードはその中でだけ閉じる。
+function blocksOf(markdown) {
+  const blocks = [];
+  // paragraph: 直前の行が段落の続きを受ける行か。list: リストの中か（下げた行をコードブロックにしない）。blank: 直前が空行か文書の先頭か。
+  let fence = null, indented = false, html = false, paragraph = false, list = false, blank = true;
+  const add = (kind, line, fresh = false) => {
+    const last = blocks[blocks.length - 1];
+    if (!fresh && last?.kind === kind) last.lines.push(line);
+    else blocks.push({ kind, lines: [line] });
+  };
+  for (const line of markdown.split("\n")) {
+    if (fence) {
+      add("code", line);
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    if (/^\s*$/.test(line)) {
+      add("blank", line);
+      html = false; paragraph = false; blank = true;
+      continue;
+    }
+    const indent = indentOf(line);
+    if (indented && indent >= 4) { add("code", line); blank = false; continue; }
+    indented = false;
+    if (html) { add("html", line); continue; }
+    const marker = LIST_MARKER.test(line) && !THEMATIC_BREAK.test(line);
+    if (list && blank && indent < 2 && !marker) list = false;
+    const open = fenceOpen(line, list ? Infinity : 3);
+    if (open) {
+      fence = open;
+      add("code", line, true);
+    } else if (!list && !paragraph && indent >= 4) {
+      indented = true;
+      add("code", line, true);
+    } else if (blank && HTML_START.test(line)) {
+      html = true;
+      add("html", line, true);
+    } else if (paragraph && SETEXT_UNDERLINE.test(line)) {
+      add("text", line);
+    } else if (ATX_HEADING.test(line) || THEMATIC_BREAK.test(line)) {
+      add("text", line, true);
+    } else {
+      if (marker) list = true;
+      add("text", line, marker || !paragraph);
+      paragraph = true;
+      blank = false;
+      continue;
+    }
+    paragraph = false;
+    blank = false;
+  }
+  return blocks;
+}
+
+// 文書を、かたまりごとに visit(text, kind, state) で書き換えてつなぐ（"html" と "text" のかたまりだけ渡す）。
+// state.comment は HTML のコメントの中か、state.picture は <picture> の中か（どちらもかたまりをまたぐ）。
+function mapBlocks(markdown, visit) {
+  const state = { comment: false, picture: false };
+  return blocksOf(markdown).map(({ kind, lines }) => {
+    const text = lines.join("\n");
+    return kind === "html" || kind === "text" ? visit(text, kind, state) : text;
+  }).join("\n");
+}
+
+// かたまりの文字列を、書き換えてよい部分と、インラインコード・HTML のコメントの部分（keep）に分ける。
+function segments(text, state) {
   const out = [];
+  const push = (part, keep = false) => {
+    const last = out[out.length - 1];
+    if (!keep && last && !last.keep) last.text += part;
+    else out.push(keep ? { text: part, keep } : { text: part });
+  };
+  // 後ろに閉じる並びが無いと分かった ` の並びの長さ（同じ長さを何度も探さない）。
+  const unclosed = new Set();
+  const mark = /<!--|`+/g;
   let i = 0;
-  while (i < line.length) {
+  while (i < text.length) {
     if (state.comment) {
-      const end = line.indexOf("-->", i);
-      if (end < 0) { out.push({ text: line.slice(i), keep: true }); return out; }
-      out.push({ text: line.slice(i, end + 3), keep: true });
+      const end = text.indexOf("-->", i);
+      if (end < 0) { push(text.slice(i), true); return out; }
+      push(text.slice(i, end + 3), true);
       i = end + 3;
       state.comment = false;
       continue;
     }
-    const mark = /<!--|`+/g;
     mark.lastIndex = i;
-    const hit = mark.exec(line);
-    if (!hit) { out.push({ text: line.slice(i) }); break; }
-    if (hit.index > i) out.push({ text: line.slice(i, hit.index) });
+    const hit = mark.exec(text);
+    if (!hit) { push(text.slice(i)); break; }
+    if (hit.index > i) push(text.slice(i, hit.index));
     if (hit[0] === "<!--") {
-      const end = line.indexOf("-->", hit.index + 4);
-      if (end < 0) { out.push({ text: line.slice(hit.index), keep: true }); state.comment = true; return out; }
-      out.push({ text: line.slice(hit.index, end + 3), keep: true });
+      const end = text.indexOf("-->", hit.index + 4);
+      if (end < 0) { push(text.slice(hit.index), true); state.comment = true; return out; }
+      push(text.slice(hit.index, end + 3), true);
       i = end + 3;
       continue;
     }
-    // インラインコード: 同じ長さの ` の並びで閉じる。閉じなければ ` はただの文字。
-    const close = new RegExp(`(?<!\`)${hit[0]}(?!\`)`, "g");
-    close.lastIndex = hit.index + hit[0].length;
-    const end = close.exec(line);
-    if (!end) { out.push({ text: hit[0] }); i = hit.index + hit[0].length; continue; }
-    out.push({ text: line.slice(hit.index, end.index + hit[0].length), keep: true });
-    i = end.index + hit[0].length;
+    // インラインコード: 同じ長さの ` の並びで閉じる（改行をまたいでよい）。閉じなければ ` はただの文字。
+    const n = hit[0].length, from = hit.index + n;
+    let end = null;
+    if (!unclosed.has(n)) {
+      const close = new RegExp(`(?<!\`)\`{${n}}(?!\`)`, "g");
+      close.lastIndex = from;
+      end = close.exec(text);
+      if (!end) unclosed.add(n);
+    }
+    if (!end) { push(hit[0]); i = from; continue; }
+    push(text.slice(hit.index, end.index + n), true);
+    i = end.index + n;
   }
   return out;
-}
-
-// 文書の行を、コードブロックの外だけ、行をまたぐ HTML のコメントの状態とともに順に渡す。
-// visit(line, { inHtml, state }) の戻り値で行を置き換える（コードブロックの中は渡さない）。
-function eachLine(markdown, visit) {
-  let fence = null, prevBlank = true, inHtml = false;
-  const state = { comment: false, picture: false };
-  return markdown.split("\n").map((line) => {
-    const open = line.match(FENCE);
-    if (fence) {
-      if (open && open[1] === fence) fence = null;
-      return line;
-    }
-    if (open && !state.comment) { fence = open[1]; inHtml = false; prevBlank = false; return line; }
-    if (/^\s*$/.test(line)) { inHtml = false; prevBlank = true; return line; }
-    if (prevBlank && !state.comment && HTML_START.test(line)) inHtml = true;
-    prevBlank = false;
-    return visit(line, { inHtml, state });
-  }).join("\n");
 }
 
 // 参照形式の定義（[id]: path）を、文書全体（コードブロック・インラインコード・HTML のコメントの外）から集める。
 // ラベルは大文字小文字と空白の違いを無視する。同じラベルは最初の定義。値は書いたままの参照先（<...> を含む）。
 export function collectDefinitions(markdown) {
   const definitions = new Map();
-  eachLine(markdown, (line, { state }) => {
-    const [first] = segments(line, state);
-    const m = first && !first.keep && first.text === line ? DEFINITION.exec(line) : null;
-    if (m && !definitions.has(normalizeLabel(m[1]))) definitions.set(normalizeLabel(m[1]), m[2]);
-    return line;
+  mapBlocks(markdown, (text, kind, state) => {
+    const parts = segments(text, state);
+    if (kind !== "text") return text;
+    // インラインコードやコメントにかからない行だけを見る。
+    const kept = [];
+    let at = 0;
+    for (const part of parts) {
+      if (part.keep) kept.push([at, at + part.text.length]);
+      at += part.text.length;
+    }
+    let start = 0, k = 0;
+    for (const line of text.split("\n")) {
+      const end = start + line.length;
+      while (k < kept.length && kept[k][1] <= start) k++;
+      const m = k < kept.length && kept[k][0] < end ? null : DEFINITION.exec(line);
+      if (m && !definitions.has(normalizeLabel(m[1]))) definitions.set(normalizeLabel(m[1]), m[2]);
+      start = end + 1;
+    }
+    return text;
   });
   return definitions;
 }
 
 // 整形表示に渡す前に、画像を押せる名前に置き換える。definitions は collectDefinitions の結果
-// （```mermaid で文書を分けたときは、分ける前の文書全体から集めたもの）。行の数は変えない。
+// （```mermaid で文書を分けたときは、分ける前の文書全体から集めたもの）。行をまたぐ書き方を 1 行にまとめるので、
+// 行の数は変わりうる（図の行番号は、分けたときの元の Markdown で数える）。
 export function rewriteImages(markdown, definitions = collectDefinitions(markdown)) {
-  return eachLine(markdown, (line, { inHtml, state }) => segments(line, state)
-    .map((part) => (part.keep ? part.text : aroundPictures(part.text, state, (text) => (inHtml ? rewriteHtml(text) : rewriteInline(text, definitions)))))
+  return mapBlocks(markdown, (text, kind, state) => segments(text, state)
+    .map((part) => (part.keep ? part.text : aroundPictures(part.text, state, (t) => (kind === "html" ? rewriteHtml(t) : rewriteInline(t, definitions)))))
     .join(""));
 }
 
@@ -246,13 +352,11 @@ export function splitMermaidBlocks(markdown) {
   let text = [];
   const flush = () => { parts.push({ type: "markdown", text: text.join("\n") }); text = []; };
   for (let i = 0; i < lines.length; i++) {
-    const open = lines[i].match(/^ {0,3}(`{3,}|~{3,})\s*([^`\s]*)/);
+    const open = fenceOpen(lines[i]);
     if (!open) { text.push(lines[i]); continue; }
-    const fence = open[1];
-    const closes = (line) => new RegExp(`^ {0,3}${fence[0] === "`" ? "`" : "~"}{${fence.length},}\\s*$`).test(line);
     let end = i + 1;
-    while (end < lines.length && !closes(lines[end])) end++;
-    if (end >= lines.length || open[2].toLowerCase() !== "mermaid") {
+    while (end < lines.length && !closesFence(lines[end], open)) end++;
+    if (end >= lines.length || open.info.toLowerCase() !== "mermaid") {
       // 閉じていないブロックと、ほかの言語のブロックは文章のまま（中は読み飛ばす）。
       text.push(...lines.slice(i, Math.min(end + 1, lines.length)));
       i = end;
