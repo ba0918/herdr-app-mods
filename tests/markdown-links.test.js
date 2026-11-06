@@ -5,7 +5,7 @@ import { resolveLink, rewriteImages, collectDefinitions, splitMermaidBlocks } fr
 function linksIn(text, from = "/r/README.md") {
   const unHtml = (t) => t.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   const unMd = (t) => t.replace(/\\([\\[\]])/g, "$1");
-  return [...text.matchAll(/<a href="([^"]*)">([^<]*)<\/a>|(?<!!)\[((?:\\.|[^\]\\])*)\]\((<[^>]*>|[^)\s]+)\)/g)].map((m) => {
+  return [...text.matchAll(/<a href="([^"]*)">([^<]*)<\/a>|(?<!!)\[((?:\\.|[^[\]\\])*)\]\((<[^>]*>|[^)\s]+)\)/g)].map((m) => {
     const href = m[1] !== undefined ? unHtml(m[1]) : m[4].replace(/^<(.*)>$/, "$1");
     return { name: m[1] !== undefined ? unHtml(m[2]) : unMd(m[3]), to: resolveLink({ from, href }) };
   });
@@ -136,6 +136,27 @@ describe("rewriteImages", () => {
     expect(rewriteImages("[![図](img/a.png)](docs/a.md)")).toBe("[図](docs/a.md)");
     expect(rewriteImages('前 <a href="docs/a.md"><img src="img/a.png" alt="図"></a> 後')).toBe("前 [図](docs/a.md) 後");
     expect(rewriteImages('<div>\n<a href="docs/a.md"><img src="img/a.png" alt="図"></a>\n</div>')).toBe('<div>\n<a href="docs/a.md">図</a>\n</div>');
+  });
+
+  // リンクに包まれた画像で、リンクの記号が文字として残っていないこと。
+  const noLeftoverBrackets = (line) => expect(line.replace(/(?<!!)\[(?:\\.|[^[\]\\])*\]\((?:<[^>]*>|[^)\s]+)\)/g, "")).not.toMatch(/[[\]]/);
+
+  test("参照形式のリンクや、<img> を包む Markdown のリンクも、外側のリンク先を開く 1 つのリンクになる", () => {
+    const md = '[![CI](https://img.shields.io/x.svg)][ci] [<img src="img/shot.png" alt="画面">](docs/a.md) [<img src="img/b.png">][Docs]\n\n[ci]: https://example.com/ci\n[docs]: <docs/b c.md>';
+    const out = rewriteImages(md);
+    noLeftoverBrackets(out.split("\n")[0]);
+    expect(linksIn(out)).toEqual([
+      { name: "CI", to: { type: "external", url: "https://example.com/ci" } },
+      { name: "画面", to: file("/r/docs/a.md") },
+      { name: "b.png", to: file("/r/docs/b c.md") },
+    ]);
+  });
+
+  test("参照形式の外側のリンクが #見出し だけなら画像を開き、定義が無ければ中の画像だけを押せる名前にする", () => {
+    const out = rewriteImages("[![図](img/a.png)][top]\n\n[top]: #top");
+    noLeftoverBrackets(out.split("\n")[0]);
+    expect(linksIn(out)).toEqual([{ name: "図", to: file("/r/img/a.png") }]);
+    expect(linksIn(rewriteImages("[![図](img/a.png)][nothing]"))).toEqual([{ name: "図", to: file("/r/img/a.png") }]);
   });
 
   // HTML のかたまりの中の <a> の、押したときの行き先。

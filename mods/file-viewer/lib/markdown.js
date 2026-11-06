@@ -37,8 +37,9 @@ const TITLE = String.raw`(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?`;
 // 画像（インライン形式・参照形式）。1: 代替テキスト、2: インライン形式の参照先、3: 参照形式のラベル（空なら代替テキスト）。
 const IMAGE_SRC = String.raw`!\[([^\]]*)\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]*)\]|(?![\[(]))`;
 const IMAGE = new RegExp(IMAGE_SRC, "g");
-// リンクに包まれた画像。1〜3: 画像、4: 外側のリンク先。
-const LINKED_IMAGE = new RegExp(String.raw`\[\s*${IMAGE_SRC}\s*\]\(\s*${DEST}${TITLE}\s*\)`, "g");
+// Markdown のリンクに包まれた画像（Markdown の画像か <img>）。1〜3: Markdown の画像、4: <img> の属性、
+// 5: 外側のインライン形式のリンク先、6: 外側の参照形式のラベル（ラベルは [ ] を含められないので、省略形は無い）。
+const LINKED_IMAGE = new RegExp(String.raw`\[\s*(?:${IMAGE_SRC}|<img\b([^>]*)>)\s*\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]+)\])`, "g");
 const LINKED_IMG_TAG = /<a\b([^>]*)>\s*<img\b([^>]*)>\s*<\/a\s*>/gi;
 const IMG_TAG = /<img\b([^>]*)>/gi;
 const DEFINITION = /^ {0,3}\[([^\]]+)\]:\s*(<[^>\n]*>|\S+)/;
@@ -104,11 +105,11 @@ function rewriteInline(text, definitions) {
       if (href === null || !image) return whole;
       return `[${escapeMarkdown(image.name)}](${markdownDest(outerHref(href, image))})`;
     })
-    .replace(LINKED_IMAGE, (whole, alt, dest, label, outer) => {
-      const image = imageSource(alt, dest, label, definitions);
-      if (!image) return whole;
-      const href = unwrap(outer);
-      return `[${escapeMarkdown(image.name)}](${markdownDest(outerHref(href, image))})`;
+    .replace(LINKED_IMAGE, (whole, alt, dest, label, imgAttrs, outerDest, outerLabel) => {
+      const image = imgAttrs === undefined ? imageSource(alt, dest, label, definitions) : tagImage(imgAttrs);
+      const outer = outerDest ?? definitions.get(normalizeLabel(outerLabel));
+      if (!image || outer === undefined) return whole;
+      return `[${escapeMarkdown(image.name)}](${markdownDest(outerHref(unwrap(outer), image))})`;
     })
     .replace(IMAGE, (whole, alt, dest, label) => {
       const image = imageSource(alt, dest, label, definitions);
