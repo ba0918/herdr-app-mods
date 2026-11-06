@@ -127,15 +127,16 @@ export default class FileViewer extends View {
   // ---- 読み込み ----
 
   load(target, cx) {
-    const key = fileKey(target.machine, target.path);
-    this.loadedKey = key;
+    this.loadedKey = fileKey(target.machine, target.path);
+    // 同じファイルを開き直すこと（A → B → A）もあるので、どの読み込みかは鍵ではなく回数で見分ける。
+    const gen = this.loads = (this.loads ?? 0) + 1;
     this.file?.editor?.release();
     const old = this.file?.cache;
     this.file = { path: target.path, machine: target.machine ?? null, loading: true };
     if (old) cx.spawn(async () => removeCache(old));
     cx.spawn(async (cx) => {
       const file = await this.read(target.path, target.machine ?? null);
-      if (this.loadedKey !== key) { file.editor?.release(); return; }
+      if (this.loads !== gen) { file.editor?.release(); return; }
       this.file = file;
       this.setDirty(false);
       cx.notify();
