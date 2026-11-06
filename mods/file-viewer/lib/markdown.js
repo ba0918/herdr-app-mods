@@ -12,6 +12,7 @@ function decode(text) {
 export function resolveLink({ from, href }) {
   if (/^https?:\/\//i.test(href)) return { type: "external", url: href };
   if (href.startsWith(IMAGE_SCHEME)) href = href.slice(IMAGE_SCHEME.length);
+  else if (/^file:\/\//i.test(href)) href = href.replace(/^file:\/\/(localhost)?/i, "").replace(/^\/([a-z]:)/i, "$1");
   else if (/^[a-z][a-z0-9+.-]*:/i.test(href) && !/^[a-z]:[\\/]/i.test(href)) return { type: "none" };
   const target = href.split("#")[0];
   if (target === "") return { type: "none" };

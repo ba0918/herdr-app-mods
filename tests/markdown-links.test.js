@@ -31,6 +31,10 @@ describe("resolveLink", () => {
     expect(resolveLink({ from, href: "my%20docs/a%20b.md" })).toEqual({ type: "file", path: "/r/my docs/a b.md" });
   });
 
+  test("部品が file:// の URL にして渡してきても、そのパスを開く", () => {
+    expect(resolveLink({ from, href: "file:///r/docs/a%20b.md#x" })).toEqual({ type: "file", path: "/r/docs/a b.md" });
+  });
+
   test("絶対パスはそのまま開く", () => {
     expect(resolveLink({ from, href: "/etc/hosts" })).toEqual({ type: "file", path: "/etc/hosts" });
   });
