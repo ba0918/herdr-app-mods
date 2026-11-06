@@ -273,6 +273,8 @@ export default class FileViewer extends View {
       this.file = next;
       this.setDirty(false);
       cx.notify();
+      // 捨てた編集の下書きも消す（新しい file は下書きを持っていないので、keepDraft では消えない）。
+      if (file.dirty || file.drafted !== undefined) await deleteDraft(draftName(this.token, file.machine, file.path));
     });
   }
 
