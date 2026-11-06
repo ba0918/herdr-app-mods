@@ -4,11 +4,10 @@
 import { shared, setShared, panes, spaces, focused, machines, run } from "herdr";
 import { randomUUID } from "crypto";
 import { openAction } from "./lib/tabs.js";
+import { staleRecords, PENDING_MS } from "./lib/records.js";
 
 export const MOD = "file-viewer";
 const TABS = "file-viewer:tabs";
-// tab.new の直後、コピーが自分のタブを名乗るまでの記録（pane が null）を有効とみなす時間。
-const PENDING_MS = 10_000;
 
 // { [token]: { space, machine, path, preview, mode, pane, dirty, createdAt } }
 export function records() {
@@ -24,12 +23,6 @@ export function putRecord(token, patch) {
   setShared(TABS, { ...all, [token]: { ...(all[token] ?? {}), ...patch } });
 }
 
-function dropRecords(tokens) {
-  if (!tokens.length) return;
-  const all = { ...records() };
-  for (const token of tokens) delete all[token];
-  setShared(TABS, all);
-}
 
 function viewerPanes() {
   return panes().filter((p) => p.mod === MOD);
@@ -63,17 +56,21 @@ export function findOwnPane(token) {
   return free.find((p) => p.pane === focused()?.pane) ?? null;
 }
 
-// 記録のうち、ペインが無くなったもの（閉じたタブ）と、名乗らないまま古くなったものを消す。
-// layout を読み終えていない machine の記録は、ペインが見えないだけかもしれないので残す。
+// 閉じたタブの記録と、名乗らないまま古くなった記録を消す（判断は lib/records.js）。
 export function pruneRecords() {
-  const live = new Set(viewerPanes().map((p) => p.pane));
-  const ready = new Set(machines().filter((m) => m.layout === "ready").map((m) => m.name ?? ""));
-  const now = Date.now();
-  const gone = Object.entries(records()).filter(([, r]) => {
-    if (!ready.has(r.machine ?? "")) return false;
-    return r.pane ? !live.has(r.pane) : now - (r.createdAt ?? 0) > PENDING_MS * 6;
-  }).map(([token]) => token);
-  dropRecords(gone);
+  const all = records();
+  const { drop, mark, unmark } = staleRecords({
+    records: all,
+    livePanes: new Set(viewerPanes().map((p) => p.pane)),
+    readyMachines: new Set(machines().filter((m) => m.layout === "ready").map((m) => m.name ?? "")),
+    now: Date.now(),
+  });
+  if (!drop.length && !unmark.length && !Object.keys(mark).length) return;
+  const next = { ...all };
+  for (const token of drop) delete next[token];
+  for (const [token, at] of Object.entries(mark)) next[token] = { ...next[token], missingSince: at };
+  for (const token of unmark) next[token] = { ...next[token], missingSince: null };
+  setShared(TABS, next);
 }
 
 function activeSpace() {
