@@ -1,6 +1,7 @@
 // file-viewer: 1 つのタブに 1 つのファイルを、内容に合った viewer で表示・編集する。
 // タブは tab.new {mod: "file-viewer", props: {token, path, machine, preview, index}} で開かれる。
 import { View, div } from "gpui-kit";
+import { randomUUID } from "crypto";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
 import { spaces, props, theme, settings, run, notify, openOverlay, closeOverlay } from "herdr";
 import { kind, languageFor } from "./lib/kind.js";
@@ -284,7 +285,7 @@ export default class FileViewer extends View {
       this.setDirty(false);
       cx.notify();
       // 捨てた編集の下書きも消す（新しい file は下書きを持っていないので、keepDraft では消えない）。
-      if (file.dirty || file.drafted !== undefined) await deleteDraft(draftName(this.token, file.machine, file.path));
+      if (file.dirty || file.drafted !== undefined) await deleteDraft(this.draftNameOf(file));
       // 無くなっていたファイルが戻ってきたら、そのファイルの下書きをもう一度聞く。
       if (missing && !next.missing) { await this.offerDrafts(next); cx.notify(); }
       if (next.cache) await this.dropOtherCaches(next.cache);
@@ -293,9 +294,17 @@ export default class FileViewer extends View {
 
   // ---- 下書き ----
 
+  // 今の編集の下書きの名前。読み込んだ file ごとに印を付け、復元を聞いている自分の token の下書き
+  // （再起動の前の編集など）と別のファイルにする。同じ名前だと、答える前の編集がそれを上書きし、
+  // 保存や「破棄」で両方が消える。
+  draftNameOf(file) {
+    file.draftName ??= draftName(this.token, file.machine, file.path, randomUUID());
+    return file.draftName;
+  }
+
   draftOf(file) {
     return {
-      name: draftName(this.token, file.machine, file.path),
+      name: this.draftNameOf(file),
       token: this.token, machine: file.machine, path: file.path,
       content: file.editor.value(), base: file.base ?? null, updatedAt: Date.now(),
     };
@@ -314,7 +323,7 @@ export default class FileViewer extends View {
       cx.spawn(async () => { await writeDraft(this.draftOf(file)).catch(() => { file.drafted = null; }); });
     } else if (file.drafted !== undefined) {
       file.drafted = undefined;
-      cx.spawn(async () => deleteDraft(draftName(this.token, file.machine, file.path)));
+      cx.spawn(async () => deleteDraft(this.draftNameOf(file)));
     }
   }
 
@@ -477,7 +486,7 @@ export default class FileViewer extends View {
     } else {
       // 保存したら、このタブの下書きは消す。
       file.drafted = undefined;
-      await deleteDraft(draftName(this.token, file.machine, file.path));
+      await deleteDraft(this.draftNameOf(file));
     }
     // SVG のソースを保存したら、画像表示もコピーし直す。
     if (file.cache) {

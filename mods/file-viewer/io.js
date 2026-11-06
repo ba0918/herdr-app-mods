@@ -201,8 +201,9 @@ export async function listCache() {
 
 const draftsDir = () => `${appHome()}/${DRAFTS_DIR}`;
 
-export function draftName(token, machine, path) {
-  return `${token}-${textHash(`${machine ?? ""}\n${path}`).slice(0, 16)}.json`;
+// mark: 同じタブ・同じファイルでも、別の編集の下書きと名前を分けるための印（無くてもよい）。
+export function draftName(token, machine, path, mark = "") {
+  return `${token}-${textHash(`${machine ?? ""}\n${path}`).slice(0, 16)}${mark ? `-${mark}` : ""}.json`;
 }
 
 // 1 つの下書きは 2 つの枠（<name> の .json の前に .a / .b を付けたファイル）に交互に書く。
