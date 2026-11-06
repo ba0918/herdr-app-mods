@@ -99,6 +99,39 @@ describe("rewriteImages", () => {
     expect(rewriteImages('本文\n\n<p align="center"><img src="img/a.png" alt="A &amp; B"></p>')).toBe('本文\n\n<p align="center"><a href="fv-image:img/a.png">A &amp; B</a></p>');
   });
 
+  // 段落の中は Markdown のリンク（部品が段落の中の <a> を押せない文字で出すため）、HTML のかたまりの中は <a>
+  // （Markdown の書き方が効かないため）になっていること。
+  const asParagraph = (out) => expect(out).not.toContain("<a ");
+  const asHtmlBlock = (out) => expect(out).not.toContain("](");
+
+  test("1 つのタグだけの行でない、タグで始まる行は、空行のあとでも段落として書き換える", () => {
+    const badges = rewriteImages('本文\n\n<a href="https://example.com/ci"><img src="ci.svg" alt="CI"></a> <a href="docs/a.md"><img src="img/b.png" alt="B"></a>');
+    asParagraph(badges);
+    expect(linksIn(badges)).toEqual([{ name: "CI", to: { type: "external", url: "https://example.com/ci" } }, { name: "B", to: file("/r/docs/a.md") }]);
+    const titled = rewriteImages('<img src="img/logo.png" alt="ロゴ"> My project');
+    asParagraph(titled);
+    expect(linksIn(titled)).toEqual([{ name: "ロゴ", to: file("/r/img/logo.png") }]);
+  });
+
+  test("<div> や <p> などのブロックのタグで始まる行は、段落の途中や見出しの直後でも HTML のかたまりにする", () => {
+    for (const md of ['# 見出し\n<div align="center">\n<img src="img/a.png" alt="図">\n</div>', '本文\n<p align="center"><img src="img/a.png" alt="図"></p>']) {
+      const out = rewriteImages(md);
+      asHtmlBlock(out);
+      expect(linksIn(out)).toEqual([{ name: "図", to: file("/r/img/a.png") }]);
+    }
+  });
+
+  test("ほかのタグだけの行は、段落の続きでなければ HTML のかたまり、段落の続きなら段落にする", () => {
+    for (const md of ['<span>\n<img src="img/a.png" alt="図">\n</span>', '# 見出し\n<span>\n<img src="img/a.png" alt="図">']) asHtmlBlock(rewriteImages(md));
+    asParagraph(rewriteImages('本文\n<span>\n<img src="img/a.png" alt="図">'));
+  });
+
+  test("HTML のコメントのかたまりは、--> の行で終わる", () => {
+    const out = rewriteImages("<!-- 図 -->\n![z](img/c.png)");
+    asParagraph(out);
+    expect(linksIn(out)).toEqual([{ name: "z", to: file("/r/img/c.png") }]);
+  });
+
   test("リンクに包まれた画像は、外側のリンク先を開く 1 つのリンクになる", () => {
     expect(rewriteImages("[![図](img/a.png)](docs/a.md)")).toBe("[図](docs/a.md)");
     expect(rewriteImages('前 <a href="docs/a.md"><img src="img/a.png" alt="図"></a> 後')).toBe("前 [図](docs/a.md) 後");

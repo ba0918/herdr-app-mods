@@ -42,8 +42,6 @@ const LINKED_IMAGE = new RegExp(String.raw`\[\s*${IMAGE_SRC}\s*\]\(\s*${DEST}${T
 const LINKED_IMG_TAG = /<a\b([^>]*)>\s*<img\b([^>]*)>\s*<\/a\s*>/gi;
 const IMG_TAG = /<img\b([^>]*)>/gi;
 const DEFINITION = /^ {0,3}\[([^\]]+)\]:\s*(<[^>\n]*>|\S+)/;
-// HTML のかたまりの始まり（空行の次か文書の先頭で、行頭の空白 3 つまでのあとに < とタグ名か <!-- か </）。
-const HTML_START = /^ {0,3}<(?:[A-Za-z][A-Za-z0-9-]*|\/[A-Za-z]|!--)/;
 
 const normalizeLabel = (label) => label.trim().replace(/\s+/g, " ").toLowerCase();
 const unwrap = (dest) => (dest.startsWith("<") ? dest.slice(1, -1) : dest);
@@ -170,6 +168,27 @@ const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}\s*$/;
 const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)\s*$/;
 const LIST_MARKER = /^\s*(?:[-+*]|\d{1,9}[.)])(?:\s|$)/;
 
+// HTML のかたまりの始まり（CommonMark の HTML ブロック）。行頭の空白は 3 つまで。
+// コメント（<!-- で始まり、--> のある行で終わる）と、ブロックのタグ（段落の途中でも始まる）は空行まで。
+const HTML_COMMENT_START = /^ {0,3}<!--/;
+const HTML_BLOCK_TAG = new RegExp(String.raw`^ {0,3}<\/?(?:${[
+  "address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center", "col", "colgroup", "dd", "details",
+  "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form", "frame", "frameset", "h[1-6]", "head",
+  "header", "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem", "nav", "noframes", "ol", "optgroup", "option",
+  "p", "param", "search", "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "title", "tr", "track", "ul",
+].join("|")})(?=\s|\/?>|$)`, "i");
+// それ以外のタグは、1 つの完全な開きタグか閉じタグだけの行で、段落の続きでないときだけ始まる（空行まで）。
+const HTML_OPEN_TAG = String.raw`<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>\x60]+|'[^']*'|"[^"]*"))?)*\s*\/?>`;
+const HTML_LONE_TAG = new RegExp(String.raw`^ {0,3}(?:${HTML_OPEN_TAG}|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$`);
+
+// HTML のかたまりが始まる行なら { end }（end: 終わりの行の印。null なら空行まで）、始まらなければ null。
+// paragraph: 段落の続きを受ける行の次か。
+function htmlStart(line, paragraph) {
+  if (HTML_COMMENT_START.test(line)) return { end: /-->/, first: line.slice(line.indexOf("<!--") + 4) };
+  if (HTML_BLOCK_TAG.test(line) || (!paragraph && HTML_LONE_TAG.test(line))) return { end: null };
+  return null;
+}
+
 // フェンスの始まり。{ char, length, info, maxIndent } か null。` のフェンスの言語の欄に ` があればフェンスではない。
 // maxIndent は行頭の空白の上限（閉じる行にも使う）。
 function fenceOpen(line, maxIndent = 3) {
@@ -200,7 +219,8 @@ function indentOf(line) {
 function blocksOf(markdown) {
   const blocks = [];
   // paragraph: 直前の行が段落の続きを受ける行か。list: リストの中か（下げた行をコードブロックにしない）。blank: 直前が空行か文書の先頭か。
-  let fence = null, indented = false, html = false, paragraph = false, list = false, blank = true;
+  // html: 続いている HTML のかたまり（htmlStart の戻り値）。
+  let fence = null, indented = false, html = null, paragraph = false, list = false, blank = true;
   const add = (kind, line, fresh = false) => {
     const last = blocks[blocks.length - 1];
     if (!fresh && last?.kind === kind) last.lines.push(line);
@@ -212,9 +232,14 @@ function blocksOf(markdown) {
       if (closesFence(line, fence)) fence = null;
       continue;
     }
+    if (html?.end) {
+      add("html", line);
+      if (html.end.test(line)) html = null;
+      continue;
+    }
     if (/^\s*$/.test(line)) {
       add("blank", line);
-      html = false; paragraph = false; blank = true;
+      html = null; paragraph = false; blank = true;
       continue;
     }
     const indent = indentOf(line);
@@ -224,14 +249,15 @@ function blocksOf(markdown) {
     const marker = LIST_MARKER.test(line) && !THEMATIC_BREAK.test(line);
     if (list && blank && indent < 2 && !marker) list = false;
     const open = fenceOpen(line, list ? Infinity : 3);
+    const start = open ? null : htmlStart(line, paragraph);
     if (open) {
       fence = open;
       add("code", line, true);
     } else if (!list && !paragraph && indent >= 4) {
       indented = true;
       add("code", line, true);
-    } else if (blank && HTML_START.test(line)) {
-      html = true;
+    } else if (start) {
+      html = start.end && start.end.test(start.first) ? null : start;
       add("html", line, true);
     } else if (paragraph && SETEXT_UNDERLINE.test(line)) {
       add("text", line);
