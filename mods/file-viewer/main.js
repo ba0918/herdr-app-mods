@@ -10,6 +10,7 @@ import { tabTitles } from "./lib/tabs.js";
 import { preserveLineEndings, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts } from "./lib/drafts.js";
 import { resolveLink } from "./lib/markdown.js";
+import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { parseMermaid } from "./lib/mermaid/parse.js";
 import { layoutFlowchart, layoutSequence } from "./lib/mermaid/layout.js";
@@ -103,7 +104,7 @@ export default class FileViewer extends View {
     putRecord(this.token, {
       pane: me.pane, space: me.space.id,
       machine: rec?.machine !== undefined ? rec.machine : (p.machine ?? null),
-      path: rec?.path ?? p.path ?? null,
+      path: rec?.path ?? (p.path ? normalizePath(p.path) : null),
       preview: rec ? Boolean(rec.preview) : Boolean(p.preview),
       mode: rec?.mode ?? null, dirty: Boolean(rec?.dirty), createdAt: rec?.createdAt ?? Date.now(),
     });

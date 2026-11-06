@@ -4,6 +4,7 @@
 import { shared, setShared, panes, spaces, focused, machines, run } from "herdr";
 import { randomUUID } from "crypto";
 import { openAction } from "./lib/tabs.js";
+import { normalizePath } from "./lib/path.js";
 import { staleRecords, PENDING_MS } from "./lib/records.js";
 
 export const MOD = "file-viewer";
@@ -81,7 +82,9 @@ function activeSpace() {
 }
 
 // ファイルを今の space の viewer のタブに開く。double: ダブルクリック（固定タブとして開く）。
-export function openFile({ machine, path, double }) {
+export function openFile({ machine, path: given, double }) {
+  // 記録・下書き・読み込みの鍵が、どの入口（ツリー・リンク）から開いても同じパスになるようにする。
+  const path = normalizePath(given);
   const space = activeSpace();
   if (!space) return;
   const tabs = viewerTabsIn(space.id);

@@ -10,6 +10,12 @@ export function parentName(path) {
 
 const isWindows = (path) => /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
 
+// 同じファイルを同じ文字列にする。Windows のパスは区切りを \ にそろえる
+// （ツリーは space のフォルダに / でつなぎ、リンクの解決は \ でつなぐため）。ほかはそのまま。
+export function normalizePath(path) {
+  return isWindows(path) ? path.replace(/\//g, "\\") : path;
+}
+
 export function isAbsolute(path) {
   return path.startsWith("/") || isWindows(path);
 }
@@ -24,10 +30,12 @@ export function resolvePath(base, rel) {
   const sep = isWindows(base) ? "\\" : "/";
   const joined = isAbsolute(rel) ? rel : `${base}${sep}${rel}`;
   const parts = joined.split(/[\\/]/);
+  // \\server\share の先頭の 2 つの区切りは畳まない。
+  const head = joined.startsWith("\\\\") ? 2 : 1;
   const out = [];
   for (const [i, part] of parts.entries()) {
-    if (part === "." || (part === "" && i > 0 && i < parts.length - 1)) continue;
-    if (part === "..") { if (out.length > 1) out.pop(); continue; }
+    if (part === "." || (part === "" && i >= head && i < parts.length - 1)) continue;
+    if (part === "..") { if (out.length > head) out.pop(); continue; }
     out.push(part);
   }
   return out.join(sep);

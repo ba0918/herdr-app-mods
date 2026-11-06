@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { openAction } from "../mods/file-viewer/lib/tabs.js";
+import { resolveLink } from "../mods/file-viewer/lib/markdown.js";
 
 const pinned = (id, path) => ({ id, path, preview: false });
 const preview = (id, path) => ({ id, path, preview: true });
@@ -35,5 +36,15 @@ describe("openAction", () => {
       .toEqual({ action: "new", preview: true, index: 2 });
     expect(openAction({ tabs: [], path: "/r/b.js", double: true, currentIndex: 3 }))
       .toEqual({ action: "new", preview: false, index: 4 });
+  });
+
+  test("Windows のパスでも、ツリーで開いたファイルを Markdown のリンクから開くと既存のタブに切り替える", () => {
+    // ツリーは space のフォルダに / でつないだパスを渡す。
+    for (const root of ["C:\\Users\\me\\repo", "\\\\server\\share\\repo"]) {
+      const tree = `${root}/docs/b.md`;
+      const link = resolveLink({ from: `${root}/docs/a.md`, href: "b.md" });
+      expect(openAction({ tabs: [pinned("t1", tree)], path: link.path, double: false, currentIndex: 1 }))
+        .toEqual({ action: "select", id: "t1", pin: false });
+    }
   });
 });

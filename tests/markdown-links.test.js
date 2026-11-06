@@ -27,10 +27,6 @@ describe("resolveLink", () => {
     expect(resolveLink({ from, href: "my%20docs/a%20b.md" })).toEqual({ type: "file", path: "/r/my docs/a b.md" });
   });
 
-  test("Windows のパスの Markdown からは \\ で連結する", () => {
-    expect(resolveLink({ from: "C:\\w\\README.md", href: "docs/a.md" })).toEqual({ type: "file", path: "C:\\w\\docs\\a.md" });
-  });
-
   test("ローカル画像の差し替えリンクは画像のパスに解決する", () => {
     const md = rewriteLocalImages("![構成図](img/arch.png)");
     const href = md.match(/\]\(([^)]+)\)/)[1];
