@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { draftsFor, expiredDrafts, DRAFT_LIFETIME } from "../mods/file-viewer/lib/drafts.js";
 
-const draft = (token, updatedAt, over = {}) => ({ machine: "wsl", path: "/r/a.js", content: "x", baseHash: "h", updatedAt, token, ...over });
+const draft = (token, updatedAt, over = {}) => ({ machine: "wsl", path: "/r/a.js", content: "x", base: "h", updatedAt, token, ...over });
 
 describe("draftsFor", () => {
   test("machine とパスが同じ下書きを新しい順に返す", () => {
