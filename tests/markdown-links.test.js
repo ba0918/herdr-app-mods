@@ -158,6 +158,13 @@ describe("rewriteImages", () => {
     expect(linksIn(lines[6])).toEqual([{ name: "図", to: file("/r/img/a.png") }]);
   });
 
+  test("<img> の属性に Unicode の範囲を超える数値の文字参照があっても、画像は押せる名前になる", () => {
+    for (const alt of ["&#x110000;", "&#99999999999;"]) {
+      const [link] = linksIn(rewriteImages(`前 <img alt="${alt}" src="a.png"> 後`));
+      expect(link.to).toEqual(file("/r/a.png"));
+    }
+  });
+
   test("![仕様](spec.pdf) を押した行き先は spec.pdf", () => {
     const md = rewriteImages("![仕様](spec.pdf)");
     const href = md.match(/\]\(([^)]+)\)/)[1];

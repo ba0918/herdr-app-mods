@@ -55,7 +55,8 @@ function decodeEntities(text) {
     if (k === "quot") return '"';
     if (k === "apos" || k === "#39") return "'";
     const code = k.startsWith("#x") ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10);
-    return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+    // 文字にならない値（0、サロゲート、U+10FFFF を超える値）は、HTML と同じく置き換え文字にする。
+    return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ? "\uFFFD" : String.fromCodePoint(code);
   });
 }
 
