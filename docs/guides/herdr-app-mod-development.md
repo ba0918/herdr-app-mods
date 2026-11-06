@@ -1,0 +1,190 @@
+# herdr-app mod 開発ガイド
+
+herdr-app の拡張（mod）がどう動くかと、この環境（Windows の herdr-app + WSL の作業領域）で mod を作って組み込むまでの手順をまとめたガイド。
+API の網羅的な説明は herdr-app 自身が生成する一次情報に任せ、ここでは「何を読めばよいか」「この環境で何が違うか」「どう作ってどう確かめるか」を扱う。
+
+調査時のバージョン: herdr-app 0.1.13（`herdr-app --version`）。app の更新で API が変わりうるので、作業前に一次情報を読み直すこと。
+
+## 名前の紛らわしさ
+
+| 名前 | 実体 | このリポジトリとの関係 |
+|---|---|---|
+| `herdr-app` | GPUI（Zed の UI フレームワーク）製のデスクトップ app。Windows 側にインストールされている | 拡張対象 |
+| herdr-core（`hc`） | 端末とエージェントを動かし続けるサーバー。WSL 側は `~/.local/bin/herdr-core` | app から `exec` / `hc()` 経由で使う |
+| `herdr`（PATH 上、0.9.x） | 別のツール（TUI の multiplexer。herdr-app と同じ提供元かは未確認） | 無関係。`herdr` skill もこちら向けなので読まない |
+
+## 仕組みの全体像
+
+- herdr-app の画面は全部 **mod** で組まれている。サイドバー、タブバー、Files / Changes パネルも同梱 mod（`mods/files`, `mods/changes` など）で、自作 mod と同じ部品・同じ API でできている。
+- mod は **JavaScript（ES modules）** で、app 内蔵の QuickJS 上で動く（gpui-kit の gpui-shell）。スクリプトは要素ツリーを「記述」するだけで、描画は Rust 側の GPUI が行う。HTML / CSS / DOM / Web View / `setTimeout` は無い。Node 互換は限定的で、`buffer` `path` `url` `crypto` `zlib` `console` `process` `os` `fs/promises` `net` `websocket` だけが宣言されている（`gpui-kit.d.ts` 末尾）。`fs/promises` は home 内の読み取りと app home 配下への書き込みに限られる（AGENTS.md）。
+- 画面の構成は **layout**（`layouts/<name>.json`）が決める。layout のブロックに `{ "mod": "<name>", "props": {...} }` を置くと、そこに mod が表示される。
+- 状態の変更はすべて **command**（`run(name, args)`）で行う。キー割り当て・メニュー・CLI（`herdr-app do`）も同じ command 一覧を使う。
+- mod フォルダ内のファイルを保存すると、表示中のコピーがその場で **hot reload** される。壊れた保存は前の版が動き続け、エラーは `herdr-app status` に出る。
+- mod は信頼されたコードとして動く。プログラム実行（`exec`）とネットワーク（`fetch`）に制限はない。
+
+## この環境の構成
+
+| もの | 場所 |
+|---|---|
+| app 本体 | `%USERPROFILE%\AppData\Local\Programs\herdr-app\herdr-app.exe`（WSL からは `$WINHOME/AppData/Local/Programs/herdr-app/herdr-app.exe`。PATH には無い） |
+| app home（設定・layout・mod） | `%USERPROFILE%\.config\herdr-app`（`$WINHOME/.config/herdr-app`） |
+| mod の置き場 | app home の `mods/<name>/` |
+| 作業中の space | machine `wsl` 上にある（`herdr-app status` の ID が `wsl/...`） |
+
+以下、Windows のユーザーフォルダ（`%USERPROFILE%`）を WSL から見たパスを `$WINHOME` と書く（求め方は[開発ループ](#開発ループ)の最初の行）。
+
+ここから来る重要な性質:
+
+- mod は **Windows 側のプロセス**で動く。`exec(cmd, args)` を `on` なしで呼ぶと Windows で実行される。WSL のリポジトリに対する `git` などは `exec("git", args, { cwd, on: "wsl" })` のように space の `machine` を渡して herdr-core 経由で実行する。
+- `readTextFile(path, { on })` は WSL 側のファイルも読める。`writeTextFile` と `watchFolder` は **app 側（Windows）専用**。WSL の space ではファイル監視が使えないので、タイマーによるポーリングになる（同梱の `files` / `changes` も `on` があるときは watch せず 10 秒ポーリング）。
+
+## 一次情報（読む順）
+
+app 起動のたびに、その版に合わせて書き直される。編集しない。
+
+1. `$WINHOME/.config/herdr-app/AGENTS.md` — layout、keys、command、mod の書き方、ルール全般のガイド
+2. `$WINHOME/.config/herdr-app/herdr.d.ts` — `herdr` モジュール（データ、command 実行、exec、ファイル、overlay など）の型
+3. `$WINHOME/.config/herdr-app/gpui-kit.d.ts` — UI 要素と部品の型（約 800KB。必要な宣言を検索して読む）
+4. `herdr-app.exe commands` — 全 command と引数（JSON）
+5. `herdr-app.exe --skill` — エージェントから app を操作するときの手引き
+6. 同梱 mod のソース（`mods/files/main.js`, `mods/changes/main.js` ほか）— 実装パターンの見本
+
+## mod の構造
+
+```
+mods/<name>/
+  main.js        必須。View を継承したクラスを default export する
+  mod.json       任意。初めて見つかったときの置き場所など
+  *.js           追加モジュール（"./ui.js" で import）
+  *.svg          アイコン類（"mods/<name>/icon.svg" で参照）
+  jsconfig.json  check / 起動時に一度だけ生成される。以後は自分のもの
+  gpui-kit.d.ts  check / 起動時に生成・上書きされる型定義（コミットしない）
+```
+
+`mod.json` で使われているフィールド（同梱 mod から観測）:
+
+- `place`: `"right" | "left" | "top" | "bottom" | "none"`。初めて見つかったとき layout に自動で 1 つ docking する場所。`"none"` なら layout や他の mod が置いたときだけ出る。開発中は `"none"` にしておくと勝手に画面へ出ない
+- `size`: 自動 docking 時の大きさ（px）
+- `title`: 表示名
+- `focusable`: `true` で `pane.go` によるキーボード移動の対象になる
+- `overlay`: overlay として開くときの既定（`kind`, `width`, `height`, `at`, `offset` など）
+
+`main.js` の約束:
+
+```js
+import { View, div } from "gpui-kit";                       // View, div, svg, image
+import { v_flex, h_flex, Editor, EditorState } from "gpui-base"; // レイアウトと部品
+import { spaces, panes, focused, exec, theme, run } from "herdr"; // app のデータと操作
+
+export default class MyViewer extends View {
+  init(props, cx) { /* 1 回だけ。状態の初期化、cx.timer、cx.spawn の開始 */ }
+  render(cx) { /* UI の記述。cx.notify() 後と、app のライブデータ変化時に再実行 */ }
+  async close(cx) { /* 任意。消えるときの後始末（最大 250ms） */ }
+}
+```
+
+守るべき規則（AGENTS.md の「Rules」より、作業で踏みやすいもの）:
+
+- `cx` を保持して後で使わない。コールバックごとに渡される `cx` を使う。
+- 非同期処理は `cx.spawn(async (cx) => ...)`、定期処理は `cx.timer.every(ms, (cx) => ...)`。トップレベル `await` は使わない。
+- `spaces()` / `focused()` / `theme()` などライブデータはポーリングしない（変化すれば `render` が呼ばれる）。
+- アニメーションはタイマー再描画でなく `.frames()` / `.spin()` / `.loop()` / `.transition()` を使う（再描画は窓全体を描き直す）。
+- 色は `theme()` の名前付き色を使う。
+- モジュールのトップレベルで `globalThis` に副作用を残さない（壊れた保存でもトップレベルは実行済みになる）。
+
+## 開発ループ
+
+ソースはこのリポジトリ（WSL 側）で管理し、app home の `mods/<name>/` に反映して確かめる。
+
+```sh
+# Windows のユーザーフォルダを WSL のパスで（WSL の PATH に Windows のフォルダが無くても動くよう cmd.exe をフルパスで呼ぶ）
+WINHOME=$(wslpath "$(/mnt/c/Windows/System32/cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')")
+APP="$WINHOME/AppData/Local/Programs/herdr-app/herdr-app.exe"
+
+# 1. 単体チェック: mod を一度読み込んで初回描画し、失敗なら正確なエラーで exit 1
+#    WSL のパスは wslpath -w で UNC パスにすれば、そのまま渡せる
+"$APP" check "$(wslpath -w mods/<name>)"
+
+# 2. app home に反映（保存で hot reload される）
+cp -r mods/<name>/. "$WINHOME/.config/herdr-app/mods/<name>/"
+
+# 3. 実行中の窓の状態とエラー
+"$APP" status          # errors[] に file / mod のエラーが出る
+
+# 4. 見た目の確認（窓の最後のフレームを PNG で保存）
+"$APP" shot "$(wslpath -w "$WINHOME")\\herdr-shot.png"
+```
+
+- `cp` で `mods/<name>/main.js` を置き換えても hot reload される。`shot` は Windows 形式のパスを渡すとそこに PNG を書き、そのパスを表示する（どちらも実機で確認）。
+- `check` は初回描画と即時の要素までしか見ない。レイアウト計算、仮想リストの遅延行、後から来る非同期状態は検証されないので、実際の窓でも確認する。
+- `check` は対象フォルダに `gpui-kit.d.ts` と `jsconfig.json` を書き込む。
+- 同梱の mod や layout を直接編集すると、次回起動時に `<name>-edited` へ退避されて元に戻される。必ず clone するか別名の mod を作る。
+- 画面が壊れたときの退避: `ctrl-alt-shift-escape` で表示中の layout と `keys.json` を脇に置いて既定の `main` に戻る。
+
+## 組み込み方
+
+### 1. 既存の Files / Changes パネルを差し替える
+
+`main` layout の右パネルは stack（`panel-body`）で、子ブロックの id が `files` と `changes`。タブバー（同梱 `tabs` mod）のボタンは mod 名ではなく **この子ブロックの id** を `layout.select` で切り替えている。したがって、
+
+1. `herdr-app do layout.clone '{"name":"main","as":"my-main"}'` で layout を複製（複製に切り替わる）
+2. `layouts/my-main.json` の `panel-body` の子のうち、`content.mod` だけを自作 mod 名に変える。**ブロック id `files` / `changes` は変えない**
+
+とすれば、`tabs` mod を clone せずに既存ボタンから自作ビューアを開ける。パネル幅は `min` 280 / `max` 900 px。
+
+### 2. ペインやタブとして開く
+
+大きな diff やファイル表示はサイドパネルより広い領域が向いている。
+
+- `run("pane.split", { direction: "right", mod: "<name>", props: { file } })` — 端末の横に mod ペインを開く。props はタブと一緒に保存される
+- `run("tab.new", { name, mod: "<name>", props })` — mod だけのタブを開く
+- `openOverlay({ mod, props, kind: "dialog" | "popup" | "window", width, height })` — 上に重ねて開く
+
+パネル側の mod から「大きく開く」ボタンで pane / tab を開く、という組み合わせができる。
+
+### 3. キー割り当て
+
+`keys.json` の `"mod:<name>"` セクション、または `"<mod>.<command>"` アクションで mod にコマンドを送り、mod 側は `nextCommand()` で受ける。`keys.json` は少しでも編集すると以後の既定ショートカット更新が止まる点に注意。
+
+## 実装パターン（同梱 mod から）
+
+- **対象の決め方**: `focused()` のペインの `cwd`、無ければ space の `folder`。machine は space の `machine`（端末ブロックにフォーカスがあるときはアドレスの `machine/` 接頭辞）。この組を JSON 文字列にした値を「文脈キー」とし、非同期処理の完了時に文脈キーが変わっていたら結果を捨てる。
+- **git の読み取り**: `.git` に何も書かない引数を付ける。`--no-optional-locks -c core.fsmonitor=false -c diff.autoRefreshIndex=false`。書き込みが起きると watch が反応して再読み込みが連鎖する。
+- **一覧の取得**: `git status --porcelain=v1 -z --untracked-files=all`、行数は `git diff HEAD --numstat -z`（HEAD が無いリポジトリは `--cached` と作業ツリーを分けて取得）。
+- **長いリスト**: `v_virtual_list(id, count, rowHeight, key, render)` で見えている行だけ描く。縦スクロールバーは `Scrollbar.vertical(id)`、横スクロールは外側の `overflow_x_scrollbar()`。
+- **ファイル表示**: `EditorState.new({ language, value, readonly: true, font_family, syntax })` + `Editor.new(state)`。`EditorState` は `init` かイベントハンドラ内で作り、不要になったら `release()` する。
+- **変化の検知**: app 側のフォルダなら `watchFolder(dir)` のループ、WSL など他 machine ならタイマーでポーリング。
+
+## 制約
+
+| 項目 | 内容 |
+|---|---|
+| `exec` | 30 秒、出力 8 MiB まで |
+| `readTextFile` | 1 MiB まで |
+| `writeTextFile` / `watchFolder` / `pickFolder` | app 側（Windows）のみ |
+| `Editor` | 行番号・折りたたみ・意味的な色分け（keyword, string など）はある。`EditorState` のオプションとメソッドに行単位の背景色・装飾は無い。行へのスクロール API も見当たらない（`scroll_to_item` は `v_virtual_list` 用の `VirtualListScrollHandle` にだけある） |
+| テキスト装飾 | 1 つのテキストの中で範囲ごとに色を変える API は型定義に見当たらない。色を分けたい単位で要素を分ける |
+| 構文解析 | トークナイザ等の API は公開されていない。`Editor` の外で色付けするなら JS 側で行う |
+| 外部ライブラリ | 相対 import で同梱した純 JS（ES modules）は使える。上記の限定的な Node 互換モジュールの範囲を超える Node API に依存するものは動かない |
+| `image(path)` | app home からの相対パスだけ表示できる。絶対パスと、app home の中の名前が「.」で始まるフォルダ（例: `mods/<name>/.cache/`）の下の画像は表示されない（実機で確認）。他 machine の画像は、`exec` で base64 にして運び、app home に書き出してから表示する |
+| `TextView.markdown` | 見出し・表・コードブロック・リンクは表示される。ローカルの画像（相対パス・絶対パス）は表示されない（実機で確認） |
+| `fs/promises` の `writeFile` | 文字列は書ける。`Uint8Array` / `Buffer` を渡すと 0 バイトのファイルになる（実機で確認）。バイナリは base64 の文字列で書き、PowerShell など外部のコマンドでデコードする |
+| `Buffer` / `crypto` | `Buffer.toString("base64")` は空文字列を返す。`createHash().update()` は文字列なら正しく、`Buffer` を渡すと空入力の値になる（実機で確認）。base64 への変換は `btoa`（Latin-1 の文字列のみ）を使う。`TextEncoder` は無い |
+| 他 machine への書き込み | `exec` の引数で内容を渡す。Linux の 1 引数の上限（120 KB は通り、140 KB は失敗）があるので、小分けにして一時ファイルへ追記し、最後に `mv` で置き換える。置き換える直前にディスク上のハッシュ（`sha256sum`）を比べれば、途中で外から書き換えられていたときに止められる。WSL へ約 370 KB を 11 回で約 0.6 秒（どちらも実機で確認） |
+| 閉じるときの呼び出し | `View.close(cx)` は、ペイン・タブ・overlay が消えるときとアプリ終了時に 1 回だけ呼ばれる最後の呼び出しで、閉じるのを止める手段は無い（型定義と AGENTS.md）。後始末は最大 250 ms。表示していないコピーや非アクティブなタブには呼ばれないとも書かれており、終了時に裏のタブで呼ばれるかは読み切れない |
+| `check` | `init` の中で始めた非同期処理（`cx.spawn`）は実行されない。非同期の動きは実機で確かめる |
+| mod の追加 | `mods/<name>/` を置いた直後は `tab.new {mod}` が `no mod "<name>" in mods/` で失敗することがある。数秒おいて再試行すると通る |
+
+## Orca 並みのビューアに向けた見通し
+
+Orca は Electron（Web 技術）製なので、UI 部品はそのまま持ち込めない。ロジック（diff の計算、行の対応付け）は JS なので移植できる。
+
+- **file viewer**: ツリー + `Editor`（readonly）で実用水準に届く。同梱 `files` の弱点（パネル内でツリーと表示が排他、ファイル上限、検索なし）は自作で解消できる範囲。
+- **diff viewer**: 専用部品は無い。`v_virtual_list` の行を自前で組み立て、行ごとに背景色を付ける（同梱 `changes` と同じ方式）。side-by-side は「1 行に左右 2 列を持つ 1 本のリスト」にすると左右の行がずれない。2 本のリストを同期スクロールさせる方式は難しい。diff 行内の構文色付けは JS 側でのトークン分割が必要。
+- **changes**: 一覧、stage / unstage、部分的な操作は `exec` の git で組める。WSL の space では変化検知がポーリングになる。
+
+## 未検証事項
+
+- `\\wsl.localhost\...` への symlink / junction を `mods/` に置いて、リポジトリを直接読ませられるか
+- gpui-shell のバイナリ内に、`package.json` 経由で Git 依存を解決する仕組みの文字列がある。herdr-app の mod で使えるか、マニフェストの形は未確認
+- バイナリ内の `gpui-shell.json`（`capabilities.network` / `capabilities.fs` を持つマニフェスト）は gpui-shell 単体のもので、herdr-app の mod は AGENTS.md 上「制限なし」とされている。herdr-app の mod に効くかは未確認
