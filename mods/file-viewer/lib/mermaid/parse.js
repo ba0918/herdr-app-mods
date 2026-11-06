@@ -125,6 +125,8 @@ export function parseFlowchart(text) {
       const titled = rest.match(/^([^\s[]+)\s*\[(.*)\]$/);
       const id = titled ? titled[1] : rest.split(/\s+/).length === 1 ? unquote(rest) : rest;
       const title = titled ? unquote(titled[2]) : unquote(rest);
+      // 外側の subgraph と同じ名前を入れ子にすると、自分を自分の中に置くことになり配置できない。
+      if (stack.some((s) => s.id === id)) throw syntax(line);
       const sg = { id, title, nodes: [], parent: stack.length ? stack[stack.length - 1].id : null };
       subgraphs.push(sg);
       stack.push(sg);

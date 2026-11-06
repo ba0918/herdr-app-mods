@@ -170,6 +170,10 @@ describe("mermaidError", () => {
     expect(mermaidError("flowchart LR\nsubgraph s\nA", 5)).toEqual({ kind: "syntax", message: "7 行目の文法エラー" });
   });
 
+  test("subgraph の中に同じ名前の subgraph を入れ子にした図は、その行の文法エラー", () => {
+    expect(mermaidError("flowchart LR\nsubgraph S\nsubgraph S\nA\nend\nend", 41)).toEqual({ kind: "syntax", message: "43 行目の文法エラー" });
+  });
+
   test("描ける図は null", () => {
     expect(mermaidError("flowchart LR; A-->B", 1)).toBeNull();
     expect(parseMermaid("sequenceDiagram\nA->>B: x", 1).diagram.type).toBe("sequence");

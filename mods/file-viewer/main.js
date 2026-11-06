@@ -611,7 +611,13 @@ export default class FileViewer extends View {
     const key = `${firstLine}\n${source}`;
     if (!this.diagrams.has(key)) {
       const r = parseMermaid(source, firstLine);
-      const value = r.error ? { error: r.error } : { layout: r.diagram.type === "flowchart" ? layoutFlowchart(r.diagram) : layoutSequence(r.diagram) };
+      let value;
+      try {
+        value = r.error ? { error: r.error } : { layout: r.diagram.type === "flowchart" ? layoutFlowchart(r.diagram) : layoutSequence(r.diagram) };
+      } catch {
+        // 解析で断れなかった配置できない図。どの行かは分からないので、図の 1 行目を指す。
+        value = { error: { kind: "syntax", message: `${firstLine} 行目の文法エラー` } };
+      }
       if (this.diagrams.size > 64) this.diagrams.clear();
       this.diagrams.set(key, value);
     }
