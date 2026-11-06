@@ -274,10 +274,13 @@ function rewritePictureImages(s) {
 // HTML のかたまりの中の書き換え（押せる <a> にする。Markdown の書き方はここでは効かないので触らない）。
 // parts は segments の結果。開いている <a href> の中の <img> は名前だけにして、外側の <a> を押せるリンクに残す
 // （外側の行き先が同じファイル内の #見出し だけなら、その <a> の行き先を最初の画像にする）。<picture> の中は押せない文字。
+// loneImg: かたまりが 1 つの <img> だけの行で始まるか。その <img> を <a href>名前</a> の 1 行にすると、タグだけの行でなくなり
+// 部品が段落として読む（段落の中の <a> は押せない）ので、開きタグのあとで改行して、最初の行をタグだけの行のままにする。
 const HTML_TOKEN = new RegExp(String.raw`<a\b(${ATTRS})>|<\/a\s*>|<(\/?)picture\b${ATTRS}>|<img\b(${ATTRS})>`, "gi");
-function rewriteHtmlBlock(parts, state) {
+function rewriteHtmlBlock(parts, state, loneImg) {
   const out = [];
   let anchor = null; // { href, at: out の中の開きタグの位置 }
+  let lone = loneImg; // 次のタグが、最初の行の 1 つだけの <img> か
   for (const part of parts) {
     if (part.keep) { out.push(part.text); continue; }
     let i = 0;
@@ -285,6 +288,8 @@ function rewriteHtmlBlock(parts, state) {
       out.push(part.text.slice(i, m.index));
       i = m.index + m[0].length;
       const [tag, aAttrs, pictureClose, imgAttrs] = m;
+      const breakAfterOpen = lone;
+      lone = false;
       if (imgAttrs === undefined) {
         out.push(tag);
         if (aAttrs !== undefined) {
@@ -297,7 +302,7 @@ function rewriteHtmlBlock(parts, state) {
       const image = tagImage(imgAttrs);
       if (!image) out.push(tag);
       else if (state.picture) out.push(rewritePictureImages(plain(tag)).text);
-      else if (!anchor) out.push(`<a href="${escapeHtml(image.href)}">${escapeHtml(image.name)}</a>`);
+      else if (!anchor) out.push(`<a href="${escapeHtml(image.href)}">${breakAfterOpen ? "\n" : ""}${escapeHtml(image.name)}</a>`);
       else {
         out.push(escapeHtml(image.name));
         if (anchor.href.startsWith("#")) {
@@ -351,6 +356,8 @@ const HTML_BLOCK_TAG = new RegExp(String.raw`^ {0,3}<\/?(?:${[
 // それ以外のタグは、1 つの完全な開きタグか閉じタグだけの行で、段落の続きでないときだけ始まる（空行まで）。
 const HTML_OPEN_TAG = String.raw`<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>\x60]+|'[^']*'|"[^"]*"))?)*\s*\/?>`;
 const HTML_LONE_TAG = new RegExp(String.raw`^ {0,3}(?:${HTML_OPEN_TAG}|<\/[A-Za-z][A-Za-z0-9-]*\s*>)\s*$`);
+// 1 つの <img> だけの行（HTML_LONE_TAG のうち <img> のもの）。
+const LONE_IMG = new RegExp(String.raw`^ {0,3}(?=<img\b)${HTML_OPEN_TAG}\s*$`, "i");
 
 // HTML のかたまりが始まる行なら { end }（end: 終わりの行の印。null なら空行まで）、始まらなければ null。
 // paragraph: 段落の続きを受ける行の次か。
@@ -524,7 +531,7 @@ export function collectDefinitions(markdown) {
 export function rewriteImages(markdown, definitions = collectDefinitions(markdown)) {
   return mapBlocks(markdown, (text, kind, state) => {
     const parts = segments(text);
-    if (kind === "html") return rewriteHtmlBlock(parts, state);
+    if (kind === "html") return rewriteHtmlBlock(parts, state, LONE_IMG.test(text.split("\n", 1)[0]));
     return aroundPictures(pairOf(parts), state, (s) => rewriteInline(s, definitions)).text;
   });
 }

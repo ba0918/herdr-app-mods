@@ -289,6 +289,20 @@ describe("rewriteImages", () => {
     expect(out).toContain("図");
   });
 
+  // 1 つのタグだけの行で始まる HTML のかたまりは、書き換えた最初の行もタグだけの行でないと、部品が段落として読み、<a> が押せない文字になる。
+  test("1 つの <img> だけの行で始まる HTML のかたまりは、書き換えても最初の行がタグだけの行のまま", () => {
+    for (const [md, files] of [
+      ['<img src="img/a.png" alt="図">', ["a"]],
+      ['  <img src="img/a.png" alt="図" width="200" />  ', ["a"]],
+      ['本文\n\n<img src="img/a.png" alt="図">\n<img src="img/b.png" alt="B">', ["a", "b"]],
+    ]) {
+      const block = rewriteImages(md).split("\n\n").pop();
+      expect(block.split("\n")[0]).toMatch(/^ {0,3}<a href="[^"]*">\s*$/);
+      expect(block).not.toContain("<img");
+      expect(anchorsIn(block)).toEqual(files.map((f) => file(`/r/img/${f}.png`)));
+    }
+  });
+
   test("外側のリンクが同じファイル内の #見出し だけなら、画像を開く", () => {
     for (const md of ["[![図](img/a.png)](#top)", '<div>\n<a href="#top"><img src="img/a.png" alt="図"></a>\n</div>']) {
       const out = rewriteImages(md);
