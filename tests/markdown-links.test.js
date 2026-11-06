@@ -84,7 +84,8 @@ describe("rewriteImages", () => {
 
   test("コードブロックの中の定義は集めない", () => {
     expect(collectDefinitions("```\n[arch]: img/a.png\n```").size).toBe(0);
-    expect(collectDefinitions("[Arch  Map]: <img/a b.png> \"t\"").get("arch map")).toBe("img/a b.png");
+    const definitions = collectDefinitions("[Arch  Map]: <img/a b.png> \"t\"");
+    expect(linksIn(rewriteImages("![図][arch map]", definitions))).toEqual([{ name: "図", to: file("/r/img/a b.png") }]);
   });
 
   test("段落の中の <img> は押せる名前（alt、無ければファイル名）。属性の順番と引用符によらない", () => {
@@ -169,6 +170,18 @@ describe("rewriteImages", () => {
     expect(linksIn(rewriteImages("前 ![a](https://example.com/a_(1).png) 後"))).toEqual([{ name: "a", to: { type: "external", url: "https://example.com/a_(1).png" } }]);
     expect(linksIn(rewriteImages("前 ![b](img/b_(2).png) 後"))).toEqual([{ name: "b", to: file("/r/img/b_(2).png") }]);
     expect(linksIn(rewriteImages("[![c](img/c.png)](docs/c_(3).md)"))).toEqual([{ name: "c", to: file("/r/docs/c_(3).md") }]);
+  });
+
+  test("ファイル名に # や ? を含むローカル画像は、そのファイルを開く。<> で包まない参照先の # 以降は除く", () => {
+    const md = "![a](img/C%23.png) ![b](<img/C#.png>) ![c](<img/Q?.png>) ![d](img/d.png#x) ![e] <img src=\"img/C%23.png\" alt=\"f\">\n\n[e]: <img/E#.png>";
+    expect(linksIn(rewriteImages(md))).toEqual([
+      { name: "a", to: file("/r/img/C#.png") },
+      { name: "b", to: file("/r/img/C#.png") },
+      { name: "c", to: file("/r/img/Q?.png") },
+      { name: "d", to: file("/r/img/d.png") },
+      { name: "e", to: file("/r/img/E#.png") },
+      { name: "f", to: file("/r/img/C#.png") },
+    ]);
   });
 
   test("![仕様](spec.pdf) を押した行き先は spec.pdf", () => {

@@ -20,8 +20,9 @@ export function resolveLink({ from, href }) {
 }
 
 // すでにエンコードされた部分（%20 など）は一度戻してからエンコードする（二重にしない）。
+// ファイル名の # と ? もエンコードする（resolveLink が # 以降を見出しとして除くため）。
 function encodePath(path) {
-  return encodeURI(decode(path)).replace(/\(/g, "%28").replace(/\)/g, "%29");
+  return encodeURI(decode(path)).replace(/[()#?]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 // ---- 画像の書き換え ----
@@ -73,11 +74,13 @@ const escapeHtml = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").r
 const markdownDest = (href) => (/[\s()<>]/.test(href) ? `<${href.replace(/[<>]/g, encodeURIComponent)}>` : href);
 
 // 画像の名前と、押したときの行き先（http(s) は URL そのもの、ローカルは fv-image: の印つき）。data: は null（書き換えない）。
-function imageTarget(src, alt) {
+// literal: <...> で包んだ参照先か。包んでいなければ、ローカルの # 以降は見出しとして除く。
+function imageTarget(src, alt, literal = false) {
   if (/^data:/i.test(src)) return null;
   const http = /^https?:/i.test(src);
-  const name = alt || basename(http ? src.replace(/[?#].*$/, "") : src) || src;
-  return { name, href: http ? src : `${IMAGE_SCHEME}${encodePath(src)}` };
+  const path = http || literal ? src : src.replace(/#.*$/, "");
+  const name = alt || basename(http ? src.replace(/[?#].*$/, "") : path) || src;
+  return { name, href: http ? src : `${IMAGE_SCHEME}${encodePath(path)}` };
 }
 
 // <img> の属性から、画像の名前と行き先（imageTarget）。src が無いか data: なら null。
@@ -89,11 +92,10 @@ function tagImage(attrs) {
 // 外側のリンクの行き先。同じファイル内の #見出し だけなら、画像を開く。
 const outerHref = (href, image) => (href.startsWith("#") ? image.href : href);
 
-// 画像の正規表現の一致から { src, alt }。参照形式で定義が無ければ null。
+// 画像の正規表現の一致から、画像の名前と行き先（imageTarget）。参照形式で定義が無ければ null。
 function imageSource(alt, dest, label, definitions) {
-  if (dest !== undefined) return { src: unwrap(dest), alt };
-  const src = definitions.get(normalizeLabel(label || alt));
-  return src === undefined ? null : { src, alt };
+  dest ??= definitions.get(normalizeLabel(label || alt));
+  return dest === undefined ? null : imageTarget(unwrap(dest), alt, dest.startsWith("<"));
 }
 
 // 段落の中の書き換え（Markdown のリンクにする）。
@@ -105,15 +107,13 @@ function rewriteInline(text, definitions) {
       return `[${escapeMarkdown(image.name)}](${markdownDest(outerHref(href, image))})`;
     })
     .replace(LINKED_IMAGE, (whole, alt, dest, label, outer) => {
-      const source = imageSource(alt, dest, label, definitions);
-      const image = source && imageTarget(source.src, source.alt);
+      const image = imageSource(alt, dest, label, definitions);
       if (!image) return whole;
       const href = unwrap(outer);
       return `[${escapeMarkdown(image.name)}](${markdownDest(outerHref(href, image))})`;
     })
     .replace(IMAGE, (whole, alt, dest, label) => {
-      const source = imageSource(alt, dest, label, definitions);
-      const image = source && imageTarget(source.src, source.alt);
+      const image = imageSource(alt, dest, label, definitions);
       return image ? `[${escapeMarkdown(image.name)}](${markdownDest(image.href)})` : whole;
     })
     .replace(IMG_TAG, (whole, attrs) => {
@@ -218,13 +218,13 @@ function eachLine(markdown, visit) {
 }
 
 // 参照形式の定義（[id]: path）を、文書全体（コードブロック・インラインコード・HTML のコメントの外）から集める。
-// ラベルは大文字小文字と空白の違いを無視する。同じラベルは最初の定義。
+// ラベルは大文字小文字と空白の違いを無視する。同じラベルは最初の定義。値は書いたままの参照先（<...> を含む）。
 export function collectDefinitions(markdown) {
   const definitions = new Map();
   eachLine(markdown, (line, { state }) => {
     const [first] = segments(line, state);
     const m = first && !first.keep && first.text === line ? DEFINITION.exec(line) : null;
-    if (m && !definitions.has(normalizeLabel(m[1]))) definitions.set(normalizeLabel(m[1]), unwrap(m[2]));
+    if (m && !definitions.has(normalizeLabel(m[1]))) definitions.set(normalizeLabel(m[1]), m[2]);
     return line;
   });
   return definitions;
