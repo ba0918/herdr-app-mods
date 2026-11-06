@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { splitForWrite, utf8Length, argLength, preserveLineEndings, looksNonUtf8 } from "../mods/file-viewer/lib/save.js";
+import { splitForWrite, utf8Length, argLength, preserveLineEndings, splitBom, contentToSave, looksNonUtf8 } from "../mods/file-viewer/lib/save.js";
 
 describe("splitForWrite", () => {
   const sample = () => {
@@ -54,6 +54,12 @@ describe("utf8Length", () => {
 });
 
 describe("preserveLineEndings", () => {
+  const crlf8lf2 = () => {
+    const lines = [];
+    for (let i = 1; i <= 10; i++) lines.push(`line${i}${i === 4 || i === 7 ? "\n" : "\r\n"}`);
+    return lines.join("");
+  };
+
   test("CRLF のファイルは、Editor が LF で返しても CRLF で書き戻す", () => {
     expect(preserveLineEndings("a\r\nb\r\n", "a\nB\n")).toBe("a\r\nB\r\n");
   });
@@ -62,16 +68,91 @@ describe("preserveLineEndings", () => {
     expect(preserveLineEndings("a\nb\n", "a\nB\n")).toBe("a\nB\n");
   });
 
-  test("末尾の改行が無かったファイルには付けない", () => {
-    expect(preserveLineEndings("a\r\nb", "a\nB\n")).toBe("a\r\nB");
-  });
-
-  test("末尾の改行があったファイルは、Editor が落としても付け直す", () => {
-    expect(preserveLineEndings("a\nb\n", "a\nB")).toBe("a\nB\n");
-  });
-
   test("Editor が CRLF のまま返しても二重にしない", () => {
     expect(preserveLineEndings("a\r\nb\r\n", "a\r\nB\r\n")).toBe("a\r\nB\r\n");
+  });
+
+  test("混ざったファイルで CRLF の 1 行目を書き換えると、LF の行は LF のまま、1 行目は CRLF", () => {
+    const original = crlf8lf2();
+    const edited = original.replace(/\r\n/g, "\n").replace("line1\n", "LINE1\n");
+    expect(preserveLineEndings(original, edited)).toBe(original.replace("line1", "LINE1"));
+  });
+
+  test("足した行は多いほうの改行になる（LF が多ければ LF、CRLF が多ければ CRLF、同数なら LF）", () => {
+    expect(preserveLineEndings("a\nb\nc\r\n", "a\nnew\nb\nc\n")).toBe("a\nnew\nb\nc\r\n");
+    expect(preserveLineEndings("a\r\nb\r\nc\n", "a\nnew\nb\nc\n")).toBe("a\r\nnew\r\nb\r\nc\n");
+    expect(preserveLineEndings("a\r\nb\n", "a\nnew\nb\n")).toBe("a\r\nnew\nb\n");
+  });
+
+  test("行を消しても、残った行の改行は元のまま", () => {
+    expect(preserveLineEndings("a\r\nb\nc\r\nd\n", "a\nc\nd\n")).toBe("a\r\nc\r\nd\n");
+  });
+
+  test("編集後の内容の行末が \\r\\n でも \\n でも同じ結果になる", () => {
+    const original = crlf8lf2();
+    const lf = original.replace(/\r\n/g, "\n").replace("line5\n", "line5\nadded\n");
+    const kept = original.replace("line5\r\n", "line5\r\nadded\r\n");
+    expect(preserveLineEndings(original, lf)).toBe(preserveLineEndings(original, kept));
+    expect(preserveLineEndings(original, lf)).toBe(kept);
+  });
+
+  test("末尾に改行の無いファイルの最後に改行を付けると、多いほうの改行で付く", () => {
+    expect(preserveLineEndings("a\r\nb\r\nc", "a\nb\nc\n")).toBe("a\r\nb\r\nc\r\n");
+    expect(preserveLineEndings("a\nb", "a\nb\n")).toBe("a\nb\n");
+  });
+
+  test("末尾の改行を消すと消える", () => {
+    expect(preserveLineEndings("a\r\nb\r\n", "a\nb")).toBe("a\r\nb");
+  });
+
+  test("最終行を書き換えても、末尾の改行の有無は変わらない", () => {
+    expect(preserveLineEndings("a\r\nb", "a\nB")).toBe("a\r\nB");
+    expect(preserveLineEndings("a\r\nb\r\n", "a\nB\n")).toBe("a\r\nB\r\n");
+  });
+
+  test("同じ内容の行が並んでいても、書き換えただけなら書き換えていない行の改行は元のまま", () => {
+    const original = "c\nc\r\nb\nc\nc\r\na\nc\nc\nb\nb\r\n";
+    const edited = "Z0\nc\nb\nc\nc\na\nc\nZ7\nb\nb\n";
+    expect(preserveLineEndings(original, edited)).toBe("Z0\nc\r\nb\nc\nc\r\na\nc\nZ7\nb\nb\r\n");
+  });
+
+  test("空のファイルに書いた内容は LF で、末尾の改行は書いたとおり", () => {
+    expect(preserveLineEndings("", "a\nb\n")).toBe("a\nb\n");
+    expect(preserveLineEndings("", "a\nb")).toBe("a\nb");
+  });
+});
+
+describe("preserveLineEndings の比べる手間の上限", () => {
+  test("差分の手間が上限を超えたら、共通の先頭と末尾の間の行は多いほうの改行にする", () => {
+    const original = "head\r\n" + "a\r\nb\n".repeat(50) + "c\r\ntail\r\n";
+    const edited = "head\n" + "b\na\n".repeat(50) + "tail\n";
+    expect(preserveLineEndings(original, edited, { maxWork: 10 })).toBe("head\r\n" + "b\r\na\r\n".repeat(50) + "tail\r\n");
+  });
+
+  test("共通の先頭と末尾の間の行が多すぎるときは、間の行を多いほうの改行にする", () => {
+    const original = "head\r\n" + "a\nb\r\nc\r\n".repeat(4) + "tail\n";
+    const edited = "head\r\n" + "a\nB\r\nc\r\n".repeat(4) + "tail\n";
+    expect(preserveLineEndings(original, edited, { maxLines: 5 })).toBe("head\r\na\nB\r\nc\r\n" + "a\r\nB\r\nc\r\n".repeat(3) + "tail\n");
+  });
+});
+
+describe("BOM", () => {
+  test("BOM 付きで読んだ内容は、Editor に渡す内容から BOM が外れ、書き戻す内容の先頭に BOM が付く", () => {
+    const read = splitBom("\uFEFFa\r\nb\r\n");
+    expect(read).toEqual({ bom: true, text: "a\r\nb\r\n" });
+    expect(contentToSave({ original: read.text, edited: "a\nB\n", bom: read.bom })).toBe("\uFEFFa\r\nB\r\n");
+  });
+
+  test("BOM 無しで読んだ内容には付けない", () => {
+    const read = splitBom("a\nb\n");
+    expect(read).toEqual({ bom: false, text: "a\nb\n" });
+    expect(contentToSave({ original: read.text, edited: "a\nB\n", bom: read.bom })).toBe("a\nB\n");
+  });
+
+  test("BOM 付きで改行の混ざったファイルで 2 行目だけを書き換えると、1 行目は LF のまま", () => {
+    const read = splitBom("\uFEFFa\nb\r\nc\r\nd\r\n");
+    const saved = contentToSave({ original: read.text, edited: "a\nB\nc\nd\n", bom: read.bom });
+    expect(saved).toBe("\uFEFFa\nB\r\nc\r\nd\r\n");
   });
 });
 
