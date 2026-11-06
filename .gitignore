@@ -1,5 +1,6 @@
-# herdr-app check / 起動時に mod フォルダへ生成される型定義
+# herdr-app check / 起動時に mod フォルダへ生成される型定義と設定
 gpui-kit.d.ts
+jsconfig.json
 
 .agents/scratch/
 .agents/worktrees/
