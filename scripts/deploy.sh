@@ -25,6 +25,20 @@ if [ -n "$apphome_win" ] && [ "$apphome_win" != "%HERDR_APP_HOME%" ]; then
 else
   apphome="$winhome/.config/herdr-app"
 fi
+# %USERPROFILE% が読めないと wslpath "" が「.」を返し、今いるフォルダを app home と取り違える。
+# コピーの前に、絶対パスで、mods/ と layouts/ がある app home かを確かめる。
+case "$winhome" in
+  /*) ;;
+  *) echo "cannot find the Windows user folder (%USERPROFILE%): got '$winhome'" >&2; exit 2 ;;
+esac
+case "$apphome" in
+  /*) ;;
+  *) echo "app home is not an absolute path: '$apphome'" >&2; exit 2 ;;
+esac
+if [ ! -d "$apphome/mods" ] || [ ! -d "$apphome/layouts" ]; then
+  echo "not an app home (no mods/ or layouts/): $apphome" >&2
+  exit 2
+fi
 
 status_errors() {
   "$app" status | python3 -c 'import json, sys; e = json.load(sys.stdin).get("errors", []); print(json.dumps(e, ensure_ascii=False)); sys.exit(1 if e else 0)'
