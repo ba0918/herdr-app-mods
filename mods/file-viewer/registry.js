@@ -59,10 +59,13 @@ export function findOwnPane(token) {
 // 閉じたタブの記録と、名乗らないまま古くなった記録を消す（判断は lib/records.js）。
 export function pruneRecords() {
   const all = records();
+  const claimed = new Set(Object.values(all).map((r) => r.pane).filter(Boolean));
+  const machineOfTab = new Map(spaces().flatMap((s) => s.tabs.map((t) => [t.id, s.machine ?? ""])));
   const { drop, mark, unmark } = staleRecords({
     records: all,
     livePanes: new Set(viewerPanes().map((p) => p.pane)),
     readyMachines: new Set(machines().filter((m) => m.layout === "ready").map((m) => m.name ?? "")),
+    unclaimedMachines: new Set(viewerPanes().filter((p) => !claimed.has(p.pane)).map((p) => machineOfTab.get(p.tab)).filter((m) => m !== undefined)),
     now: Date.now(),
   });
   if (!drop.length && !unmark.length && !Object.keys(mark).length) return;
