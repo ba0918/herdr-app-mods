@@ -183,14 +183,15 @@ export default class FileViewer extends View {
 
   poll(cx) {
     const file = this.file;
-    if (!file || file.loading || file.busy || !this.visible()) return;
+    if (!file || file.loading || file.polling || file.saving || !this.visible()) return;
     if (!file.base && !file.missing) return;
-    file.busy = true;
-    const key = this.loadedKey;
+    file.polling = true;
+    const key = this.loadedKey, base = file.base;
     cx.spawn(async (cx) => {
       try {
-        const r = await checkChanged(file.path, file.machine, file.base);
-        if (this.loadedKey !== key || this.file !== file) return;
+        const r = await checkChanged(file.path, file.machine, base);
+        // 確認の間に保存が始まった・終わったなら、この結果は古い。
+        if (this.loadedKey !== key || this.file !== file || file.saving || file.base !== base) return;
         if (r.missing) {
           if (!file.missing) { file.missing = true; cx.notify(); }
           return;
@@ -198,14 +199,16 @@ export default class FileViewer extends View {
         const back = file.missing;
         file.missing = false;
         if (!r.changed) { if (back) cx.notify(); return; }
-        if (!file.dirty) { file.busy = false; this.reload(cx); return; }
+        if (!file.dirty) { this.reload(cx); return; }
+        // 保存の確認など、答えを待っている知らせは上書きしない。
+        if (file.notice && file.notice.kind !== "external") return;
         if (file.dismissed === r.base.hash) { if (back) cx.notify(); return; }
         file.notice = { kind: "external", hash: r.base.hash };
         cx.notify();
       } catch {
         // 一時的な失敗（machine に届かない等）は次の確認で取り直す。
       } finally {
-        file.busy = false;
+        file.polling = false;
       }
     });
   }
@@ -222,14 +225,14 @@ export default class FileViewer extends View {
 
   save(cx) {
     const file = this.file;
-    if (!file?.editor || file.readonly || file.busy) return;
+    if (!file?.editor || file.readonly || file.saving) return;
     if (file.missing) {
       file.notice = { kind: "recreate" };
       cx.notify();
       return;
     }
     if (!file.dirty) return;
-    file.busy = true;
+    file.saving = true;
     cx.spawn(async (cx) => {
       try {
         const r = await checkChanged(file.path, file.machine, file.base);
@@ -239,7 +242,7 @@ export default class FileViewer extends View {
       } catch (e) {
         file.notice = { kind: "error", text: `保存できなかった: ${message(e)}` };
       } finally {
-        file.busy = false;
+        file.saving = false;
         cx.notify();
       }
     });
@@ -274,7 +277,7 @@ export default class FileViewer extends View {
     if (choice === "keep") { file.dismissed = notice.hash; cx.notify(); return; }
     if (choice === "cancel" || choice === "close") { cx.notify(); return; }
     // overwrite（今のディスクの内容を基準にして上書き）/ recreate（作り直す）
-    file.busy = true;
+    file.saving = true;
     cx.spawn(async (cx) => {
       try {
         let base = null;
@@ -290,7 +293,7 @@ export default class FileViewer extends View {
       } catch (e) {
         file.notice = { kind: "error", text: `保存できなかった: ${message(e)}` };
       } finally {
-        file.busy = false;
+        file.saving = false;
         cx.notify();
       }
     });
