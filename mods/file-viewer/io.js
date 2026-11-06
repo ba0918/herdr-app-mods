@@ -73,7 +73,16 @@ export async function readText(path, on) {
 }
 
 // ディスクが基準（base）から変わったか。{ missing } か { changed, base }（changed なら新しい基準）。
-export async function checkChanged(path, on, base) {
+// このコンピュータでは、画像のコピーで取った基準（bytes）はバイト列のハッシュで比べる。
+// 基準が無いときは bytes で選ぶ（開いたときに無かった画像など）。
+export async function checkChanged(path, on, base, { bytes = false } = {}) {
+  if (!on && (base ? base.bytes : bytes)) {
+    const r = await exec("powershell", ["-NoProfile", "-Command",
+      `$ErrorActionPreference='Stop'; $p=${psQuote(path)}; if (-not (Test-Path -LiteralPath $p)) { 'missing'; exit 0 }; (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower()`]);
+    const out = r.stdout.trim();
+    if (r.code !== 0 || out === "missing" || !out) return { missing: true };
+    return { missing: false, changed: out !== base?.hash, base: { hash: out, stat: null, bytes: true } };
+  }
   if (!on) {
     const text = await readTextFile(path).catch(() => null);
     if (text === null) return { missing: true };
@@ -147,7 +156,7 @@ export async function copyImage(path, on, prefix) {
     if (r.code !== 0) throw new Error(r.stderr.trim() || "画像を読めなかった");
     const [[size, hash, name, header]] = splitHead(r.stdout.replace(/\r/g, ""), 4);
     if (Number(size) > IMAGE_LIMIT) return { exists: true, size: Number(size) };
-    return { exists: true, size: Number(size), base: { hash, stat: null }, cache: `${CACHE_DIR}/${name}`, header: base64ToBytes(header) };
+    return { exists: true, size: Number(size), base: { hash, stat: null, bytes: true }, cache: `${CACHE_DIR}/${name}`, header: base64ToBytes(header) };
   }
   const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; base64 -w0 -- "$1"`;
   const r = await sh(on, script, [path, String(IMAGE_LIMIT)]);

@@ -362,7 +362,8 @@ export default class FileViewer extends View {
     const key = this.loadedKey, base = file.base;
     cx.spawn(async (cx) => {
       try {
-        const r = await checkChanged(file.path, file.machine, base);
+        // 開いたときに無かった画像は基準が無いので、画像として確かめる。
+        const r = await checkChanged(file.path, file.machine, base, { bytes: !file.editor && kind({ path: file.path, size: 0 }).type === "image" });
         // 確認の間に保存が始まった・終わったなら、この結果は古い。
         if (this.loadedKey !== key || this.file !== file || file.saving || file.base !== base) return;
         if (r.missing) {
