@@ -118,12 +118,7 @@ export default class FileViewer extends View {
       pruneRecords();
       cx.spawn(async () => {
         for (const d of expiredDrafts(await listDrafts(), Date.now())) await deleteDraft(d.name);
-        // どの viewer のタブも使っていない画像のコピーを消す。
-        const open = openTokens();
-        for (const name of await listCache()) {
-          const owner = name.match(CACHE_NAME)?.[1];
-          if (!owner || !open.has(owner)) await removeCache(`${CACHE_DIR}/${name}`);
-        }
+        await this.sweepCaches();
       });
     }
     cx.notify();
@@ -202,6 +197,16 @@ export default class FileViewer extends View {
     return file;
   }
 
+  // どの viewer のタブも使っていない画像のコピーを消す。表示していないタブを閉じたときは close() が
+  // 呼ばれないので、動き出したときに加えて、ときどきこれで消す。
+  async sweepCaches() {
+    const open = openTokens();
+    for (const name of await listCache()) {
+      const owner = name.match(CACHE_NAME)?.[1];
+      if (!owner || !open.has(owner)) await removeCache(`${CACHE_DIR}/${name}`);
+    }
+  }
+
   // 同じタブの古い画像のコピー（内容が変わる前のもの）を消す。
   async dropOtherCaches(keep) {
     for (const name of await listCache()) {
@@ -275,6 +280,8 @@ export default class FileViewer extends View {
 
   // 編集している間、3 秒ごとに下書きを更新する。編集が無くなったら自分の下書きを消す。
   keepDraft(cx) {
+    this.ticks = (this.ticks ?? 0) + 1;
+    if (this.ticks % 10 === 0 && this.pane && this.visible()) cx.spawn(async () => this.sweepCaches());
     const file = this.file;
     if (!file?.editor || file.loading) return;
     if (file.dirty) {
