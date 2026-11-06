@@ -8,10 +8,12 @@
 |---|---|
 | `spec/` | 仕様: 何を作るか |
 | `guides/` | 手順に沿って使うガイド |
+| `plans/` | 実装計画（実装ブランチが取り込まれたら消す） |
 
 ## 現行のドキュメント
 
 - [File viewer 仕様](spec/file-viewer/index.md) — Files で押したファイルをメイン領域のタブで表示・編集する viewer
+- [File viewer 実装計画](plans/file-viewer.md) — 上の仕様を作る手順
 - [herdr-app mod 開発ガイド](guides/herdr-app-mod-development.md) — mod の仕組み、この環境（Windows app + WSL）での開発ループ、組み込み方、制約
 
 用語はリポジトリ直下の [CONTEXT.md](../CONTEXT.md) にある。
