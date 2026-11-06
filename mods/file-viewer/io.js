@@ -169,3 +169,33 @@ export async function removeCache(cache) {
 export async function listCache() {
   return fs.readdir(`${appHome()}/${CACHE_DIR}`).catch(() => []);
 }
+
+// ---- 下書き（app home の file-viewer-drafts/ に 1 つずつ JSON で置く） ----
+
+const draftsDir = () => `${appHome()}/${DRAFTS_DIR}`;
+
+export function draftName(token, machine, path) {
+  return `${token}-${textHash(`${machine ?? ""}\n${path}`).slice(0, 16)}.json`;
+}
+
+// すべての下書き。読めないファイルは飛ばす。各下書きに name（ファイル名）を付けて返す。
+export async function listDrafts() {
+  const names = await fs.readdir(draftsDir()).catch(() => []);
+  const out = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    try { out.push({ ...JSON.parse(await fs.readFile(`${draftsDir()}/${name}`, "utf8")), name }); }
+    catch { /* 書きかけや壊れたものは無視する */ }
+  }
+  return out;
+}
+
+export async function writeDraft(draft) {
+  await fs.mkdir(draftsDir(), { recursive: true }).catch(() => {});
+  const { name, ...body } = draft;
+  await fs.writeFile(`${draftsDir()}/${name ?? draftName(draft.token, draft.machine, draft.path)}`, JSON.stringify(body));
+}
+
+export async function deleteDraft(name) {
+  await fs.unlink(`${draftsDir()}/${name}`).catch(() => {});
+}

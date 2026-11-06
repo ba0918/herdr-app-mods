@@ -7,10 +7,12 @@ import { kind, languageFor } from "./lib/kind.js";
 import { formatSize, limitMessage } from "./lib/size.js";
 import { tabTitles } from "./lib/tabs.js";
 import { preserveLineEndings, looksNonUtf8 } from "./lib/save.js";
-import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords } from "./registry.js";
-import { readText, checkChanged, writeText, WriteConflict } from "./io.js";
+import { draftsFor, expiredDrafts } from "./lib/drafts.js";
+import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens } from "./registry.js";
+import { readText, checkChanged, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName } from "./io.js";
 
 const POLL_MS = 2000;
+const DRAFT_MS = 3000;
 
 function syntaxColors(t) {
   return { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 };
@@ -19,6 +21,11 @@ function syntaxColors(t) {
 const themeKey = (t) => `${t.background}|${t.foreground}|${t.ansi5}`;
 const fileKey = (machine, path) => `${machine ?? null}\n${path}`;
 const message = (e) => String(e?.message ?? e);
+const pad = (n) => String(n).padStart(2, "0");
+function when(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 function button(id, label, t, onClick, active = false) {
   return div().id(id).h(24).px(8).flex_none().items_center().justify_center().rounded(6).cursor_pointer().text_size(12)
@@ -41,10 +48,16 @@ export default class FileViewer extends View {
     this.pendingTitle = null;
     this.focus = cx.focus_handle();
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
+    // 表示していないタブでも動き続けるので、閉じるときに呼ばれない場合（裏のタブを閉じた、強制終了）も
+    // 数秒前までの編集が下書きに残る。
+    cx.timer.every(DRAFT_MS, (cx) => this.keepDraft(cx));
   }
 
+  // 閉じるとき（アプリの終了を含む）は、未保存の編集を下書きに書く。止める手段は無いので確認は出さない。
   async close() {
-    this.file?.editor?.release();
+    const file = this.file;
+    if (file?.dirty && file.editor) await writeDraft(this.draftOf(file)).catch(() => {});
+    file?.editor?.release();
   }
 
   // 自分のペイン・タブ・space。名乗れていなければ null。
@@ -74,13 +87,19 @@ export default class FileViewer extends View {
       preview: rec ? Boolean(rec.preview) : Boolean(p.preview),
       mode: rec?.mode ?? null, dirty: Boolean(rec?.dirty), createdAt: rec?.createdAt ?? Date.now(),
     });
+    const started = !this.pane;
     this.pane = me.pane;
     if (first) {
       let index = rec?.index ?? p.index;
       const before = me.space.tabs.find((t) => t.id === this.activeBefore[me.space.id] && t.id !== me.tab);
       if (!index && before) index = before.index + 1;
       if (index && index !== me.tabInfo.index) run("tab.move", { id: me.tab, index });
+    }
+    if (started) {
       pruneRecords();
+      cx.spawn(async () => {
+        for (const d of expiredDrafts(await listDrafts(), Date.now())) await deleteDraft(d.name);
+      });
     }
     cx.notify();
   }
@@ -97,6 +116,8 @@ export default class FileViewer extends View {
       if (this.loadedKey !== key) { file.editor?.release(); return; }
       this.file = file;
       this.setDirty(false);
+      cx.notify();
+      await this.offerDrafts(file);
       cx.notify();
     });
   }
@@ -177,6 +198,67 @@ export default class FileViewer extends View {
       this.setDirty(false);
       cx.notify();
     });
+  }
+
+  // ---- 下書き ----
+
+  draftOf(file) {
+    return {
+      name: draftName(this.token, file.machine, file.path),
+      token: this.token, machine: file.machine, path: file.path,
+      content: file.editor.value(), base: file.base ?? null, updatedAt: Date.now(),
+    };
+  }
+
+  // 編集している間、3 秒ごとに下書きを更新する。編集が無くなったら自分の下書きを消す。
+  keepDraft(cx) {
+    const file = this.file;
+    if (!file?.editor || file.loading) return;
+    if (file.dirty) {
+      const content = file.editor.value();
+      if (content === file.drafted) return;
+      file.drafted = content;
+      cx.spawn(async () => { await writeDraft(this.draftOf(file)).catch(() => { file.drafted = null; }); });
+    } else if (file.drafted !== undefined) {
+      file.drafted = undefined;
+      cx.spawn(async () => deleteDraft(draftName(this.token, file.machine, file.path)));
+    }
+  }
+
+  // 開いたファイルに、開いているほかの viewer のタブのものでない下書きがあれば「復元 / 破棄」を聞く。
+  async offerDrafts(file) {
+    if (!file.editor || file.readonly) return;
+    const list = draftsFor({ drafts: await listDrafts(), machine: file.machine, path: file.path, openTokens: openTokens(), selfToken: this.token });
+    if (this.file !== file || !list.length) return;
+    file.drafts = list;
+  }
+
+  restoreDraft(name, cx) {
+    const file = this.file;
+    const draft = file?.drafts?.find((d) => d.name === name);
+    if (!draft || !file.editor) return;
+    file.drafts = file.drafts.filter((d) => d !== draft);
+    file.editor.set_value(draft.content);
+    // 復元は編集として扱う（プレビュータブなら固定タブになる）。保存前の確認の基準は下書きに記録したディスクの状態。
+    file.base = draft.base;
+    this.setDirty(file.editor.value() !== file.shown);
+    file.drafted = null;
+    cx.spawn(async (cx) => {
+      await deleteDraft(draft.name);
+      const r = await checkChanged(file.path, file.machine, draft.base).catch(() => null);
+      if (this.file === file && r && (r.missing || r.changed)) file.notice = { kind: "draft-changed" };
+      cx.notify();
+    });
+    cx.notify();
+  }
+
+  discardDraft(name, cx) {
+    const file = this.file;
+    const draft = file?.drafts?.find((d) => d.name === name);
+    if (!draft) return;
+    file.drafts = file.drafts.filter((d) => d !== draft);
+    cx.spawn(async (cx) => { await deleteDraft(draft.name); cx.notify(); });
+    cx.notify();
   }
 
   // ---- 外部変更 ----
@@ -265,6 +347,9 @@ export default class FileViewer extends View {
     file.notice = null;
     file.dismissed = null;
     this.setDirty(false);
+    // 保存したら、このタブの下書きは消す。
+    file.drafted = undefined;
+    await deleteDraft(draftName(this.token, file.machine, file.path));
   }
 
   // 確認の答え。
@@ -363,6 +448,14 @@ export default class FileViewer extends View {
     if (n?.kind === "conflict") out.push(this.banner("fv-conflict", "保存の前にディスクの内容が変わっている", t, t.blocked, [["reload", "ディスクの内容で読み直す"], ["overwrite", "自分の内容で上書きする"], ["cancel", "やめる"]]));
     if (n?.kind === "recreate") out.push(this.banner("fv-recreate", "ファイルが無くなっている。今の内容で作り直す？", t, t.blocked, [["recreate", "作り直す"], ["cancel", "やめる"]]));
     if (n?.kind === "error") out.push(this.banner("fv-error", n.text, t, t.blocked, [["close", "閉じる"]]));
+    if (n?.kind === "draft-changed") out.push(this.banner("fv-draft-changed", "下書きの後にディスクが変わっている（保存するときに確かめる）", t, t.working, [["close", "閉じる"]]));
+    for (const [i, d] of (file.drafts ?? []).entries()) {
+      out.push(h_flex().id(`fv-draft-${i}`).flex_none().px(12).py(6).gap(8).items_center().border_b(1).border_color(t.border).bg(t.raised)
+        .child(div().w(3).h(16).flex_none().rounded(2).bg(t.accent))
+        .child(div().flex_1().min_w(0).text_size(12).child(`未保存の編集の下書きがある（${when(d.updatedAt)}）`))
+        .child(button(`fv-draft-${i}-restore`, "復元", t, (cx) => this.restoreDraft(d.name, cx)))
+        .child(button(`fv-draft-${i}-discard`, "破棄", t, (cx) => this.discardDraft(d.name, cx))));
+    }
     return out;
   }
 
