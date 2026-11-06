@@ -11,6 +11,13 @@ function linksIn(text, from = "/r/README.md") {
   });
 }
 const file = (path) => ({ type: "file", path });
+const external = (url) => ({ type: "external", url });
+// 段落の中は Markdown のリンク（部品が段落の中の <a> を押せない文字で出すため）、HTML のかたまりの中は <a>
+// （Markdown の書き方が効かないため）になっていること。
+const asParagraph = (out) => expect(out).not.toContain("<a ");
+const asHtmlBlock = (out) => expect(out).not.toContain("](");
+// リンクに包まれた画像で、リンクの記号が文字として残っていないこと。
+const noLeftoverBrackets = (line) => expect(line.replace(/(?<!!)\[(?:\\.|[^[\]\\])*\]\((?:<[^>]*>|[^)\s]+)\)/g, "")).not.toMatch(/[[\]]/);
 
 describe("resolveLink", () => {
   const from = "/r/README.md";
@@ -55,20 +62,25 @@ describe("resolveLink", () => {
 
 describe("rewriteImages", () => {
   test("ローカル画像は代替テキストを名前にしたリンクにする", () => {
-    expect(rewriteImages("前 ![構成図](img/arch.png) 後")).toBe("前 [構成図](fv-image:img/arch.png) 後");
+    const out = rewriteImages("前 ![構成図](img/arch.png) 後");
+    expect(linksIn(out)).toEqual([{ name: "構成図", to: file("/r/img/arch.png") }]);
+    expect(out).not.toContain("![");
   });
 
   test("代替テキストが無ければファイル名をリンクの名前にする", () => {
-    expect(rewriteImages("![](img/arch.png)")).toBe("[arch.png](fv-image:img/arch.png)");
+    expect(linksIn(rewriteImages("![](img/arch.png)"))).toEqual([{ name: "arch.png", to: file("/r/img/arch.png") }]);
   });
 
-  test("空白や括弧を含むパスはエンコードし、タイトルは落とす", () => {
-    expect(rewriteImages('![a](<my img/a (1).png> "t")')).toBe("[a](fv-image:my%20img/a%20%281%29.png)");
+  test("空白や括弧を含み、タイトルの付いたパスの画像も、そのファイルを開く", () => {
+    expect(linksIn(rewriteImages('![a](<my img/a (1).png> "t")'))).toEqual([{ name: "a", to: file("/r/my img/a (1).png") }]);
   });
 
   test("参照形式の画像は、インライン形式と同じ押せる名前になり、定義の行と同じ定義を使う普通のリンクは残る", () => {
     const md = "![図][arch] ![arch][] ![arch]\n\n[ダウンロード][arch]\n\n[arch]: img/a.png";
-    expect(rewriteImages(md)).toBe("[図](fv-image:img/a.png) [arch](fv-image:img/a.png) [arch](fv-image:img/a.png)\n\n[ダウンロード][arch]\n\n[arch]: img/a.png");
+    const [first, ...rest] = rewriteImages(md).split("\n");
+    expect(linksIn(first)).toEqual(["図", "arch", "arch"].map((name) => ({ name, to: file("/r/img/a.png") })));
+    noLeftoverBrackets(first);
+    expect(rest).toEqual(md.split("\n").slice(1));
   });
 
   test("定義の無い参照形式の画像は書き換えない", () => {
@@ -79,7 +91,7 @@ describe("rewriteImages", () => {
     const md = "![図][arch]\n\n```mermaid\nflowchart LR\nA-->B\n```\n\n[arch]: img/a.png\n";
     const definitions = collectDefinitions(md);
     const parts = splitMermaidBlocks(md).filter((p) => p.type === "markdown").map((p) => rewriteImages(p.text, definitions));
-    expect(parts[0]).toBe("[図](fv-image:img/a.png)\n");
+    expect(linksIn(parts[0])).toEqual([{ name: "図", to: file("/r/img/a.png") }]);
   });
 
   test("コードブロックの中の定義は集めない", () => {
@@ -89,20 +101,22 @@ describe("rewriteImages", () => {
   });
 
   test("段落の中の <img> は押せる名前（alt、無ければファイル名）。属性の順番と引用符によらない", () => {
-    expect(rewriteImages('前 <img src="img/a.png" alt="図"> 後')).toBe("前 [図](fv-image:img/a.png) 後");
-    expect(rewriteImages("前 <img alt='図' src=img/a.png /> 後")).toBe("前 [図](fv-image:img/a.png) 後");
-    expect(rewriteImages('前 <img src="img/a.png"> 後')).toBe("前 [a.png](fv-image:img/a.png) 後");
+    for (const [md, name] of [['前 <img src="img/a.png" alt="図"> 後', "図"], ["前 <img alt='図' src=img/a.png /> 後", "図"], ['前 <img src="img/a.png"> 後', "a.png"]]) {
+      const out = rewriteImages(md);
+      asParagraph(out);
+      expect(out).not.toContain("<img");
+      expect(linksIn(out)).toEqual([{ name, to: file("/r/img/a.png") }]);
+    }
   });
 
   test("HTML のかたまりの中の <img> は、押せる <a> になる", () => {
-    expect(rewriteImages('<p>\n<img src="img/a.png" alt="図">\n</p>')).toBe('<p>\n<a href="fv-image:img/a.png">図</a>\n</p>');
-    expect(rewriteImages('本文\n\n<p align="center"><img src="img/a.png" alt="A &amp; B"></p>')).toBe('本文\n\n<p align="center"><a href="fv-image:img/a.png">A &amp; B</a></p>');
+    for (const [md, name] of [['<p>\n<img src="img/a.png" alt="図">\n</p>', "図"], ['本文\n\n<p align="center"><img src="img/a.png" alt="A &amp; B"></p>', "A & B"]]) {
+      const out = rewriteImages(md);
+      asHtmlBlock(out);
+      expect(out).not.toContain("<img");
+      expect(linksIn(out)).toEqual([{ name, to: file("/r/img/a.png") }]);
+    }
   });
-
-  // 段落の中は Markdown のリンク（部品が段落の中の <a> を押せない文字で出すため）、HTML のかたまりの中は <a>
-  // （Markdown の書き方が効かないため）になっていること。
-  const asParagraph = (out) => expect(out).not.toContain("<a ");
-  const asHtmlBlock = (out) => expect(out).not.toContain("](");
 
   test("1 つのタグだけの行でない、タグで始まる行は、空行のあとでも段落として書き換える", () => {
     const badges = rewriteImages('本文\n\n<a href="https://example.com/ci"><img src="ci.svg" alt="CI"></a> <a href="docs/a.md"><img src="img/b.png" alt="B"></a>');
@@ -133,13 +147,13 @@ describe("rewriteImages", () => {
   });
 
   test("リンクに包まれた画像は、外側のリンク先を開く 1 つのリンクになる", () => {
-    expect(rewriteImages("[![図](img/a.png)](docs/a.md)")).toBe("[図](docs/a.md)");
-    expect(rewriteImages('前 <a href="docs/a.md"><img src="img/a.png" alt="図"></a> 後')).toBe("前 [図](docs/a.md) 後");
-    expect(rewriteImages('<div>\n<a href="docs/a.md"><img src="img/a.png" alt="図"></a>\n</div>')).toBe('<div>\n<a href="docs/a.md">図</a>\n</div>');
+    for (const md of ["[![図](img/a.png)](docs/a.md)", '前 <a href="docs/a.md"><img src="img/a.png" alt="図"></a> 後', '<div>\n<a href="docs/a.md"><img src="img/a.png" alt="図"></a>\n</div>']) {
+      const out = rewriteImages(md);
+      expect(out).not.toContain("<img");
+      noLeftoverBrackets(out);
+      expect(linksIn(out)).toEqual([{ name: "図", to: file("/r/docs/a.md") }]);
+    }
   });
-
-  // リンクに包まれた画像で、リンクの記号が文字として残っていないこと。
-  const noLeftoverBrackets = (line) => expect(line.replace(/(?<!!)\[(?:\\.|[^[\]\\])*\]\((?:<[^>]*>|[^)\s]+)\)/g, "")).not.toMatch(/[[\]]/);
 
   test("参照形式のリンクや、<img> を包む Markdown のリンクも、外側のリンク先を開く 1 つのリンクになる", () => {
     const md = '[![CI](https://img.shields.io/x.svg)][ci] [<img src="img/shot.png" alt="画面">](docs/a.md) [<img src="img/b.png">][Docs]\n\n[ci]: https://example.com/ci\n[docs]: <docs/b c.md>';
@@ -180,18 +194,26 @@ describe("rewriteImages", () => {
   });
 
   test("外側のリンクが同じファイル内の #見出し だけなら、画像を開く", () => {
-    expect(rewriteImages("[![図](img/a.png)](#top)")).toBe("[図](fv-image:img/a.png)");
-    expect(rewriteImages('<div>\n<a href="#top"><img src="img/a.png" alt="図"></a>\n</div>')).toBe('<div>\n<a href="fv-image:img/a.png">図</a>\n</div>');
+    for (const md of ["[![図](img/a.png)](#top)", '<div>\n<a href="#top"><img src="img/a.png" alt="図"></a>\n</div>']) {
+      const out = rewriteImages(md);
+      expect(out).not.toContain("<img");
+      noLeftoverBrackets(out);
+      expect(linksIn(out)).toEqual([{ name: "図", to: file("/r/img/a.png") }]);
+    }
   });
 
   test("http(s) の画像は（部品が描けないので）名前になり、行き先は URL そのもの", () => {
-    expect(rewriteImages("![logo](https://example.com/logo.png)")).toBe("[logo](https://example.com/logo.png)");
-    expect(rewriteImages('前 <img src="https://example.com/i/logo.png?v=2"> 後')).toBe("前 [logo.png](https://example.com/i/logo.png?v=2) 後");
+    expect(linksIn(rewriteImages("![logo](https://example.com/logo.png)"))).toEqual([{ name: "logo", to: external("https://example.com/logo.png") }]);
+    expect(linksIn(rewriteImages('前 <img src="https://example.com/i/logo.png?v=2"> 後'))).toEqual([{ name: "logo.png", to: external("https://example.com/i/logo.png?v=2") }]);
   });
 
   test("HTML のかたまりの中の http(s) の <img> は押せる <a> になり、<a href> に包まれていれば外側のリンク先になる", () => {
-    expect(rewriteImages('<div>\n<img src="https://example.com/logo.png" alt="ロゴ">\n</div>')).toBe('<div>\n<a href="https://example.com/logo.png">ロゴ</a>\n</div>');
-    expect(rewriteImages('<div>\n<a href="https://example.com"><img src="https://example.com/logo.png" alt="ロゴ"></a>\n</div>')).toBe('<div>\n<a href="https://example.com">ロゴ</a>\n</div>');
+    for (const [md, url] of [['<div>\n<img src="https://example.com/logo.png" alt="ロゴ">\n</div>', "https://example.com/logo.png"], ['<div>\n<a href="https://example.com"><img src="https://example.com/logo.png" alt="ロゴ"></a>\n</div>', "https://example.com"]]) {
+      const out = rewriteImages(md);
+      asHtmlBlock(out);
+      expect(out).not.toContain("<img");
+      expect(linksIn(out)).toEqual([{ name: "ロゴ", to: external(url) }]);
+    }
   });
 
   test("data: の画像はそのまま", () => {
@@ -200,7 +222,9 @@ describe("rewriteImages", () => {
 
   test("コードブロック・インラインコード・<!-- --> の中は書き換えない", () => {
     const md = "```md\n![x](a.png)\n```\n`![y](b.png)` ![z](c.png)\n<!-- ![c](d.png)\n<img src=\"e.png\"> -->\n後 <!-- <img src=\"f.png\"> --> ![g](g.png)";
-    expect(rewriteImages(md)).toBe("```md\n![x](a.png)\n```\n`![y](b.png)` [z](fv-image:c.png)\n<!-- ![c](d.png)\n<img src=\"e.png\"> -->\n後 <!-- <img src=\"f.png\"> --> [g](fv-image:g.png)");
+    const out = rewriteImages(md);
+    for (const kept of ["```md\n![x](a.png)\n```", "`![y](b.png)`", '<!-- ![c](d.png)\n<img src="e.png"> -->', '<!-- <img src="f.png"> -->']) expect(out).toContain(kept);
+    expect(linksIn(out)).toEqual([{ name: "z", to: file("/r/c.png") }, { name: "g", to: file("/r/g.png") }]);
   });
 
   // コードの中を書き換えていなければ、押せるリンクは z の画像だけになる。
