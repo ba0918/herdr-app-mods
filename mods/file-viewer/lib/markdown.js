@@ -53,9 +53,9 @@ const LINK = new RegExp(String.raw`(?<![!\\])\[(${LINK_TEXT})\](?:\(\s*${DEST}${
 // 段落の中の <a href> と、その中身（入れ子の <a> は含めない）。1: <a> の属性、2: 中身。
 const ANCHOR = new RegExp(String.raw`<a\b(${ATTRS})>([^<]*(?:<(?!\/?a\b)[^<]*)*)<\/a\s*>`, "gi");
 // 参照形式の定義（CommonMark の link reference definition）。1: ラベル、2: 参照先。参照先の前とタイトルの前では 1 回まで
-// 改行してよい。タイトルの後ろに空白でないものがあれば、タイトルの無い定義（タイトルの行は段落の文字）。
-const DEFINITION = new RegExp(String.raw`[ \t]*\[((?:\\.|[^\\\[\]])+)\]:[ \t]*(?:\n[ \t]*)?(<[^<>\n]*>|[^\s<]\S*)` +
-  String.raw`(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?[ \t]*(?:\n|$)`, "y");
+// 改行（LF か CRLF）してよい。タイトルの後ろに空白でないものがあれば、タイトルの無い定義（タイトルの行は段落の文字）。
+const DEFINITION = new RegExp(String.raw`[ \t]*\[((?:\\.|[^\\\[\]])+)\]:[ \t]*(?:\r?\n[ \t]*)?(<[^<>\n]*>|[^\s<]\S*)` +
+  String.raw`(?:(?:[ \t]+(?:\r?\n[ \t]*)?|\r?\n[ \t]*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?[ \t]*\r?(?:\n|$)`, "y");
 
 const normalizeLabel = (label) => label.trim().replace(/\s+/g, " ").toLowerCase();
 const unwrap = (dest) => (dest.startsWith("<") ? dest.slice(1, -1) : dest);

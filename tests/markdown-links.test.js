@@ -84,11 +84,12 @@ describe("rewriteImages", () => {
   });
 
   test("参照先やタイトルが次の行にある定義も集める", () => {
-    for (const def of ["[logo]:\n  img/logo.png", '[logo]: img/logo.png\n  "ロゴ"', "[logo]:\n  <img/logo.png>\n  'ロゴ'", '[logo]: img/logo.png\n"t" x']) {
+    for (const def of ["[logo]:\n  img/logo.png", '[logo]: img/logo.png\n  "ロゴ"', "[logo]:\n  <img/logo.png>\n  'ロゴ'", '[logo]: img/logo.png\n"t" x', "[logo]: img/logo.png\r", "[logo]:\r\n  img/logo.png\r", '[logo]: img/logo.png\r\n  "ロゴ"\r']) {
       expect(linksIn(rewriteImages(`![logo]\n\n${def}`))).toEqual([{ name: "logo", to: file("/r/img/logo.png") }]);
     }
-    const md = "[a]: img/a.png\n[b]:\n  img/b.png\n\n![a] ![b]";
-    expect(linksIn(rewriteImages(md))).toEqual([{ name: "a", to: file("/r/img/a.png") }, { name: "b", to: file("/r/img/b.png") }]);
+    for (const md of ["[a]: img/a.png\n[b]:\n  img/b.png\n\n![a] ![b]", "[a]: img/a.png\r\n[b]:\r\n  img/b.png\r\n  \"B\"\r\n\r\n![a] ![b]\r\n"]) {
+      expect(linksIn(rewriteImages(md))).toEqual([{ name: "a", to: file("/r/img/a.png") }, { name: "b", to: file("/r/img/b.png") }]);
+    }
   });
 
   test("段落の続きの行は定義にならない", () => {
