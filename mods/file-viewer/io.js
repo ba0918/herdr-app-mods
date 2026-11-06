@@ -99,12 +99,14 @@ export async function writeText(path, on, text, base) {
   const prep = await sh(on, `real=$(readlink -f -- "$1" 2>/dev/null || printf %s "$1"); [ -e "$real" ] && [ ! -w "$real" ] && { echo "書き込み権限が無い" >&2; exit 2; }; d=$(dirname -- "$real"); [ -w "$d" ] || { echo "フォルダに書き込めない: $d" >&2; exit 2; }; t="$d/.$(basename -- "$real").file-viewer-$$"; : > "$t" || exit 1; printf '%s\\n%s\\n' "$real" "$t"`, [path]);
   if (prep.code !== 0) throw new Error(prep.stderr.trim() || "保存の準備に失敗した");
   const [[real, temp]] = splitHead(prep.stdout, 2);
-  for (const part of splitForWrite(text)) {
-    const r = await sh(on, `printf '%s' "$2" >> "$1"`, [temp, part]);
-    if (r.code !== 0) {
-      await sh(on, `rm -f -- "$1"`, [temp]);
-      throw new Error(r.stderr.trim() || "書き込みに失敗した");
+  try {
+    for (const part of splitForWrite(text)) {
+      const r = await sh(on, `printf '%s' "$2" >> "$1"`, [temp, part]);
+      if (r.code !== 0) throw new Error(r.stderr.trim() || "書き込みに失敗した");
     }
+  } catch (e) {
+    await sh(on, `rm -f -- "$1"`, [temp]).catch(() => {});
+    throw e;
   }
   const finish = `real=$1; t=$2; want=$3
 if [ -n "$want" ]; then
