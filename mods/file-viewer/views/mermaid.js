@@ -139,7 +139,7 @@ function sequence(l, s, t) {
     const before = m.self ? { x: (m.x1 + 36) * s, y: m.y * s } : { x: m.x1 * s, y: m.y * s };
     if (m.head === "arrow") out.push(paint(polygon(arrowHead(before, end, size), true), line));
     if (m.head === "cross") for (const seg of crossHead(end, size * 0.45)) out.push(paint(polyline(seg, width, false), line));
-    const tx = m.self ? m.x1 + 42 : Math.min(m.x1, m.x2);
+    const tx = m.self ? m.textX : Math.min(m.x1, m.x2);
     const tw = m.self ? 400 : Math.abs(m.x2 - m.x1);
     out.push(v_flex().id(`m-${mi}`).absolute().left(tx * s).top((m.y - (m.self ? 30 : 20)) * s).w(tw * s).when(!m.self, (el) => el.items_center())
       .text_size(12 * s).text_color(fg).child(div().whitespace_nowrap().child(m.text)));

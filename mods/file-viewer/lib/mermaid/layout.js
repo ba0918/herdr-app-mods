@@ -118,6 +118,8 @@ const SELF_ROW = 52;
 const NOTE_PAD = 8;
 const BLOCK_HEAD = 26;
 const MARGIN = 12;
+// 自己メッセージの文字は、列の線から右にこれだけ離して書く（折り返しの線の右）。
+const SELF_TEXT = 42;
 
 function walk(items, visit, depth = 0) {
   for (const item of items) {
@@ -137,7 +139,7 @@ export function layoutSequence(diagram) {
   walk(diagram.items, (item) => {
     if (item.kind === "message") {
       const a = order.get(item.from), b = order.get(item.to);
-      if (a === b) need[a] = Math.max(need[a], textWidth(item.text) + 40);
+      if (a === b) need[a] = Math.max(need[a], SELF_TEXT + textWidth(item.text) + 12);
       else spans.push([Math.min(a, b), Math.max(a, b), textWidth(item.text) + 36]);
     }
     if (item.kind === "note") {
@@ -179,8 +181,13 @@ export function layoutSequence(diagram) {
         const x1 = xs[order.get(item.from)], x2 = xs[order.get(item.to)];
         const self = item.from === item.to;
         const rowY = y + (self ? SELF_ROW : ROW) - 10;
-        messages.push({ ...item, x1, x2, y: rowY, self });
-        cover(Math.min(x1, x2) - 10, Math.max(x1, x2) + (self ? 40 : 10));
+        if (self) {
+          messages.push({ ...item, x1, x2, y: rowY, self, textX: x1 + SELF_TEXT });
+          cover(x1 - 10, x1 + SELF_TEXT + textWidth(item.text) + 8);
+        } else {
+          messages.push({ ...item, x1, x2, y: rowY, self });
+          cover(Math.min(x1, x2) - 10, Math.max(x1, x2) + 10);
+        }
         if (item.activate) activate(item.activate, rowY);
         if (item.deactivate) deactivate(item.deactivate, rowY);
         y += self ? SELF_ROW : ROW;
@@ -239,14 +246,24 @@ export function layoutSequence(diagram) {
   place(diagram.items, 0);
   for (const [id, starts] of open) while (starts.length) deactivate(id, y);
 
-  const bottom = y + 10;
-  const footers = participants.map((p) => ({ ...p, y: bottom }));
-  const boxes = [
-    ...participants.map((p) => ({ x: p.boxX, y: MARGIN, width: p.boxWidth, height: BOX_HEIGHT })),
-    ...footers.map((p) => ({ x: p.boxX, y: p.y, width: p.boxWidth, height: BOX_HEIGHT })),
-    ...notes, ...blocks,
+  // 列の中心に合わせて置いた Note（先頭の列の Note over など）は左にはみ出しうるので、全体を右へずらす。
+  const extents = [
+    ...participants.map((p) => [p.boxX, p.boxX + p.boxWidth]),
+    ...notes.map((n) => [n.x, n.x + n.width]),
+    ...blocks.map((b) => [b.x, b.x + b.width]),
+    ...messages.map((m) => (m.self ? [m.x1 - 10, m.textX + textWidth(m.text)] : [Math.min(m.x1, m.x2), Math.max(m.x1, m.x2)])),
   ];
-  const width = Math.max(100, ...boxes.map((b) => b.x + b.width), ...messages.map((m) => Math.max(m.x1, m.x2) + (m.self ? 50 : 0))) + MARGIN;
+  const dx = Math.max(0, MARGIN - Math.min(MARGIN, ...extents.map((e) => e[0])));
+  if (dx) {
+    for (const p of participants) { p.x += dx; p.boxX += dx; }
+    for (const m of messages) { m.x1 += dx; m.x2 += dx; if (m.self) m.textX += dx; }
+    for (const n of notes) n.x += dx;
+    for (const b of blocks) b.x += dx;
+    for (const a of activations) a.x += dx;
+  }
+
+  const bottom = y + 10;
+  const width = Math.max(100, ...extents.map((e) => e[1] + dx)) + MARGIN;
   return {
     type: "sequence", width, height: bottom + BOX_HEIGHT + MARGIN,
     participants, footerY: bottom, lifelineTop: MARGIN + BOX_HEIGHT, lifelineBottom: bottom,

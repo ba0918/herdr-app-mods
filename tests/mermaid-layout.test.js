@@ -149,4 +149,30 @@ describe("layoutSequence", () => {
     for (const p of l.participants) expect(p.boxX + p.boxWidth).toBeLessThanOrEqual(l.width);
     for (const b of l.blocks) expect(b.y + b.height).toBeLessThanOrEqual(l.height);
   });
+
+  test("先頭の参加者の長い Note と、長い自己メッセージの文字も図の左右に収まる", () => {
+    const long = "とても長い注記の文章がここに入る、とても長い注記の文章がここに入る";
+    const sources = [
+      `sequenceDiagram\nparticipant A\nparticipant B\nNote over A: ${long}\nA->>B: hi`,
+      `sequenceDiagram\nparticipant A\nparticipant B\nNote over A,B: ${long}\nNote left of A: ${long}\nNote right of B: ${long}`,
+      `sequenceDiagram\nparticipant A\nA->>A: ${long}`,
+      `sequenceDiagram\nparticipant A\nparticipant B\nloop ${long}\nB->>B: ${long}\nend`,
+    ];
+    for (const src of sources) {
+      const l = layoutSequence(parseSequence(src));
+      for (const n of l.notes) {
+        expect(n.x).toBeGreaterThanOrEqual(0);
+        expect(n.x + n.width).toBeLessThanOrEqual(l.width);
+      }
+      for (const p of l.participants) expect(p.boxX).toBeGreaterThanOrEqual(0);
+      for (const b of l.blocks) {
+        expect(b.x).toBeGreaterThanOrEqual(0);
+        expect(b.x + b.width).toBeLessThanOrEqual(l.width);
+      }
+      for (const m of l.messages.filter((m) => m.self)) {
+        expect(m.textX).toBeGreaterThanOrEqual(0);
+        expect(m.textX + textWidth(m.text)).toBeLessThanOrEqual(l.width);
+      }
+    }
+  });
 });
