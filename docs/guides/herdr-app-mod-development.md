@@ -170,20 +170,20 @@ mod のタブを開いたときの振る舞い（実機で確認）:
 
 | 項目 | 内容 |
 |---|---|
-| `exec` | 30 秒、出力 8 MiB まで。mod の `exec` は Windows 側で `hc` を起動するので、引数を含むコマンドライン全体が UTF-16 で約 32,000 文字を超えると `cannot run hc: ... (os error 206)` で起動できない。`"` はエスケープで 2 文字になる（ASCII 32,600 文字・日本語 30,000 文字は通り、`"` 20,000 文字は失敗。実機で確認）。標準出力は NUL もそのまま返る |
-| `readTextFile` | 1 MiB まで |
+| `exec` | 30 秒、出力 8 MiB まで。mod の `exec` は Windows 側で `hc` を起動するので、引数を含むコマンドライン全体が UTF-16 で約 32,000 文字を超えると `cannot run hc: ... (os error 206)` で起動できない。`"` はエスケープで 2 文字になる（ASCII 32,600 文字・日本語 30,000 文字は通り、`"` 20,000 文字は失敗。実機で確認）。標準出力は NUL もそのまま返る。WSL で `cat` したファイルの先頭の BOM（`EF BB BF`）は、受けた文字列の先頭に U+FEFF として残り、CR も落ちない（実機で確認） |
+| `readTextFile` | 1 MiB まで。先頭の BOM は U+FEFF として残る（このコンピュータのファイルと `{ on: "wsl" }` の両方。実機で確認） |
 | `writeTextFile` / `watchFolder` / `pickFolder` | app 側（Windows）のみ |
 | `Editor` | 行番号・折りたたみ・意味的な色分け（keyword, string など）はある。`EditorState` のオプションとメソッドに行単位の背景色・装飾は無い。行へのスクロール API も見当たらない（`scroll_to_item` は `v_virtual_list` 用の `VirtualListScrollHandle` にだけある） |
 | テキスト装飾 | 1 つのテキストの中で範囲ごとに色を変える API は型定義に見当たらない。色を分けたい単位で要素を分ける |
 | 構文解析 | トークナイザ等の API は公開されていない。`Editor` の外で色付けするなら JS 側で行う |
 | 外部ライブラリ | 相対 import で同梱した純 JS（ES modules）は使える。上記の限定的な Node 互換モジュールの範囲を超える Node API に依存するものは動かない。`Function` コンストラクタ（`Function("return this")()` など）は禁じられていて実行時に例外になる（lodash がこれを使う。実機で確認） |
 | `image(path)` | app home からの相対パスだけ表示できる。絶対パスと、app home の中の名前が「.」で始まるフォルダ（例: `mods/<name>/.cache/`）の下の画像は表示されない（実機で確認）。他 machine の画像は、`exec` で base64 にして運び、app home に書き出してから表示する |
-| `TextView.markdown` | `gpui-base` から import する（`gpui-kit` には無い）。見出し・表・コードブロック・リンクは表示される。ローカルの画像（相対パス・絶対パス）は表示されない（実機で確認） |
+| `TextView.markdown` | `gpui-base` から import する（`gpui-kit` には無い）。見出し・表・コードブロック・リンクは表示される。ローカルの画像（相対パス・絶対パス）は表示されない。http(s) の画像も、Markdown の `![](https://...)`・段落の中の `<img>`・HTML のかたまりの中の `<img>` のどれも描かれない（同じ URL は WSL と Windows の両方から取れる。開いて 10 秒待っても出ない）。Markdown の中の HTML は、段落の中の `<a href>` はタグが落ちて中の文字だけがただの文字で出て、押しても `on_link_click` に届かない。HTML のかたまり（空行のあとの `<div>` など）の中の `<a href>` はリンクの見た目で出て、押すと `on_link_click` に href が届く。`<img>` は、段落の中では何も出ず（前後の文字の間が空くだけ）、HTML のかたまりの中では行ごと消える（どれも実機で確認） |
 | 線や図形を描く | `PathBuilder.stroke(幅)` / `PathBuilder.fill()` に `move_to` / `line_to` / `add_polygon` / `dash_array` で組んだ path を、`window.paint_path(path, 色).absolute().top(0).left(0).size_full()` として重ねる。座標は、その要素の左上を原点とする論理 px（`"50%"` のような割合も使える）。mod の中の `window` は GPUI の窓で、`herdr` の `window()` とは別物（実機で確認） |
 | 位置指定の文字 | 同じ親の中で `absolute()` にした文字だけの要素が、条件によって描かれないことがあった（Mermaid のシーケンス図で、上段の参加者の箱に重ねた名前だけが出なかった）。名前を箱の要素の子にすると出た。原因は未確認 |
 | `image(path)` の形式 | PNG / JPEG / GIF / BMP / ICO / WebP（静止画とアニメーション）/ SVG を表示できる（app home の下にコピーして、実機で確認） |
 | `fs/promises` | `${appHome()}/...` の形（`/` 区切り）で app home の下の `mkdir` / `writeFile` / `readFile` / `readdir` / `exists` / `unlink` が使える。無いフォルダの `readdir` は例外になる（実機で確認） |
-| `fs/promises` の `writeFile` | 文字列は書ける。`Uint8Array` / `Buffer` を渡すと 0 バイトのファイルになる（実機で確認）。バイナリは base64 の文字列で書き、PowerShell など外部のコマンドでデコードする |
+| `fs/promises` の `writeFile` | 文字列は書ける（UTF-8 で書く。先頭が U+FEFF の文字列を書くと、ファイルの先頭が `EF BB BF` になる）。`Uint8Array` / `Buffer` を渡すと 0 バイトのファイルになる（実機で確認）。バイナリは base64 の文字列で書き、PowerShell など外部のコマンドでデコードする |
 | `Buffer` / `crypto` | `Buffer.toString("base64")` は空文字列を返す。`createHash().update()` は文字列なら正しく、`Buffer` を渡すと空入力の値になる（実機で確認）。base64 への変換は `btoa`（Latin-1 の文字列のみ）を使う。`TextEncoder` は無い |
 | 他 machine への書き込み | `exec` の引数で内容を渡す。上の Windows のコマンドラインの長さの上限が先に効くので、1 回に渡すのは引数としての長さで 24,000 文字程度に抑え（Linux の 1 引数の上限 128 KiB にも収まる）、一時ファイルへ追記して、最後に `mv` で置き換える。置き換える直前にディスク上のハッシュ（`sha256sum`）を比べれば、途中で外から書き換えられていたときに止められる。WSL へ約 416 KB を約 0.6 秒（実機で確認） |
 | 閉じるときの呼び出し | `View.close(cx)` は、ペイン・タブ・overlay が消えるときとアプリ終了時に 1 回だけ呼ばれる最後の呼び出しで、閉じるのを止める手段は無い（型定義と AGENTS.md）。後始末は最大 250 ms。表示していないコピーや非アクティブなタブには呼ばれないとも書かれており、終了時に裏のタブで呼ばれるかは読み切れない。表示中のタブを `tab.close` で閉じたときに呼ばれ、その中の `fs/promises` の書き込みが終わることは実機で確認した |
