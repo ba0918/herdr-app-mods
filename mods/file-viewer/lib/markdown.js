@@ -52,7 +52,10 @@ const LINK_TEXT = String.raw`(?:\\.|[^\[\]\\!<]|!(?!\[)|!\[[^\[\]]*\](?:\[[^\[\]
 const LINK = new RegExp(String.raw`(?<![!\\])\[(${LINK_TEXT})\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]+)\])`, "gi");
 // 段落の中の <a href> と、その中身（入れ子の <a> は含めない）。1: <a> の属性、2: 中身。
 const ANCHOR = new RegExp(String.raw`<a\b(${ATTRS})>([^<]*(?:<(?!\/?a\b)[^<]*)*)<\/a\s*>`, "gi");
-const DEFINITION = /^ {0,3}\[([^\]]+)\]:\s*(<[^>\n]*>|\S+)/;
+// 参照形式の定義（CommonMark の link reference definition）。1: ラベル、2: 参照先。参照先の前とタイトルの前では 1 回まで
+// 改行してよい。タイトルの後ろに空白でないものがあれば、タイトルの無い定義（タイトルの行は段落の文字）。
+const DEFINITION = new RegExp(String.raw`[ \t]*\[((?:\\.|[^\\\[\]])+)\]:[ \t]*(?:\n[ \t]*)?(<[^<>\n]*>|[^\s<]\S*)` +
+  String.raw`(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?[ \t]*(?:\n|$)`, "y");
 
 const normalizeLabel = (label) => label.trim().replace(/\s+/g, " ").toLowerCase();
 const unwrap = (dest) => (dest.startsWith("<") ? dest.slice(1, -1) : dest);
@@ -387,27 +390,16 @@ function segments(text) {
   return out;
 }
 
-// 参照形式の定義（[id]: path）を、文書全体（コードブロック・インラインコード・HTML のコメントの外）から集める。
+// 参照形式の定義（[id]: path）を、文書全体（コードブロック・HTML のかたまりの外）から集める。CommonMark と同じく、
+// 定義は段落の始まりにだけ並べられ（段落の続きの行は定義にならない）、インラインコードやコメントより先に読む。
 // ラベルは大文字小文字と空白の違いを無視する。同じラベルは最初の定義。値は書いたままの参照先（<...> を含む）。
 export function collectDefinitions(markdown) {
   const definitions = new Map();
   mapBlocks(markdown, (text, kind) => {
-    const parts = segments(text);
     if (kind !== "text") return text;
-    // インラインコードやコメントにかからない行だけを見る。
-    const kept = [];
-    let at = 0;
-    for (const part of parts) {
-      if (part.keep) kept.push([at, at + part.text.length]);
-      at += part.text.length;
-    }
-    let start = 0, k = 0;
-    for (const line of text.split("\n")) {
-      const end = start + line.length;
-      while (k < kept.length && kept[k][1] <= start) k++;
-      const m = k < kept.length && kept[k][0] < end ? null : DEFINITION.exec(line);
-      if (m && !definitions.has(normalizeLabel(m[1]))) definitions.set(normalizeLabel(m[1]), m[2]);
-      start = end + 1;
+    DEFINITION.lastIndex = 0;
+    for (let m; DEFINITION.lastIndex < text.length && (m = DEFINITION.exec(text)) && m[1].trim();) {
+      if (!definitions.has(normalizeLabel(m[1]))) definitions.set(normalizeLabel(m[1]), m[2]);
     }
     return text;
   });

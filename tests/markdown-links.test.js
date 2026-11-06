@@ -83,6 +83,18 @@ describe("rewriteImages", () => {
     expect(rest).toEqual(md.split("\n").slice(1));
   });
 
+  test("参照先やタイトルが次の行にある定義も集める", () => {
+    for (const def of ["[logo]:\n  img/logo.png", '[logo]: img/logo.png\n  "ロゴ"', "[logo]:\n  <img/logo.png>\n  'ロゴ'", '[logo]: img/logo.png\n"t" x']) {
+      expect(linksIn(rewriteImages(`![logo]\n\n${def}`))).toEqual([{ name: "logo", to: file("/r/img/logo.png") }]);
+    }
+    const md = "[a]: img/a.png\n[b]:\n  img/b.png\n\n![a] ![b]";
+    expect(linksIn(rewriteImages(md))).toEqual([{ name: "a", to: file("/r/img/a.png") }, { name: "b", to: file("/r/img/b.png") }]);
+  });
+
+  test("段落の続きの行は定義にならない", () => {
+    expect(linksIn(rewriteImages("本文\n[x]: img/a.png\n\n![x]"))).toEqual([]);
+  });
+
   test("定義の無い参照形式の画像は書き換えない", () => {
     expect(rewriteImages("![図][nothing]")).toBe("![図][nothing]");
   });
