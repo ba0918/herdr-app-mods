@@ -180,11 +180,15 @@ function imageTarget(src, literal = false) {
   return { src, file: basename(http ? src.replace(/[?#].*$/, "") : path) || src, href: http ? src : `${IMAGE_SCHEME}${encodePath(path)}` };
 }
 
+// 文字参照を戻した代替テキストの改行（&#10; など）は空白にする。そのまま出すと、空行になって段落や HTML のかたまりが切れうる。
+const oneLine = (text) => text.replace(/[\r\n]+/g, " ");
+
 // HTML のかたまりの中の <img> の属性から、行き先（imageTarget）と名前（alt、無ければファイル名）。src が無いか data: なら null。
 function tagImage(attrs) {
   const src = attr(attrs, "src");
   const target = src === null ? null : imageTarget(src);
-  return target && { href: target.href, name: attr(attrs, "alt") || target.file };
+  const alt = attr(attrs, "alt");
+  return target && { href: target.href, name: (alt && oneLine(alt)) || target.file };
 }
 
 // 外側のリンクの行き先。同じファイル内の #見出し だけなら、画像を開く。
@@ -217,7 +221,7 @@ function inlineTagImage(s, at, attrs, escape) {
   const target = imageTarget(decodeEntities(s.text.slice(src.start, src.end)));
   if (!target) return null;
   const alt = attrAt(s, at, attrs, "alt");
-  const name = alt && alt.end > alt.start ? render(s, alt.start, alt.end, (t) => escape(decodeEntities(t))) : plain(escape(target.file));
+  const name = alt && alt.end > alt.start ? render(s, alt.start, alt.end, (t) => escape(oneLine(decodeEntities(t)))) : plain(escape(target.file));
   return { ...target, name };
 }
 

@@ -289,6 +289,14 @@ describe("rewriteImages", () => {
     expect(out).toContain("図");
   });
 
+  test("代替テキストの文字参照の改行は空白にして、段落や HTML のかたまりを切らない", () => {
+    for (const md of ['<img src="img/a.png" alt="&#10;図">', '本文 <img src="img/a.png" alt="a&#10;&#10;b"> 後', '<p>\n<img src="img/a.png" alt="a&#xA;&#xD;&#10;b">\n</p>']) {
+      const out = rewriteImages(md);
+      expect(out).not.toMatch(/\n[ \t\r]*\n/);
+      expect(out).not.toContain("<img");
+    }
+  });
+
   // 1 つのタグだけの行で始まる HTML のかたまりは、書き換えた最初の行もタグだけの行でないと、部品が段落として読み、<a> が押せない文字になる。
   test("1 つの <img> だけの行で始まる HTML のかたまりは、書き換えても最初の行がタグだけの行のまま", () => {
     for (const [md, files] of [
