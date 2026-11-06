@@ -15,7 +15,7 @@ import { imageSize } from "./lib/image.js";
 import { parseMermaid } from "./lib/mermaid/parse.js";
 import { layoutFlowchart, layoutSequence } from "./lib/mermaid/layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
-import { readText, checkChanged, statOf, isFile, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR } from "./io.js";
+import { readText, checkChanged, checkUtf8, statOf, isFile, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR } from "./io.js";
 import { markdownBody, diagramError } from "./views/markdown.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
@@ -161,7 +161,7 @@ export default class FileViewer extends View {
       file.size = r.size;
       file.view = kind({ path, size: r.size, text: r.text });
       if (file.view.type === "unopenable") { await this.sign(file); return file; }
-      this.takeText(file, r.text);
+      this.takeText(file, r.text, await this.notUtf8(r.text, path, machine));
       file.base = r.base;
     } catch (e) {
       file.view = { type: "unopenable", reason: "error", message: message(e) };
@@ -192,7 +192,7 @@ export default class FileViewer extends View {
     if (file.view.source) {
       const text = await readText(file.path, file.machine);
       if (text.text !== undefined) {
-        this.takeText(file, text.text);
+        this.takeText(file, text.text, await this.notUtf8(text.text, file.path, file.machine));
         file.base = text.base;
       }
     }
@@ -221,13 +221,20 @@ export default class FileViewer extends View {
     }
   }
 
+  // UTF-8 でない（読み取り専用にする）か。読んだ内容に U+FFFD があるときだけファイルのバイト列を確かめ、
+  // 正しい UTF-8 なら U+FFFD を文字として含むファイルとして編集させる。確かめられなければ読み取り専用。
+  async notUtf8(raw, path, machine) {
+    if (!looksNonUtf8(raw)) return false;
+    return (await checkUtf8(path, machine).catch(() => null)) !== true;
+  }
+
   // 読んだテキストを file に入れる。先頭の BOM は外して有無だけを記録し、Editor にも「読んだときの内容」
   // （file.text、改行を書き戻す基準）にも BOM 抜きの本文を持つ。
-  takeText(file, raw) {
+  takeText(file, raw, readonly) {
     const { bom, text } = splitBom(raw);
     file.bom = bom;
     file.text = text;
-    file.readonly = looksNonUtf8(text);
+    file.readonly = readonly;
     this.attachEditor(file, text);
   }
 

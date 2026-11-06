@@ -8,6 +8,7 @@ import { TEXT_LIMIT, IMAGE_LIMIT, extension } from "./lib/kind.js";
 import { splitForWrite } from "./lib/save.js";
 import { base64ToBytes } from "./lib/image.js";
 import { createDraftStore } from "./lib/draft-store.js";
+import { utf8Checker } from "./lib/utf8.js";
 
 export const CACHE_DIR = "file-viewer-cache";
 export const DRAFTS_DIR = "file-viewer-drafts";
@@ -121,6 +122,24 @@ export async function statOf(path, on) {
   const r = await sh(on, `${STAT} 2>/dev/null || echo missing`, [path]);
   const out = r.stdout.trim();
   return out === "missing" || !out ? null : out;
+}
+
+// ファイルのバイト列が UTF-8 として正しいか。確かめられなかったとき（コマンドの失敗など）は null。
+// バイト列は base64 で運ぶ（画像の運搬と同じ。テキストの上限 1 MiB は base64 で約 1.4 MB）。
+const UTF8_CHUNK = 250_000;
+export async function checkUtf8(path, on) {
+  const r = !on
+    ? await exec("powershell", ["-NoProfile", "-Command", `$ErrorActionPreference='Stop'; [Convert]::ToBase64String([IO.File]::ReadAllBytes(${psQuote(path)}))`])
+    : await sh(on, `base64 -w0 -- "$1"`, [path]);
+  if (r.code !== 0) return null;
+  const checker = utf8Checker();
+  for (let i = 0; i < r.stdout.length; i += UTF8_CHUNK) {
+    checker.feed(r.stdout.slice(i, i + UTF8_CHUNK));
+    // 非同期処理は約 0.5 秒続けて動くと黙って止まり、マイクロタスクの await では区切れない（ガイドの「制約」）。
+    // ファイルの有無の確認（実際の入出力）を挟んで区切る。
+    await fs.exists(appHome());
+  }
+  return checker.result();
 }
 
 // 普通のファイルがあるか（中身は読まない。リンクの指す先がフォルダなら false）。リンク先があるかを見る。
