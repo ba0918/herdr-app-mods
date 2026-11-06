@@ -1,4 +1,4 @@
-# herdr-app-plugin
+# herdr-app-mods
 
 herdr-app（Windows の GPUI 製デスクトップ app）向けの mod を作るリポジトリ。
 作業前に [docs/README.md](docs/README.md) と、そこから辿れる開発ガイドを読むこと。
