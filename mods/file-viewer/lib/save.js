@@ -193,10 +193,12 @@ function restoreByLines(original, edited, major, maxWork) {
 // 行に分けて比べるのは間の部分だけにする（短い行が数十万あるファイルでも、行ごとの処理を減らすため）。
 // maxWork・maxLines は差分の手間の上限（テスト用に変えられる）。
 export function preserveLineEndings(original, edited, { maxWork = MAX_WORK, maxLines = MAX_LINES } = {}) {
-  const head = original.lastIndexOf("\n", commonPrefix(original, edited) - 1) + 1;
+  // 共通の先頭と末尾は、どちらでも行の頭で区切る（CRLF の \r と \n の間や、書き足した・つないだ行の途中で切らないように）。
+  const prefix = commonPrefix(original, edited);
+  const head = prefix === 0 ? 0 : original.lastIndexOf("\n", prefix - 1) + 1;
+  const lineStart = (text, at) => at === 0 || text[at - 1] === "\n";
   let tailA = original.length - commonSuffix(original, edited, head);
-  // 共通の末尾は、どちらでも行の頭から始める（CRLF の \r と \n の間や、つないだ行の途中で切らないように）。
-  if (tailA > head && (original[tailA - 1] !== "\n" || edited[edited.length - (original.length - tailA) - 1] !== "\n")) {
+  if (!lineStart(original, tailA) || !lineStart(edited, edited.length - (original.length - tailA))) {
     const next = original.indexOf("\n", tailA);
     tailA = next < 0 ? original.length : next + 1;
   }

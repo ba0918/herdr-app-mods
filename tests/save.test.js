@@ -116,6 +116,15 @@ describe("preserveLineEndings", () => {
     expect(preserveLineEndings(original, edited)).toBe("Z0\nc\r\nb\nc\nc\r\na\nc\nZ7\nb\nb\r\n");
   });
 
+  test("空の行で始まるファイルの 1 行目に書いても、書いた文字が消えない", () => {
+    expect(preserveLineEndings("\nhello\n", "hi\nhello\n")).toBe("hi\nhello\n");
+    expect(preserveLineEndings("\nfoo\n", "xfoo\n")).toBe("xfoo\n");
+  });
+
+  test("行の頭に書き足した行は、書き換えた行として多いほうの改行になる", () => {
+    expect(preserveLineEndings("ab\r\ncd\nef\r\ngh\r\n", "ab\r\nXcd\nef\r\ngh\r\n")).toBe("ab\r\nXcd\r\nef\r\ngh\r\n");
+  });
+
   test("空のファイルに書いた内容は LF で、末尾の改行は書いたとおり", () => {
     expect(preserveLineEndings("", "a\nb\n")).toBe("a\nb\n");
     expect(preserveLineEndings("", "a\nb")).toBe("a\nb");
