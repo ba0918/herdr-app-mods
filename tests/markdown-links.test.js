@@ -32,6 +32,14 @@ describe("resolveLink", () => {
     const href = md.match(/\]\(([^)]+)\)/)[1];
     expect(resolveLink({ from, href })).toEqual({ type: "file", path: "/r/img/arch.png" });
   });
+
+  test("パーセントエンコードされたローカル画像のパスも、元のファイル名に解決する", () => {
+    for (const [src, path] of [["img/my%20photo.png", "/r/img/my photo.png"], ["img/100%.png", "/r/img/100%.png"], ["<my img/a (1).png>", "/r/my img/a (1).png"]]) {
+      const md = rewriteLocalImages(`![photo](${src})`);
+      const href = md.match(/\]\((.+)\)$/)[1];
+      expect(resolveLink({ from, href })).toEqual({ type: "file", path });
+    }
+  });
 });
 
 describe("rewriteLocalImages", () => {

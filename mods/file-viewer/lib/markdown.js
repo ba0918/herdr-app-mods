@@ -21,8 +21,9 @@ export function resolveLink({ from, href }) {
 
 const IMAGE = /!\[([^\]]*)\]\(\s*(<[^>]*>|[^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
 
+// すでにエンコードされた部分（%20 など）は一度戻してからエンコードする（二重にしない）。
 function encodePath(path) {
-  return encodeURI(path).replace(/\(/g, "%28").replace(/\)/g, "%29");
+  return encodeURI(decode(path)).replace(/\(/g, "%28").replace(/\)/g, "%29");
 }
 
 function rewriteText(text) {
