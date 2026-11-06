@@ -1,0 +1,26 @@
+// どの viewer で開くか（開けないならその理由）を、パス・大きさ・内容から決める。
+import { basename } from "./path.js";
+
+export const TEXT_LIMIT = 1024 * 1024;
+export const IMAGE_LIMIT = 6_000_000;
+
+const IMAGE = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg"]);
+const BY_EXTENSION = { md: "markdown", markdown: "markdown", mmd: "mermaid", mermaid: "mermaid" };
+
+export function extension(path) {
+  const name = basename(path);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
+
+export function kind({ path, size, text }) {
+  const ext = extension(path);
+  if (IMAGE.has(ext)) {
+    if (size > IMAGE_LIMIT) return { type: "unopenable", reason: "too-large", limit: IMAGE_LIMIT };
+    return { type: "image", source: ext === "svg" && size <= TEXT_LIMIT };
+  }
+  if (size > TEXT_LIMIT) return { type: "unopenable", reason: "too-large", limit: TEXT_LIMIT };
+  if (text === undefined) return { type: "needs-text" };
+  if (text.includes("\0")) return { type: "unopenable", reason: "binary" };
+  return { type: BY_EXTENSION[ext] ?? "code", source: true };
+}
