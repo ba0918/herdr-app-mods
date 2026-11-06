@@ -1,3 +1,4 @@
+// Modified copy of the `files` mod bundled with herdr-app 0.1.13 (Apache-2.0); see THIRD-PARTY-NOTICES at the repository root.
 // A lazy file browser for the focused pane's folder. Files open in file-viewer tabs.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
