@@ -4,7 +4,9 @@
 #   scripts/deploy.sh <mod名>   mods/<mod名>/ を app home の mods/<mod名>/ にコピーし、herdr-app check を通す
 #   scripts/deploy.sh layout    layouts/main-viewer.json をコピーし、herdr-app status の errors が空かを見る
 #
-# 生成物（gpui-kit.d.ts / jsconfig.json）はコピーしない。終了コードは check / status の結果。
+# 生成物（gpui-kit.d.ts / jsconfig.json）はコピーしない。シンボリックリンクは指す先の中身をコピーする
+# （mod は自分のフォルダの外を import できないので、file-tree は file-viewer の一部をリンクで持つ）。
+# 終了コードは check / status の結果。
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -50,5 +52,5 @@ if [ ! -f "$src/main.js" ]; then
 fi
 dest="$apphome/mods/$target"
 mkdir -p "$dest"
-rsync -r --delete --exclude gpui-kit.d.ts --exclude jsconfig.json "$src/" "$dest/"
+rsync -rL --delete --exclude gpui-kit.d.ts --exclude jsconfig.json "$src/" "$dest/"
 "$app" check "$(wslpath -w "$dest")"
