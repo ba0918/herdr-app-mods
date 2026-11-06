@@ -257,10 +257,11 @@ export default class FileViewer extends View {
     putRecord(this.token, dirty ? { dirty, preview: false } : { dirty });
   }
 
-  // ディスクの内容で読み直す（未保存の編集は捨てる）。
-  reload(cx) {
+  // ディスクの内容で読み直す（未保存の編集は捨てる）。wasMissing は、確認で戻ってきたと分かる前に無かったか。
+  reload(cx, wasMissing) {
     const file = this.file;
     if (!file) return;
+    const missing = wasMissing ?? file.missing;
     const key = this.loadedKey;
     const before = file.editor?.value();
     cx.spawn(async (cx) => {
@@ -281,7 +282,7 @@ export default class FileViewer extends View {
       // 捨てた編集の下書きも消す（新しい file は下書きを持っていないので、keepDraft では消えない）。
       if (file.dirty || file.drafted !== undefined) await deleteDraft(draftName(this.token, file.machine, file.path));
       // 無くなっていたファイルが戻ってきたら、そのファイルの下書きをもう一度聞く。
-      if (file.missing && !next.missing) { await this.offerDrafts(next); cx.notify(); }
+      if (missing && !next.missing) { await this.offerDrafts(next); cx.notify(); }
     });
   }
 
@@ -379,7 +380,7 @@ export default class FileViewer extends View {
         const back = file.missing;
         file.missing = false;
         if (!r.changed) { if (back) cx.notify(); return; }
-        if (!file.dirty) { this.reload(cx); return; }
+        if (!file.dirty) { this.reload(cx, back); return; }
         // 保存の確認など、答えを待っている知らせは上書きしない。
         if (file.notice && file.notice.kind !== "external") return;
         if (file.dismissed === r.base.hash) { if (back) cx.notify(); return; }
