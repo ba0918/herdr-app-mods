@@ -7,7 +7,7 @@ import { spaces, props, theme, settings, run, notify, openOverlay, closeOverlay 
 import { kind, languageFor } from "./lib/kind.js";
 import { formatSize, limitMessage } from "./lib/size.js";
 import { tabTitles } from "./lib/tabs.js";
-import { preserveLineEndings, looksNonUtf8 } from "./lib/save.js";
+import { splitBom, contentToSave, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts } from "./lib/drafts.js";
 import { resolveLink } from "./lib/markdown.js";
 import { normalizePath } from "./lib/path.js";
@@ -161,10 +161,8 @@ export default class FileViewer extends View {
       file.size = r.size;
       file.view = kind({ path, size: r.size, text: r.text });
       if (file.view.type === "unopenable") { await this.sign(file); return file; }
-      file.text = r.text;
+      this.takeText(file, r.text);
       file.base = r.base;
-      file.readonly = looksNonUtf8(r.text);
-      this.attachEditor(file, r.text);
     } catch (e) {
       file.view = { type: "unopenable", reason: "error", message: message(e) };
       if (e?.size !== undefined) file.size = e.size;
@@ -194,10 +192,8 @@ export default class FileViewer extends View {
     if (file.view.source) {
       const text = await readText(file.path, file.machine);
       if (text.text !== undefined) {
-        file.text = text.text;
+        this.takeText(file, text.text);
         file.base = text.base;
-        file.readonly = looksNonUtf8(text.text);
-        this.attachEditor(file, text.text);
       }
     }
     file.dims = file.text !== undefined ? imageSize({ svg: file.text })
@@ -225,7 +221,18 @@ export default class FileViewer extends View {
     }
   }
 
-  // Editor を作り、編集の検知をつなぐ。shown は Editor が返す「未編集の内容」（改行を揃えることがあるため読み戻す）。
+  // 読んだテキストを file に入れる。先頭の BOM は外して有無だけを記録し、Editor にも「読んだときの内容」
+  // （file.text、改行を書き戻す基準）にも BOM 抜きの本文を持つ。
+  takeText(file, raw) {
+    const { bom, text } = splitBom(raw);
+    file.bom = bom;
+    file.text = text;
+    file.readonly = looksNonUtf8(text);
+    this.attachEditor(file, text);
+  }
+
+  // Editor を作り、編集の検知をつなぐ。shown は「未編集の内容」。Editor は渡した改行と末尾の改行を
+  // そのまま返す（ガイドの「制約」の EditorState）が、編集の有無は Editor から読み戻した値と比べる。
   attachEditor(file, value) {
     const t = theme();
     this.themeKey = themeKey(t);
@@ -308,7 +315,7 @@ export default class FileViewer extends View {
     return {
       name: this.draftNameOf(file),
       token: this.token, machine: file.machine, path: file.path,
-      content: file.editor.value(), base: file.base ?? null, updatedAt: Date.now(),
+      content: file.editor.value(), bom: Boolean(file.bom), base: file.base ?? null, updatedAt: Date.now(),
     };
   }
 
@@ -344,10 +351,11 @@ export default class FileViewer extends View {
     if (!draft || (!file.editor && !file.missing)) return;
     if (!file.editor) {
       // ファイルが無いときは、下書きの内容を入れる Editor を作る。未保存の編集として入れるため空で作る。
-      // 改行と末尾の改行は下書きのものを保つ。SVG は画像のコピーが無いので、ソースとして出す。
+      // 改行と末尾の改行・BOM の有無は下書きのものを保つ。SVG は画像のコピーが無いので、ソースとして出す。
       const view = kind({ path: file.path, size: 0, text: draft.content });
       file.view = view.type === "image" ? { type: "code", source: true } : view;
       file.text = draft.content;
+      file.bom = Boolean(draft.bom);
       this.attachEditor(file, "");
     }
     file.drafts = file.drafts.filter((d) => d !== draft);
@@ -466,7 +474,7 @@ export default class FileViewer extends View {
   // それより新しい編集は未保存のまま残す。
   async write(file, base) {
     const value = file.editor.value();
-    const content = preserveLineEndings(file.text ?? "", value);
+    const content = contentToSave({ original: file.text ?? "", edited: value, bom: Boolean(file.bom) });
     try {
       file.base = await writeText(file.path, file.machine, content, base);
     } catch (e) {
@@ -475,7 +483,7 @@ export default class FileViewer extends View {
       else file.notice = { kind: "conflict", base: null };
       return;
     }
-    file.text = content;
+    file.text = splitBom(content).text;
     file.shown = value;
     file.missing = false;
     file.notice = null;
@@ -495,7 +503,7 @@ export default class FileViewer extends View {
       const r = await copyImage(file.path, file.machine, this.token).catch(() => null);
       if (r?.cache && this.file === file) {
         file.cache = r.cache;
-        file.dims = imageSize({ svg: content }) ?? file.dims;
+        file.dims = imageSize({ svg: file.text }) ?? file.dims;
         await this.dropOtherCaches(r.cache);
       }
     }
