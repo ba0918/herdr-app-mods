@@ -35,8 +35,8 @@ function encodePath(path) {
 // （HTML と同じく、引用符は値の始まりでだけ囲みになる）。引用符の外に < があればタグとしない（CommonMark の HTML のタグと同じ。
 // 閉じない <img が並ぶ文で、試すたびに末尾まで読まないため）。
 const ATTRS = String.raw`(?:[^<>=]|=\s*"[^"]*"|=\s*'[^']*'|=(?!\s*["']))*`;
-// リンク先（<...> か、空白を含まない並び。対になった括弧は 1 段まで中に含める）。インラインコードやコメントの印（MASK）は含めない
-// （行き先にしない）。
+// リンク先（<...> か、空白を含まない並び。対になった括弧は 1 段まで中に含める）。インラインコードやコメントの文字（mask の KEEP）は
+// 含めない（行き先にしない）。
 const DEST = String.raw`(<[^>\n\uE000]*>|(?:[^\s()\uE000]|\([^\s()\uE000]*\))+)`;
 // タイトル。( ) で囲むときは、中に \ で打ち消していない ( と ) を含まない（CommonMark と同じ。閉じない ( が並ぶ文で、
 // 試すたびに末尾まで読まない）。
@@ -78,10 +78,78 @@ function decodeEntities(text) {
   });
 }
 
-// HTML の属性の値（引用符の種類と属性の順番によらない）。無ければ null。
+// ---- 書いたまま残す部分 ----
+// 段落の中のインラインコードと HTML のコメントは書いたまま残すが、リンクの文字の中にあっても、リンクを 1 つのまとまりとして見る。
+// そこで段落を { text, mask } の組で持つ。text は書いたままの文字列。mask は同じ長さで、コードとコメントの文字を KEEP に、
+// もとからある KEEP の文字を OTHER に変えたもの（KEEP はコードとコメントの位置だけを指す）。正規表現は mask に当て、値と出力は
+// text の同じ位置から切り出す。mask の文字は出力に入らず、文書の私用領域の文字もほかの文字と同じに扱う。
+const KEEP = "\uE000", OTHER = "\uE001";
+// コードもコメントも含まない文字列（書き換えで作った文字列など）の組。
+const plain = (text) => ({ text, mask: text.includes(KEEP) ? text.replace(/\uE000/g, OTHER) : text });
+const sliceOf = (s, start, end) => ({ text: s.text.slice(start, end), mask: s.mask.slice(start, end) });
+const join = (pieces) => ({ text: pieces.map((p) => p.text).join(""), mask: pieces.map((p) => p.mask).join("") });
+const hasKeep = (s, start, end) => s.mask.slice(start, end).includes(KEEP);
+
+// segments の結果から組を作る。
+function pairOf(parts) {
+  return join(parts.map((part) => (part.keep ? { text: part.text, mask: KEEP.repeat(part.text.length) } : plain(part.text))));
+}
+
+// s の start〜end を、コードとコメントの外だけ fn で変えた組（コードとコメントは書いたまま）。
+function render(s, start, end, fn) {
+  if (!hasKeep(s, start, end)) return plain(fn(s.text.slice(start, end)));
+  const pieces = [];
+  for (const m of s.mask.slice(start, end).matchAll(/\uE000+|[^\uE000]+/g)) {
+    const run = sliceOf(s, start + m.index, start + m.index + m[0].length);
+    pieces.push(m[0][0] === KEEP ? run : plain(fn(run.text)));
+  }
+  return join(pieces);
+}
+
+// s の mask に re（g つき）を当てて置き換えた組。fn(m, at) は置き換える組（plain や render で作る）か、書いたまま残すなら null。
+function replaceIn(s, re, fn) {
+  const pieces = [];
+  let i = 0;
+  for (const m of s.mask.matchAll(re)) {
+    const piece = fn(m, m.index);
+    if (!piece) continue;
+    pieces.push(sliceOf(s, i, m.index), piece);
+    i = m.index + m[0].length;
+  }
+  if (!pieces.length) return s;
+  pieces.push(sliceOf(s, i, s.text.length));
+  return join(pieces);
+}
+
+// 前後の空白を除いた組（コードとコメントは空白で始まりも終わりもしない）。
+function trimmed(s) {
+  const start = s.mask.length - s.mask.trimStart().length;
+  return sliceOf(s, start, Math.max(start, s.mask.trimEnd().length));
+}
+
+const SPACE = /\s*/y;
+// text の i から続く空白の後ろの位置。
+function spaceEnd(text, i) {
+  SPACE.lastIndex = i;
+  SPACE.exec(text);
+  return SPACE.lastIndex;
+}
+
+// HTML の属性の値（引用符の種類と属性の順番によらない）。1〜3: 値（"..."・'...'・引用符なし）。
+const ATTR_VALUE = Object.fromEntries(["src", "alt", "href"].map((name) =>
+  [name, new RegExp(String.raw`(?:^|\s)${name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>\x60]+))`, "i")]));
+const attrValue = (name) => ATTR_VALUE[name];
+// 文字列の属性の並びから、値（文字参照を戻したもの）。無ければ null。
 function attr(attrs, name) {
-  const m = new RegExp(String.raw`(?:^|\s)${name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>\x60]+))`, "i").exec(attrs);
+  const m = attrValue(name).exec(attrs);
   return m ? decodeEntities(m[1] ?? m[2] ?? m[3]) : null;
+}
+// 組 s の at から始まる属性の並び（attrs は mask の側）から、値の位置 { start, end }。無ければ null。
+function attrAt(s, at, attrs, name) {
+  const m = attrValue(name).exec(attrs);
+  if (!m) return null;
+  const end = at + m.index + m[0].length - (m[3] === undefined ? 1 : 0);
+  return { start: end - (m[1] ?? m[2] ?? m[3]).length, end };
 }
 
 const escapeMarkdown = (text) => text.replace(/[\\[\]]/g, "\\$&");
@@ -89,88 +157,117 @@ const escapeHtml = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").r
 // Markdown のリンク先。空白や括弧を含めば <...> で包む。
 const markdownDest = (href) => (/[\s()<>]/.test(href) ? `<${href.replace(/[<>]/g, encodeURIComponent)}>` : href);
 
-// 画像の名前と、押したときの行き先（http(s) は URL そのもの、ローカルは fv-image: の印つき）。data: は null（書き換えない）。
-// literal: <...> で包んだ参照先か。包んでいなければ、ローカルの # 以降は見出しとして除く。
-function imageTarget(src, alt, literal = false) {
+// 画像の参照先から、押したときの行き先（http(s) は URL そのもの、ローカルは fv-image: の印つき）と、名前が無いときの名前（file）。
+// data: は null（書き換えない）。literal: <...> で包んだ参照先か。包んでいなければ、ローカルの # 以降は見出しとして除く。
+function imageTarget(src, literal = false) {
   if (/^data:/i.test(src)) return null;
   const http = /^https?:/i.test(src);
   const path = http || literal ? src : src.replace(/#.*$/, "");
-  const name = alt || basename(http ? src.replace(/[?#].*$/, "") : path) || src;
-  return { name, href: http ? src : `${IMAGE_SCHEME}${encodePath(path)}` };
+  return { src, file: basename(http ? src.replace(/[?#].*$/, "") : path) || src, href: http ? src : `${IMAGE_SCHEME}${encodePath(path)}` };
 }
 
-// <img> の属性から、画像の名前と行き先（imageTarget）。src が無いか data: なら null。
+// HTML のかたまりの中の <img> の属性から、行き先（imageTarget）と名前（alt、無ければファイル名）。src が無いか data: なら null。
 function tagImage(attrs) {
   const src = attr(attrs, "src");
-  return src === null ? null : imageTarget(src, attr(attrs, "alt"));
+  const target = src === null ? null : imageTarget(src);
+  return target && { href: target.href, name: attr(attrs, "alt") || target.file };
 }
 
 // 外側のリンクの行き先。同じファイル内の #見出し だけなら、画像を開く。
 const outerHref = (href, image) => (href.startsWith("#") ? image.href : href);
 
-// 画像の正規表現の一致から、画像の名前と行き先（imageTarget）。参照形式で定義が無ければ null。
-function imageSource(alt, dest, label, definitions) {
-  dest ??= definitions.get(normalizeLabel(label || alt));
-  return dest === undefined ? null : imageTarget(unwrap(dest), alt, dest.startsWith("<"));
+// 段落の中の画像は、行き先（imageTarget）と、名前の組（代替テキストのコードとコメントの外を escape で変えたもの。
+// 代替テキストが無ければファイル名）で表す。
+
+// Markdown の画像（IMAGE_SRC の一致 m が s の at から）。参照形式で定義が無ければ null。
+function markdownImage(s, m, at, definitions, escape) {
+  const [whole, alt, dest, label] = m;
+  const altEnd = at + 2 + alt.length;
+  let value;
+  if (dest !== undefined) {
+    const from = spaceEnd(s.mask, altEnd + 2);
+    value = s.text.slice(from, from + dest.length);
+  } else {
+    const end = at + whole.length - 1;
+    value = definitions.get(normalizeLabel(label ? s.text.slice(end - label.length, end) : s.text.slice(at + 2, altEnd)));
+  }
+  const target = value === undefined ? null : imageTarget(unwrap(value), value.startsWith("<"));
+  if (!target) return null;
+  return { ...target, name: alt ? render(s, at + 2, altEnd, escape) : plain(escape(target.file)) };
 }
 
-// 段落の中の <img> の、画像の名前と行き先（tagImage）。src にインラインコードかコメントの印があれば null（印を行き先にしない）。
-// 文字参照からは印の文字を作らない（置き換え文字にする。印を戻すときに、別のコードやコメントと取り違えないため）。
-const MASK_ENTITY = /&#(?:x0*e00[01]|0*5734[45]);/gi;
-function inlineTagImage(attrs) {
-  const plain = attrs.replace(MASK_ENTITY, "\uFFFD");
-  return attr(plain, "src")?.includes(MASK) ? null : tagImage(plain);
+// <img>（属性の並び attrs が s の at から）。src が無いか data: か、src にインラインコードかコメントがあれば null（行き先にしない）。
+function inlineTagImage(s, at, attrs, escape) {
+  const src = attrAt(s, at, attrs, "src");
+  if (!src || hasKeep(s, src.start, src.end)) return null;
+  const target = imageTarget(decodeEntities(s.text.slice(src.start, src.end)));
+  if (!target) return null;
+  const alt = attrAt(s, at, attrs, "alt");
+  const name = alt && alt.end > alt.start ? render(s, alt.start, alt.end, (t) => escape(decodeEntities(t))) : plain(escape(target.file));
+  return { ...target, name };
 }
 
-// リンクの中身の画像を、名前の文字にする（中の画像を別のリンクにしない）。first: 最初の画像（imageTarget。無ければ null）。
+// Markdown のリンクの組。
+const linkTo = (name, href) => join([plain("["), name, plain(`](${markdownDest(href)})`)]);
+
+// リンクの中身の組の画像を、名前の文字にする（中の画像を別のリンクにしない）。first: 最初の画像（無ければ null）。
 // brackets: 画像の外の [ ] を文字のままにするか。
-function namesOnly(text, definitions, brackets = false) {
+function namesOnly(s, definitions, brackets = false) {
   let first = null;
-  const named = text.replace(IMAGE_OR_BRACKET, (whole, alt, dest, label, imgAttrs, escaped) => {
-    if (escaped !== undefined) return whole;
-    if (alt === undefined && imgAttrs === undefined) return brackets ? `\\${whole}` : whole;
-    const image = imgAttrs === undefined ? imageSource(alt, dest, label, definitions) : inlineTagImage(imgAttrs);
-    if (!image) return whole;
+  const named = replaceIn(s, IMAGE_OR_BRACKET, (m, at) => {
+    const [whole, alt, , , imgAttrs, escaped] = m;
+    if (escaped !== undefined) return null;
+    if (alt === undefined && imgAttrs === undefined) return brackets ? plain(`\\${whole}`) : null;
+    const image = imgAttrs === undefined ? markdownImage(s, m, at, definitions, escapeMarkdown) : inlineTagImage(s, at + 4, imgAttrs, escapeMarkdown);
+    if (!image) return null;
     first ??= image;
-    return escapeMarkdown(image.name);
+    return image.name;
   });
-  return { text: named.trim(), first };
+  return { text: trimmed(named), first };
 }
 
-// 段落の中の書き換え（Markdown のリンクにする）。画像を包むリンク（ほかの文字と並んでいてもよい）は、画像を名前の文字にして、
+// 段落の中の書き換え（Markdown のリンクにする。s は組）。画像を包むリンク（ほかの文字と並んでいてもよい）は、画像を名前の文字にして、
 // 外側のリンク先を開く 1 つのリンクにする。外側が同じファイル内の #見出し だけなら、最初の画像を開く。
-function rewriteInline(text, definitions) {
-  return text
-    .replace(ANCHOR, (whole, aAttrs, inner) => {
-      const href = attr(aAttrs, "href"), named = namesOnly(inner, definitions, true);
-      if (href === null || href.includes(MASK) || !named.first) return whole;
-      return `[${named.text}](${markdownDest(outerHref(href, named.first))})`;
-    })
-    .replace(LINK, (whole, inner, outerDest, outerLabel) => {
-      const named = namesOnly(inner, definitions);
+function rewriteInline(s, definitions) {
+  const anchors = replaceIn(s, ANCHOR, (m, at) => {
+    const [, aAttrs, inner] = m;
+    const href = attrAt(s, at + 2, aAttrs, "href");
+    if (!href || hasKeep(s, href.start, href.end)) return null;
+    const innerAt = at + 2 + aAttrs.length + 1;
+    const named = namesOnly(sliceOf(s, innerAt, innerAt + inner.length), definitions, true);
+    return named.first && linkTo(named.text, outerHref(decodeEntities(s.text.slice(href.start, href.end)), named.first));
+  });
+  const links = replaceIn(anchors, LINK, (m, at) => {
+    const [whole, inner, outerDest, outerLabel] = m;
+    const innerEnd = at + 1 + inner.length;
+    const named = namesOnly(sliceOf(anchors, at + 1, innerEnd), definitions);
+    let outer;
+    if (outerDest !== undefined) {
+      const from = spaceEnd(anchors.mask, innerEnd + 2);
+      outer = anchors.text.slice(from, from + outerDest.length);
+    } else {
       // 定義の無い参照形式は、外側がリンクではないので、中の画像だけを書き換える（下の置き換えで）。
-      const outer = outerDest ?? definitions.get(normalizeLabel(outerLabel));
-      if (!named.first || outer === undefined) return whole;
-      return `[${named.text}](${markdownDest(outerHref(unwrap(outer), named.first))})`;
-    })
-    .replace(IMAGE, (whole, alt, dest, label) => {
-      const image = imageSource(alt, dest, label, definitions);
-      return image ? `[${escapeMarkdown(image.name)}](${markdownDest(image.href)})` : whole;
-    })
-    .replace(IMG_TAG, (whole, attrs) => {
-      const image = inlineTagImage(attrs);
-      return image ? `[${escapeMarkdown(image.name)}](${markdownDest(image.href)})` : whole;
-    });
+      const end = at + whole.length - 1;
+      outer = definitions.get(normalizeLabel(anchors.text.slice(end - outerLabel.length, end)));
+    }
+    return named.first && outer !== undefined ? linkTo(named.text, outerHref(unwrap(outer), named.first)) : null;
+  });
+  const images = replaceIn(links, IMAGE, (m, at) => {
+    const image = markdownImage(links, m, at, definitions, escapeMarkdown);
+    return image && linkTo(image.name, image.href);
+  });
+  return replaceIn(images, IMG_TAG, (m, at) => {
+    const image = inlineTagImage(images, at + 4, m[1], escapeMarkdown);
+    return image && linkTo(image.name, image.href);
+  });
 }
 
-
-// <picture> の中の <img>。部品は <picture> の中の <a> を押せるリンクにしない（実機で確認）ので、
+// <picture> の中の <img>（s は組）。部品は <picture> の中の <a> を押せるリンクにしない（実機で確認）ので、
 // 画像があったことと場所を押せない文字で出す。
-function rewritePictureImages(text) {
-  return text.replace(IMG_TAG, (whole, attrs) => {
-    const src = attr(attrs, "src");
-    const image = src !== null && imageTarget(src, attr(attrs, "alt"));
-    return image ? escapeHtml(`画像: ${image.name}（${src}）`) : whole;
+function rewritePictureImages(s) {
+  return replaceIn(s, IMG_TAG, (m, at) => {
+    const image = inlineTagImage(s, at + 4, m[1], escapeHtml);
+    return image && join([plain("画像: "), image.name, plain(escapeHtml(`（${image.src}）`))]);
   });
 }
 
@@ -199,7 +296,7 @@ function rewriteHtmlBlock(parts, state) {
       }
       const image = tagImage(imgAttrs);
       if (!image) out.push(tag);
-      else if (state.picture) out.push(rewritePictureImages(tag));
+      else if (state.picture) out.push(rewritePictureImages(plain(tag)).text);
       else if (!anchor) out.push(`<a href="${escapeHtml(image.href)}">${escapeHtml(image.name)}</a>`);
       else {
         out.push(escapeHtml(image.name));
@@ -214,19 +311,22 @@ function rewriteHtmlBlock(parts, state) {
   return out.join("");
 }
 
-const PICTURE_OPEN = new RegExp(String.raw`<picture\b${ATTRS}>`, "i");
-// <picture> の外は rewrite で、中は押せない文字で書き換える。state.picture は行をまたぐ <picture> の中か。
-function aroundPictures(text, state, rewrite) {
-  let out = "", rest = text;
-  while (rest) {
-    const mark = state.picture ? /<\/picture\s*>/i : PICTURE_OPEN;
-    const m = mark.exec(rest);
-    const cut = m ? m.index + m[0].length : rest.length;
-    out += state.picture ? rewritePictureImages(rest.slice(0, cut)) : rewrite(rest.slice(0, cut));
+const PICTURE_OPEN = new RegExp(String.raw`<picture\b${ATTRS}>`, "gi");
+const PICTURE_CLOSE = /<\/picture\s*>/gi;
+// <picture> の外は rewrite で、中は押せない文字で書き換える（s は組）。state.picture は行をまたぐ <picture> の中か。
+function aroundPictures(s, state, rewrite) {
+  const pieces = [];
+  for (let at = 0; at < s.mask.length;) {
+    const mark = state.picture ? PICTURE_CLOSE : PICTURE_OPEN;
+    mark.lastIndex = at;
+    const m = mark.exec(s.mask);
+    const cut = m ? m.index + m[0].length : s.mask.length;
+    const chunk = at === 0 && cut === s.mask.length ? s : sliceOf(s, at, cut);
+    pieces.push(state.picture ? rewritePictureImages(chunk) : rewrite(chunk));
     if (m) state.picture = !state.picture;
-    rest = rest.slice(cut);
+    at = cut;
   }
-  return out;
+  return join(pieces);
 }
 
 // ---- 文書のかたまり ----
@@ -402,18 +502,6 @@ function segments(text) {
   return out;
 }
 
-// 段落の中のインラインコードとコメント（segments の keep）を、印（MASK 番号 MASK_END）に置き換えた文字列と、印を戻す関数。
-// リンクの文字の中にコードやコメントがあっても、リンクを 1 つのまとまりとして見るため（中身は書いたまま戻す）。
-// もとからある MASK の文字も印にして戻すので、印と取り違えない。
-const MASK = "\uE000", MASK_END = "\uE001";
-const MASK_TOKEN = /\uE000(\d+)\uE001/g;
-function masked(parts) {
-  const kept = [];
-  const put = (text) => `${MASK}${kept.push(text) - 1}${MASK_END}`;
-  const text = parts.map((part) => (part.keep ? put(part.text) : part.text.replace(/\uE000/g, put))).join("");
-  return { text, unmask: (out) => out.replace(MASK_TOKEN, (whole, i) => kept[i] ?? whole) };
-}
-
 // 参照形式の定義（[id]: path）を、文書全体（コードブロック・HTML のかたまりの外）から集める。CommonMark と同じく、
 // 定義は段落の始まりにだけ並べられ（段落の続きの行は定義にならない）、インラインコードやコメントより先に読む。
 // ラベルは大文字小文字と空白の違いを無視する。同じラベルは最初の定義。値は書いたままの参照先（<...> を含む）。
@@ -437,8 +525,7 @@ export function rewriteImages(markdown, definitions = collectDefinitions(markdow
   return mapBlocks(markdown, (text, kind, state) => {
     const parts = segments(text);
     if (kind === "html") return rewriteHtmlBlock(parts, state);
-    const { text: plain, unmask } = masked(parts);
-    return unmask(aroundPictures(plain, state, (t) => rewriteInline(t, definitions)));
+    return aroundPictures(pairOf(parts), state, (s) => rewriteInline(s, definitions)).text;
   });
 }
 

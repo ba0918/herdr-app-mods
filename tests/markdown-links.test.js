@@ -221,6 +221,39 @@ describe("rewriteImages", () => {
     ]);
   });
 
+  // 私用領域の文字（U+E000〜U+E001）を、文字のままや文字参照で含む文書。インラインコードは書いた場所にだけ残る。
+  const pua = "\uE0000\uE001";
+  const codeOnce = (out) => expect(out.split("`code`").length).toBe(2);
+
+  test("私用領域の文字を含む値は、ほかの文字と同じに扱い、インラインコードは書いた場所にだけ残る", () => {
+    const cases = [
+      ['`code` <img src="img/a.png" alt="&#xE000;0&#xE001;">', [{ name: pua, to: file("/r/img/a.png") }]],
+      ["`code` ![x][d]\n\n[d]: img/\uE0000\uE001.png", [{ name: "x", to: file(`/r/img/${pua}.png`) }]],
+      ["`code` [![x](img/a.png)][d]\n\n[d]: docs/\uE0000\uE001.md", [{ name: "x", to: file(`/r/docs/${pua}.md`) }]],
+      ['`code` <a href="docs/&#xE000;0&#xE001;.md"><img src="img/a.png" alt="y"></a>', [{ name: "y", to: file(`/r/docs/${pua}.md`) }]],
+      ["`code` ![x](img/\uE000.png)", [{ name: "x", to: file("/r/img/\uE000.png") }]],
+      ["`code` [![x](img/a.png)](docs/\uE000.md)", [{ name: "x", to: file("/r/docs/\uE000.md") }]],
+    ];
+    for (const [md, links] of cases) {
+      const out = rewriteImages(md);
+      const [line] = out.split("\n");
+      codeOnce(out);
+      noLeftoverBrackets(line);
+      asParagraph(line);
+      expect(linksIn(out)).toEqual(links);
+    }
+  });
+
+  test("段落の中の <picture> の <img> の、私用領域の文字を含む名前と場所も書いたまま出し、インラインコードは書いた場所にだけ残る", () => {
+    for (const img of ['<img src="img/a.png" alt="&#xE000;0&#xE001;">', '<img src="img/&#xE000;0&#xE001;.png" alt="A">']) {
+      const out = rewriteImages(`\`code\` <picture>${img}</picture>`);
+      codeOnce(out);
+      const inside = out.slice(out.indexOf("<picture>") + "<picture>".length, -"</picture>".length);
+      unclickable(inside);
+      expect(inside).toContain(img.includes('alt="A"') ? `img/${pua}.png` : pua);
+    }
+  });
+
   test("画像とほかの文字を包む外側のリンクが #見出し だけなら、最初の画像を開く", () => {
     for (const md of ["[Name ![x](img/a.png) ![y](img/b.png)](#top)", '<a href="#top">Name <img alt="x" src="img/a.png"></a>']) {
       const out = rewriteImages(md);
