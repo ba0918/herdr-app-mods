@@ -31,6 +31,9 @@ function encodePath(path) {
 // HTML のかたまりの中の <a> は押せるリンクで出す（実機で確認）。そのため段落の中は Markdown のリンク、
 // HTML のかたまりの中は <a> にする。
 
+// タグの属性の並び（タグ名のあとから > の前まで）。= のあとの引用符で囲んだ値の中の > ではタグは終わらない
+// （HTML と同じく、引用符は値の始まりでだけ囲みになる）。
+const ATTRS = String.raw`(?:[^>=]|=\s*"[^"]*"|=\s*'[^']*'|=(?!\s*["']))*`;
 // リンク先（<...> か、空白を含まない並び。対になった括弧は 1 段まで中に含める）。
 const DEST = String.raw`(<[^>\n]*>|(?:[^\s()]|\([^\s()]*\))+)`;
 const TITLE = String.raw`(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?`;
@@ -39,9 +42,9 @@ const IMAGE_SRC = String.raw`!\[([^\]]*)\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]*
 const IMAGE = new RegExp(IMAGE_SRC, "g");
 // Markdown のリンクに包まれた画像（Markdown の画像か <img>）。1〜3: Markdown の画像、4: <img> の属性、
 // 5: 外側のインライン形式のリンク先、6: 外側の参照形式のラベル（ラベルは [ ] を含められないので、省略形は無い）。
-const LINKED_IMAGE = new RegExp(String.raw`\[\s*(?:${IMAGE_SRC}|<img\b([^>]*)>)\s*\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]+)\])`, "g");
-const LINKED_IMG_TAG = /<a\b([^>]*)>\s*<img\b([^>]*)>\s*<\/a\s*>/gi;
-const IMG_TAG = /<img\b([^>]*)>/gi;
+const LINKED_IMAGE = new RegExp(String.raw`\[\s*(?:${IMAGE_SRC}|<img\b(${ATTRS})>)\s*\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]+)\])`, "g");
+const LINKED_IMG_TAG = new RegExp(String.raw`<a\b(${ATTRS})>\s*<img\b(${ATTRS})>\s*<\/a\s*>`, "gi");
+const IMG_TAG = new RegExp(String.raw`<img\b(${ATTRS})>`, "gi");
 const DEFINITION = /^ {0,3}\[([^\]]+)\]:\s*(<[^>\n]*>|\S+)/;
 
 const normalizeLabel = (label) => label.trim().replace(/\s+/g, " ").toLowerCase();
@@ -135,7 +138,7 @@ function rewritePictureImages(text) {
 // HTML のかたまりの中の書き換え（押せる <a> にする。Markdown の書き方はここでは効かないので触らない）。
 // parts は segments の結果。開いている <a href> の中の <img> は名前だけにして、外側の <a> を押せるリンクに残す
 // （外側の行き先が同じファイル内の #見出し だけなら、その <a> の行き先を最初の画像にする）。<picture> の中は押せない文字。
-const HTML_TOKEN = /<a\b([^>]*)>|<\/a\s*>|<(\/?)picture\b[^>]*>|<img\b([^>]*)>/gi;
+const HTML_TOKEN = new RegExp(String.raw`<a\b(${ATTRS})>|<\/a\s*>|<(\/?)picture\b${ATTRS}>|<img\b(${ATTRS})>`, "gi");
 function rewriteHtmlBlock(parts, state) {
   const out = [];
   let anchor = null; // { href, at: out の中の開きタグの位置 }
@@ -172,11 +175,12 @@ function rewriteHtmlBlock(parts, state) {
   return out.join("");
 }
 
+const PICTURE_OPEN = new RegExp(String.raw`<picture\b${ATTRS}>`, "i");
 // <picture> の外は rewrite で、中は押せない文字で書き換える。state.picture は行をまたぐ <picture> の中か。
 function aroundPictures(text, state, rewrite) {
   let out = "", rest = text;
   while (rest) {
-    const mark = state.picture ? /<\/picture\s*>/i : /<picture\b[^>]*>/i;
+    const mark = state.picture ? /<\/picture\s*>/i : PICTURE_OPEN;
     const m = mark.exec(rest);
     const cut = m ? m.index + m[0].length : rest.length;
     out += state.picture ? rewritePictureImages(rest.slice(0, cut)) : rewrite(rest.slice(0, cut));

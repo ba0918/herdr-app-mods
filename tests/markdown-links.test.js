@@ -109,6 +109,16 @@ describe("rewriteImages", () => {
     }
   });
 
+  test("引用符で囲んだ属性の値の中の > では、<img> のタグは終わらない（段落の中も HTML のかたまりの中も）", () => {
+    for (const md of ['前 <img alt="a > b" src="img/a.png"> 後', "前 <img alt='a > b' src='img/a.png'> 後", '<div>\n<img alt="a > b" src="img/a.png">\n</div>', '<div>\n<a href="docs/a.md"><img alt="x" title="1 > 0" src="img/b.png"></a>\n</div>']) {
+      const out = rewriteImages(md);
+      expect(out).not.toContain("<img");
+      expect(linksIn(out)).toEqual([md.includes("docs/a.md") ? { name: "x", to: file("/r/docs/a.md") } : { name: "a > b", to: file("/r/img/a.png") }]);
+    }
+    const linked = rewriteImages('[<img alt="a > b" src="img/a.png">](docs/a.md) <a href="docs/b.md" title="1 > 0"><img src="img/b.png" alt="B"></a>');
+    expect(linksIn(linked)).toEqual([{ name: "a > b", to: file("/r/docs/a.md") }, { name: "B", to: file("/r/docs/b.md") }]);
+  });
+
   test("HTML のかたまりの中の <img> は、押せる <a> になる", () => {
     for (const [md, name] of [['<p>\n<img src="img/a.png" alt="図">\n</p>', "図"], ['本文\n\n<p align="center"><img src="img/a.png" alt="A &amp; B"></p>', "A & B"]]) {
       const out = rewriteImages(md);
