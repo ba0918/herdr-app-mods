@@ -2,14 +2,16 @@
 // タブは tab.new {mod: "file-viewer", props: {token, path, machine, preview, index}} で開かれる。
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, props, theme, settings, run } from "herdr";
+import { spaces, props, theme, settings, run, notify } from "herdr";
 import { kind, languageFor } from "./lib/kind.js";
 import { formatSize, limitMessage } from "./lib/size.js";
 import { tabTitles } from "./lib/tabs.js";
 import { preserveLineEndings, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts } from "./lib/drafts.js";
-import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens } from "./registry.js";
+import { resolveLink } from "./lib/markdown.js";
+import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName } from "./io.js";
+import { markdownBody } from "./views/markdown.js";
 
 const POLL_MS = 2000;
 const DRAFT_MS = 3000;
@@ -417,15 +419,18 @@ export default class FileViewer extends View {
       .track_focus(this.focus).on_key_down((e, cx) => this.onKey(e, cx))
       .child(this.toolbar(rec, t))
       .children(this.notices(t))
-      .child(this.body(t));
+      .child(this.body(rec, t));
   }
 
   toolbar(rec, t) {
     const file = this.file;
-    const isCode = file?.view?.type === "code";
+    const type = file?.view?.type;
+    const source = this.showsSource(rec);
+    const isCode = type === "code" || ((type === "markdown") && source);
     return h_flex().id("fv-toolbar").h(34).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(file?.path ?? ""))
       .when(Boolean(rec?.preview), (el) => el.child(button("fv-pin", "固定", t, (cx) => { putRecord(this.token, { preview: false }); cx.notify(); })))
+      .when(type === "markdown", (el) => el.child(button("fv-source", source ? "整形表示" : "ソース", t, (cx) => this.toggleSource(cx), source)))
       .when(isCode, (el) => el.child(button("fv-wrap", "折り返し", t, (cx) => { this.wrap = !this.wrap; this.rebuildEditor(cx); }, this.wrap)))
       .when(Boolean(file?.editor && !file.readonly), (el) => el.child(button("fv-save", file.dirty ? "保存 ●" : "保存", t, (cx) => this.save(cx))));
   }
@@ -459,12 +464,39 @@ export default class FileViewer extends View {
     return out;
   }
 
-  body(t) {
+  // 表示の切り替え（Markdown の整形 / ソース）はタブごとに記録に持つ。既定は整形表示。
+  showsSource(rec) {
+    return rec?.mode === "source";
+  }
+
+  toggleSource(cx) {
+    putRecord(this.token, { mode: this.showsSource(record(this.token)) ? null : "source" });
+    cx.notify();
+  }
+
+  // 整形表示のリンク。http(s) はブラウザ、ほかのファイルは viewer のタブ（プレビュー）で開く。
+  followLink(url, cx) {
+    const file = this.file;
+    if (!file) return;
+    const target = resolveLink({ from: file.path, href: url });
+    if (target.type === "external") { cx.open_url(target.url); return; }
+    if (target.type !== "file") return;
+    cx.spawn(async () => {
+      const r = await checkChanged(target.path, file.machine, null).catch(() => ({ missing: true }));
+      if (r.missing) { notify({ title: "リンク先のファイルが無い", body: target.path, level: "warning" }); return; }
+      openFile({ machine: file.machine, path: target.path, double: false });
+    });
+  }
+
+  body(rec, t) {
     const file = this.file;
     if (!file) return div().p(16).text_color(t.dim).child(this.token ? "" : "開くファイルが指定されていない");
     if (file.loading) return div().p(16).text_color(t.dim).child("読み込み中…");
     const view = file.view;
     if (view.type === "unopenable") return this.unopenable(file, view, t);
+    if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
+      return markdownBody({ id: "fv-markdown", text: file.editor.value(), onLink: (url, cx) => this.followLink(url, cx), t });
+    }
     if (file.editor) return Editor.new(file.editor).flex_1().min_h(0);
     return div().p(16).text_color(t.dim).child("表示できない");
   }
