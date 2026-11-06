@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveLink, rewriteLocalImages } from "../mods/file-viewer/lib/markdown.js";
+import { resolveLink, rewriteLocalImages, splitMermaidBlocks } from "../mods/file-viewer/lib/markdown.js";
 
 describe("resolveLink", () => {
   const from = "/r/README.md";
@@ -71,5 +71,27 @@ describe("rewriteLocalImages", () => {
   test("コードブロックとインラインコードの中は書き換えない", () => {
     const md = "```md\n![x](a.png)\n```\n`![y](b.png)` ![z](c.png)";
     expect(rewriteLocalImages(md)).toBe("```md\n![x](a.png)\n```\n`![y](b.png)` [z](fv-image:c.png)");
+  });
+});
+
+describe("splitMermaidBlocks", () => {
+  test("```mermaid の境目で文章と図に分け、図の中身の 1 行目のファイル全体での行番号を付ける", () => {
+    const md = "# 見出し\n\n```mermaid\nflowchart LR\nA-->B\n```\n本文\n~~~mermaid\nsequenceDiagram\n~~~\n";
+    expect(splitMermaidBlocks(md)).toEqual([
+      { type: "markdown", text: "# 見出し\n" },
+      { type: "mermaid", source: "flowchart LR\nA-->B", firstLine: 4, fence: "```mermaid\nflowchart LR\nA-->B\n```" },
+      { type: "markdown", text: "本文" },
+      { type: "mermaid", source: "sequenceDiagram", firstLine: 9, fence: "~~~mermaid\nsequenceDiagram\n~~~" },
+      { type: "markdown", text: "" },
+    ]);
+  });
+
+  test("ほかの言語のコードブロックの中の ```mermaid は図にしない", () => {
+    const md = "````md\n```mermaid\nA\n```\n````";
+    expect(splitMermaidBlocks(md)).toEqual([{ type: "markdown", text: md }]);
+  });
+
+  test("閉じていない ```mermaid は文章のまま", () => {
+    expect(splitMermaidBlocks("```mermaid\nflowchart LR")).toEqual([{ type: "markdown", text: "```mermaid\nflowchart LR" }]);
   });
 });

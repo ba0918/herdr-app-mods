@@ -48,3 +48,31 @@ export function rewriteLocalImages(markdown) {
     return line.split(/(`+[^`]*`+)/).map((part, i) => (i % 2 ? part : rewriteText(part))).join("");
   }).join("\n");
 }
+
+// 整形表示の部品の中に図を埋め込めないので、Markdown を ```mermaid ブロックの境目で区切る。
+// 図の部分には、中身と、中身の 1 行目のファイル全体での行番号（1 から）と、元のブロック全体を付ける。
+export function splitMermaidBlocks(markdown) {
+  const lines = markdown.split("\n");
+  const parts = [];
+  let text = [];
+  const flush = () => { parts.push({ type: "markdown", text: text.join("\n") }); text = []; };
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(/^ {0,3}(`{3,}|~{3,})\s*([^`\s]*)/);
+    if (!open) { text.push(lines[i]); continue; }
+    const fence = open[1];
+    const closes = (line) => new RegExp(`^ {0,3}${fence[0] === "`" ? "`" : "~"}{${fence.length},}\\s*$`).test(line);
+    let end = i + 1;
+    while (end < lines.length && !closes(lines[end])) end++;
+    if (end >= lines.length || open[2].toLowerCase() !== "mermaid") {
+      // 閉じていないブロックと、ほかの言語のブロックは文章のまま（中は読み飛ばす）。
+      text.push(...lines.slice(i, Math.min(end + 1, lines.length)));
+      i = end;
+      continue;
+    }
+    flush();
+    parts.push({ type: "mermaid", source: lines.slice(i + 1, end).join("\n"), firstLine: i + 2, fence: lines.slice(i, end + 1).join("\n") });
+    i = end;
+  }
+  flush();
+  return parts;
+}
