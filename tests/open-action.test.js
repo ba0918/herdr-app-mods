@@ -47,4 +47,14 @@ describe("openAction", () => {
         .toEqual({ action: "select", id: "t1", pin: false });
     }
   });
+
+  test("space のフォルダがドライブやファイルシステムの直下でも、ツリーで開いたファイルをリンクから開くと既存のタブに切り替える", () => {
+    // 直下のフォルダは区切りで終わるので、ツリーのパスには区切りが 2 つ続く。
+    for (const root of ["C:\\", "D:/", "\\\\server\\share\\", "/"]) {
+      const tree = `${root}/docs/b.md`;
+      const link = resolveLink({ from: `${root}/docs/a.md`, href: "b.md" });
+      expect(openAction({ tabs: [pinned("t1", tree)], path: link.path, double: false, currentIndex: 1 }))
+        .toEqual({ action: "select", id: "t1", pin: false });
+    }
+  });
 });

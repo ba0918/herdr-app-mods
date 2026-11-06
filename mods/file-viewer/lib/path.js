@@ -11,9 +11,14 @@ export function parentName(path) {
 const isWindows = (path) => /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
 
 // 同じファイルを同じ文字列にする。Windows のパスは区切りを \ にそろえる
-// （ツリーは space のフォルダに / でつなぎ、リンクの解決は \ でつなぐため）。ほかはそのまま。
+// （ツリーは space のフォルダに / でつなぎ、リンクの解決は \ でつなぐため）。
+// 続いた区切りは 1 つに畳む（C:\ や / が space のフォルダだと、ツリーのパスに区切りが 2 つ続くため）。
+// \\server\share の先頭の 2 つは畳まない。
 export function normalizePath(path) {
-  return isWindows(path) ? path.replace(/\//g, "\\") : path;
+  const sep = isWindows(path) ? "\\" : "/";
+  const unified = sep === "\\" ? path.replace(/\//g, "\\") : path;
+  const head = unified.startsWith("\\\\") ? 2 : 0;
+  return unified.slice(0, head) + unified.slice(head).replace(sep === "\\" ? /\\{2,}/g : /\/{2,}/g, sep);
 }
 
 export function isAbsolute(path) {
