@@ -9,11 +9,16 @@ import { tabTitles } from "./lib/tabs.js";
 import { preserveLineEndings, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts } from "./lib/drafts.js";
 import { resolveLink } from "./lib/markdown.js";
+import { imageSize } from "./lib/image.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
-import { readText, checkChanged, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName } from "./io.js";
+import { readText, checkChanged, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR } from "./io.js";
 import { markdownBody } from "./views/markdown.js";
+import { imageBody, imageInfo } from "./views/image.js";
+import { Zoom, zoomTools } from "./views/zoom.js";
 
 const POLL_MS = 2000;
+// 画像のコピーの名前: <token>-<内容のハッシュ 12 桁>.<拡張子>（運搬中の .b64 も含む）。
+const CACHE_NAME = /^(.+)-[0-9a-f]{12}\.[^.]+(\.b64)?$/;
 const DRAFT_MS = 3000;
 
 function syntaxColors(t) {
@@ -59,6 +64,8 @@ export default class FileViewer extends View {
   async close() {
     const file = this.file;
     if (file?.dirty && file.editor) await writeDraft(this.draftOf(file)).catch(() => {});
+    // 閉じたタブの画像のコピーは消す（アプリの終了でも消えるが、次に開いたときにコピーし直す）。
+    await removeCache(file?.cache);
     file?.editor?.release();
   }
 
@@ -101,6 +108,12 @@ export default class FileViewer extends View {
       pruneRecords();
       cx.spawn(async () => {
         for (const d of expiredDrafts(await listDrafts(), Date.now())) await deleteDraft(d.name);
+        // どの viewer のタブも使っていない画像のコピーを消す。
+        const open = openTokens();
+        for (const name of await listCache()) {
+          const owner = name.match(CACHE_NAME)?.[1];
+          if (!owner || !open.has(owner)) await removeCache(`${CACHE_DIR}/${name}`);
+        }
       });
     }
     cx.notify();
@@ -112,7 +125,9 @@ export default class FileViewer extends View {
     const key = fileKey(target.machine, target.path);
     this.loadedKey = key;
     this.file?.editor?.release();
+    const old = this.file?.cache;
     this.file = { path: target.path, machine: target.machine ?? null, loading: true };
+    if (old) cx.spawn(async () => removeCache(old));
     cx.spawn(async (cx) => {
       const file = await this.read(target.path, target.machine ?? null);
       if (this.loadedKey !== key) { file.editor?.release(); return; }
@@ -127,10 +142,7 @@ export default class FileViewer extends View {
   async read(path, machine) {
     const file = { path, machine, loading: false };
     try {
-      if (kind({ path, size: 0 }).type === "image") {
-        file.view = { type: "unopenable", reason: "pending-image" };
-        return file;
-      }
+      if (kind({ path, size: 0 }).type === "image") return await this.readImage(file);
       const r = await readText(path, machine);
       if (!r.exists) {
         file.missing = true;
@@ -148,6 +160,44 @@ export default class FileViewer extends View {
       file.view = { type: "unopenable", reason: "error", message: message(e) };
     }
     return file;
+  }
+
+  // 画像は app home にコピーして表示する。SVG はソースも読んで Editor に入れる（1 MiB まで）。
+  async readImage(file) {
+    const r = await copyImage(file.path, file.machine, this.token);
+    if (!r.exists) {
+      file.missing = true;
+      file.view = { type: "unopenable", reason: "missing" };
+      return file;
+    }
+    file.size = r.size;
+    file.view = kind({ path: file.path, size: r.size });
+    if (file.view.type === "unopenable") return file;
+    file.cache = r.cache;
+    file.base = r.base;
+    file.zoom = new Zoom();
+    if (file.view.source) {
+      const text = await readText(file.path, file.machine);
+      if (text.text !== undefined) {
+        file.text = text.text;
+        file.base = text.base;
+        file.readonly = looksNonUtf8(text.text);
+        this.attachEditor(file, text.text);
+      }
+    }
+    file.dims = file.text !== undefined ? imageSize({ svg: file.text })
+      : /svg$/i.test(file.path) ? imageSize({ svg: String.fromCharCode(...r.header.slice(0, 4096)) })
+      : imageSize({ bytes: r.header });
+    await this.dropOtherCaches(file.cache);
+    return file;
+  }
+
+  // 同じタブの古い画像のコピー（内容が変わる前のもの）を消す。
+  async dropOtherCaches(keep) {
+    for (const name of await listCache()) {
+      const path = `${CACHE_DIR}/${name}`;
+      if (path !== keep && name.match(CACHE_NAME)?.[1] === this.token) await removeCache(path);
+    }
   }
 
   // Editor を作り、編集の検知をつなぐ。shown は Editor が返す「未編集の内容」（改行を揃えることがあるため読み戻す）。
@@ -196,6 +246,7 @@ export default class FileViewer extends View {
       const next = await this.read(file.path, file.machine);
       if (this.loadedKey !== key) { next.editor?.release(); return; }
       file.editor?.release();
+      if (next.zoom && file.zoom) next.zoom = file.zoom;
       this.file = next;
       this.setDirty(false);
       cx.notify();
@@ -352,6 +403,15 @@ export default class FileViewer extends View {
     // 保存したら、このタブの下書きは消す。
     file.drafted = undefined;
     await deleteDraft(draftName(this.token, file.machine, file.path));
+    // SVG のソースを保存したら、画像表示もコピーし直す。
+    if (file.cache) {
+      const r = await copyImage(file.path, file.machine, this.token).catch(() => null);
+      if (r?.cache && this.file === file) {
+        file.cache = r.cache;
+        file.dims = imageSize({ svg: content }) ?? file.dims;
+        await this.dropOtherCaches(r.cache);
+      }
+    }
   }
 
   // 確認の答え。
@@ -426,11 +486,15 @@ export default class FileViewer extends View {
     const file = this.file;
     const type = file?.view?.type;
     const source = this.showsSource(rec);
-    const isCode = type === "code" || ((type === "markdown") && source);
+    const isCode = type === "code" || ((type === "markdown" || type === "image") && source && file?.editor);
+    const isImage = type === "image" && !source;
     return h_flex().id("fv-toolbar").h(34).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(file?.path ?? ""))
       .when(Boolean(rec?.preview), (el) => el.child(button("fv-pin", "固定", t, (cx) => { putRecord(this.token, { preview: false }); cx.notify(); })))
+      .when(isImage, (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(imageInfo(file))))
+      .when(isImage, (el) => el.child(zoomTools({ id: "fv-zoom", zoom: file.zoom, width: file.dims?.width ?? 512, height: file.dims?.height ?? 512, t })))
       .when(type === "markdown", (el) => el.child(button("fv-source", source ? "整形表示" : "ソース", t, (cx) => this.toggleSource(cx), source)))
+      .when(type === "image" && Boolean(file?.view?.source), (el) => el.child(button("fv-source", source ? "画像" : "ソース", t, (cx) => this.toggleSource(cx), source)))
       .when(isCode, (el) => el.child(button("fv-wrap", "折り返し", t, (cx) => { this.wrap = !this.wrap; this.rebuildEditor(cx); }, this.wrap)))
       .when(Boolean(file?.editor && !file.readonly), (el) => el.child(button("fv-save", file.dirty ? "保存 ●" : "保存", t, (cx) => this.save(cx))));
   }
@@ -494,6 +558,9 @@ export default class FileViewer extends View {
     if (file.loading) return div().p(16).text_color(t.dim).child("読み込み中…");
     const view = file.view;
     if (view.type === "unopenable") return this.unopenable(file, view, t);
+    if (view.type === "image" && !(this.showsSource(rec) && file.editor)) {
+      return imageBody({ file, t });
+    }
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
       return markdownBody({ id: "fv-markdown", text: file.editor.value(), onLink: (url, cx) => this.followLink(url, cx), t });
     }
@@ -505,7 +572,6 @@ export default class FileViewer extends View {
     const reason = view.reason === "binary" ? "バイナリのため表示できない"
       : view.reason === "too-large" ? limitMessage({ limit: view.limit, size: file.size })
       : view.reason === "missing" ? "ファイルが無くなった"
-      : view.reason === "pending-image" ? "画像の表示はまだ作っていない"
       : `読み込めなかった: ${view.message ?? ""}`;
     return v_flex().id("fv-unopenable").p(20).gap(8)
       .child(div().text_size(14).font_semibold().child(reason))
