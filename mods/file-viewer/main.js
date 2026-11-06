@@ -10,6 +10,7 @@ import { tabTitles } from "./lib/tabs.js";
 import { splitBom, contentToSave, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts } from "./lib/drafts.js";
 import { resolveLink } from "./lib/markdown.js";
+import { externalNoticeAction } from "./lib/notices.js";
 import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { parseMermaid } from "./lib/mermaid/parse.js";
@@ -286,10 +287,18 @@ export default class FileViewer extends View {
     cx.spawn(async (cx) => {
       const next = await this.read(file.path, file.machine);
       if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); return; }
+      // 読み直したらファイルが無かった: 表示していた中身と未保存の編集（と下書き）を残し、「ファイルが無くなった」にする。
+      if (next.missing && file.editor) {
+        next.editor?.release();
+        file.missing = true;
+        file.external = null;
+        cx.notify();
+        return;
+      }
       // 読み込みの間に打った文字は捨てない。読み直さずに、ディスクが変わったことを知らせる。
       if (file.editor && file.editor.value() !== before) {
         next.editor?.release();
-        if (next.base && (!file.notice || file.notice.kind === "external")) file.notice = { kind: "external", hash: next.base.hash };
+        if (next.base) this.considerExternal(file, { changed: next.base.hash !== file.base?.hash, diskHash: next.base.hash, dirty: true });
         cx.notify();
         // 表示中の画像は今の file のコピーを使い続けるので、捨てる読み直しのコピーだけを消す。
         if (next.cache && next.cache !== file.cache) await removeCache(next.cache);
@@ -371,10 +380,19 @@ export default class FileViewer extends View {
     file.base = draft.base;
     this.setDirty(file.editor.value() !== file.shown);
     file.drafted = null;
+    // 復元のあとのディスクの確認が返るまでは、外部変更を知らせない（2 秒ごとの確認と同じ変化を 2 回知らせないため）。
+    // 出ていた外部変更の知らせは、復元する前の基準からの変化なので消す。
+    file.restoring = true;
+    file.external = null;
     cx.spawn(async (cx) => {
       await deleteDraft(draft.name);
       const r = await checkChanged(file.path, file.machine, draft.base).catch(() => null);
-      if (this.file === file && r && (r.missing || r.changed)) file.notice = { kind: "draft-changed" };
+      file.restoring = false;
+      if (this.file === file && r && (r.missing || r.changed)) {
+        // 知らせた変化は、外部変更としては知らせない（そこからさらに変わったら知らせる）。
+        file.notice = { kind: "draft-changed" };
+        file.draftNoticed = r.base?.hash ?? null;
+      }
       cx.notify();
     });
     cx.notify();
@@ -411,11 +429,7 @@ export default class FileViewer extends View {
         const back = file.missing;
         file.missing = false;
         if (!r.changed) { if (back) cx.notify(); return; }
-        if (!file.dirty) { this.reload(cx, back); return; }
-        // 保存の確認など、答えを待っている知らせは上書きしない。
-        if (file.notice && file.notice.kind !== "external") return;
-        if (file.dismissed === r.base.hash) { if (back) cx.notify(); return; }
-        file.notice = { kind: "external", hash: r.base.hash };
+        if (this.considerExternal(file, { changed: true, diskHash: r.base.hash }) === "reload") { this.reload(cx, back); return; }
         cx.notify();
       } catch {
         // 一時的な失敗（machine に届かない等）は次の確認で取り直す。
@@ -455,7 +469,7 @@ export default class FileViewer extends View {
     const file = this.file;
     if (!file?.editor || file.readonly || file.saving) return;
     if (file.missing) {
-      file.notice = { kind: "recreate" };
+      this.openChoice(file, { kind: "recreate" });
       cx.notify();
       return;
     }
@@ -464,8 +478,8 @@ export default class FileViewer extends View {
     cx.spawn(async (cx) => {
       try {
         const r = await checkChanged(file.path, file.machine, file.base);
-        if (r.missing) { file.missing = true; file.notice = { kind: "recreate" }; return; }
-        if (r.changed) { file.notice = { kind: "conflict", base: r.base }; return; }
+        if (r.missing) { file.missing = true; this.openChoice(file, { kind: "recreate" }); return; }
+        if (r.changed) { this.openChoice(file, { kind: "conflict", base: r.base }); return; }
         await this.write(file, file.base);
       } catch (e) {
         file.notice = { kind: "error", text: `保存できなかった: ${message(e)}` };
@@ -486,15 +500,17 @@ export default class FileViewer extends View {
       file.base = await writeText(file.path, file.machine, content, base);
     } catch (e) {
       if (!(e instanceof WriteConflict)) throw e;
-      if (e.reason === "missing") { file.missing = true; file.notice = { kind: "recreate" }; }
-      else file.notice = { kind: "conflict", base: null };
+      if (e.reason === "missing") { file.missing = true; this.openChoice(file, { kind: "recreate" }); }
+      else this.openChoice(file, { kind: "conflict", base: null });
       return;
     }
     file.text = splitBom(content).text;
     file.shown = value;
     file.missing = false;
     file.notice = null;
+    file.external = null;
     file.dismissed = null;
+    file.draftNoticed = null;
     const dirty = file.editor.value() !== value;
     this.setDirty(dirty);
     if (dirty) {
@@ -516,14 +532,43 @@ export default class FileViewer extends View {
     }
   }
 
-  // 確認の答え。
+  // 外部変更の知らせを、ほかの知らせとの重なりの規則（lib/notices.js）で出す・置き換える・消す。
+  // 戻り値が "reload" なら（未編集のタブ）、呼ぶ側が読み直す。
+  considerExternal(file, { changed, diskHash, dirty = Boolean(file.dirty) }) {
+    const action = externalNoticeAction({
+      dirty, changed, diskHash, notice: file.notice?.kind ?? null, external: file.external?.hash ?? null,
+      dismissed: file.dismissed ?? null, draftNoticed: file.draftNoticed ?? null, restoring: Boolean(file.restoring),
+    });
+    if (action === "show" || action === "update") file.external = { hash: diskHash };
+    if (action === "hide") file.external = null;
+    return action;
+  }
+
+  // 選択を待つ知らせ（保存前の確認の 3 択、作り直す確認）を出す。出ていた外部変更の知らせはこれに置き換わる。
+  openChoice(file, notice) {
+    file.notice = notice;
+    this.considerExternal(file, { changed: true, diskHash: notice.base?.hash ?? null, dirty: true });
+  }
+
+  // 外部変更の知らせの答え。
+  answerExternal(choice, cx) {
+    const file = this.file;
+    const external = file?.external;
+    if (!external) return;
+    file.external = null;
+    if (choice === "reload") { this.reload(cx); return; }
+    // 自分の編集を続ける: 同じ変化はもう知らせない。
+    file.dismissed = external.hash;
+    cx.notify();
+  }
+
+  // 外部変更の知らせ以外の確認の答え。
   answer(choice, cx) {
     const file = this.file;
     const notice = file?.notice;
     if (!notice) return;
     file.notice = null;
     if (choice === "reload") { this.reload(cx); return; }
-    if (choice === "keep") { file.dismissed = notice.hash; cx.notify(); return; }
     if (choice === "cancel" || choice === "close") { cx.notify(); return; }
     // overwrite（今のディスクの内容を基準にして上書き）/ recreate（作り直す）
     file.saving = true;
@@ -534,7 +579,7 @@ export default class FileViewer extends View {
           base = notice.base;
           if (!base) {
             const r = await checkChanged(file.path, file.machine, null);
-            if (r.missing) { file.missing = true; file.notice = { kind: "recreate" }; return; }
+            if (r.missing) { file.missing = true; this.openChoice(file, { kind: "recreate" }); return; }
             base = r.base;
           }
         }
@@ -608,11 +653,11 @@ export default class FileViewer extends View {
       .when(Boolean(file?.editor && !file.readonly), (el) => el.child(button("fv-save", file.dirty ? "保存 ●" : "保存", t, (cx) => this.save(cx))));
   }
 
-  banner(id, text, t, color, actions = []) {
+  banner(id, text, t, color, actions = [], onAnswer = (key, cx) => this.answer(key, cx)) {
     return h_flex().id(id).flex_none().px(12).py(6).gap(8).items_center().border_b(1).border_color(t.border).bg(t.raised)
       .child(div().w(3).h(16).flex_none().rounded(2).bg(color))
       .child(div().flex_1().min_w(0).text_size(12).child(text))
-      .children(actions.map(([key, label]) => button(`${id}-${key}`, label, t, (cx) => this.answer(key, cx))));
+      .children(actions.map(([key, label]) => button(`${id}-${key}`, label, t, (cx) => onAnswer(key, cx))));
   }
 
   notices(t) {
@@ -622,7 +667,8 @@ export default class FileViewer extends View {
     if (file.missing && file.view?.type !== "unopenable") out.push(this.banner("fv-missing", "ファイルが無くなった（表示は無くなる前の内容）", t, t.blocked));
     if (file.readonly) out.push(this.banner("fv-encoding", "UTF-8 でない可能性があるため、読み取り専用で開いている（文字化けしている部分がある）", t, t.blocked));
     const n = file.notice;
-    if (n?.kind === "external") out.push(this.banner("fv-external", "ディスクの内容が変わった", t, t.working, [["reload", "ディスクの内容で読み直す"], ["keep", "自分の編集を続ける"]]));
+    // 外部変更の知らせは、知らせるだけのものや「復元 / 破棄」と並べて出す（重なりの規則は considerExternal）。
+    if (file.external) out.push(this.banner("fv-external", "ディスクの内容が変わった", t, t.working, [["reload", "ディスクの内容で読み直す"], ["keep", "自分の編集を続ける"]], (key, cx) => this.answerExternal(key, cx)));
     if (n?.kind === "conflict") out.push(this.banner("fv-conflict", "保存の前にディスクの内容が変わっている", t, t.blocked, [["reload", "ディスクの内容で読み直す"], ["overwrite", "自分の内容で上書きする"], ["cancel", "やめる"]]));
     if (n?.kind === "recreate") out.push(this.banner("fv-recreate", "ファイルが無くなっている。今の内容で作り直す？", t, t.blocked, [["recreate", "作り直す"], ["cancel", "やめる"]]));
     if (n?.kind === "error") out.push(this.banner("fv-error", n.text, t, t.blocked, [["close", "閉じる"]]));
