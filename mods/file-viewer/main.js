@@ -564,7 +564,7 @@ export default class FileViewer extends View {
     const file = this.file;
     if (!file || file.loading) return [];
     const out = [];
-    if (file.missing && file.editor) out.push(this.banner("fv-missing", "ファイルが無くなった（表示は無くなる前の内容）", t, t.blocked));
+    if (file.missing && file.view?.type !== "unopenable") out.push(this.banner("fv-missing", "ファイルが無くなった（表示は無くなる前の内容）", t, t.blocked));
     if (file.readonly) out.push(this.banner("fv-encoding", "UTF-8 でない可能性があるため、読み取り専用で開いている（文字化けしている部分がある）", t, t.blocked));
     const n = file.notice;
     if (n?.kind === "external") out.push(this.banner("fv-external", "ディスクの内容が変わった", t, t.working, [["reload", "ディスクの内容で読み直す"], ["keep", "自分の編集を続ける"]]));
