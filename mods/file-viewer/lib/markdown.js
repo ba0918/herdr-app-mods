@@ -30,7 +30,8 @@ function encodePath(path) {
 // HTML のかたまりの中の <a> は押せるリンクで出す（実機で確認）。そのため段落の中は Markdown のリンク、
 // HTML のかたまりの中は <a> にする。
 
-const DEST = String.raw`(<[^>\n]*>|[^\s)]+)`;
+// リンク先（<...> か、空白を含まない並び。対になった括弧は 1 段まで中に含める）。
+const DEST = String.raw`(<[^>\n]*>|(?:[^\s()]|\([^\s()]*\))+)`;
 const TITLE = String.raw`(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?`;
 // 画像（インライン形式・参照形式）。1: 代替テキスト、2: インライン形式の参照先、3: 参照形式のラベル（空なら代替テキスト）。
 const IMAGE_SRC = String.raw`!\[([^\]]*)\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]*)\]|(?![\[(]))`;
@@ -108,7 +109,7 @@ function rewriteInline(text, definitions) {
       const image = source && imageTarget(source.src, source.alt);
       if (!image) return whole;
       const href = unwrap(outer);
-      return `[${escapeMarkdown(image.name)}](${href.startsWith("#") ? markdownDest(image.href) : outer})`;
+      return `[${escapeMarkdown(image.name)}](${markdownDest(outerHref(href, image))})`;
     })
     .replace(IMAGE, (whole, alt, dest, label) => {
       const source = imageSource(alt, dest, label, definitions);

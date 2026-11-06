@@ -165,6 +165,12 @@ describe("rewriteImages", () => {
     }
   });
 
+  test("参照先に対になった括弧を含む画像は、括弧を含めた参照先を開く", () => {
+    expect(linksIn(rewriteImages("前 ![a](https://example.com/a_(1).png) 後"))).toEqual([{ name: "a", to: { type: "external", url: "https://example.com/a_(1).png" } }]);
+    expect(linksIn(rewriteImages("前 ![b](img/b_(2).png) 後"))).toEqual([{ name: "b", to: file("/r/img/b_(2).png") }]);
+    expect(linksIn(rewriteImages("[![c](img/c.png)](docs/c_(3).md)"))).toEqual([{ name: "c", to: file("/r/docs/c_(3).md") }]);
+  });
+
   test("![仕様](spec.pdf) を押した行き先は spec.pdf", () => {
     const md = rewriteImages("![仕様](spec.pdf)");
     const href = md.match(/\]\(([^)]+)\)/)[1];
