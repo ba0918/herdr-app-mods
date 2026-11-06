@@ -11,6 +11,7 @@ import { splitBom, contentToSave, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts } from "./lib/drafts.js";
 import { resolveLink } from "./lib/markdown.js";
 import { externalNoticeAction } from "./lib/notices.js";
+import { reloadOutcome } from "./lib/reload.js";
 import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { parseMermaid } from "./lib/mermaid/parse.js";
@@ -287,8 +288,11 @@ export default class FileViewer extends View {
     cx.spawn(async (cx) => {
       const next = await this.read(file.path, file.machine);
       if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); return; }
-      // 読み直したらファイルが無かった: 表示していた中身と未保存の編集（と下書き）を残し、「ファイルが無くなった」にする。
-      if (next.missing && file.editor) {
+      const outcome = reloadOutcome({
+        editor: Boolean(file.editor), image: Boolean(file.cache), edited: Boolean(file.editor) && file.editor.value() !== before, missing: Boolean(next.missing),
+      });
+      // 読み直したらファイルが無かった: 表示していた中身（テキストも画像も）と未保存の編集（と下書き）を残し、「ファイルが無くなった」にする。
+      if (outcome === "missing") {
         next.editor?.release();
         file.missing = true;
         file.external = null;
@@ -296,7 +300,7 @@ export default class FileViewer extends View {
         return;
       }
       // 読み込みの間に打った文字は捨てない。読み直さずに、ディスクが変わったことを知らせる。
-      if (file.editor && file.editor.value() !== before) {
+      if (outcome === "keep-edits") {
         next.editor?.release();
         if (next.base) this.considerExternal(file, { changed: next.base.hash !== file.base?.hash, diskHash: next.base.hash, dirty: true });
         cx.notify();

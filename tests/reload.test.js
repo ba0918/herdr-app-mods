@@ -1,0 +1,30 @@
+import { describe, expect, test } from "bun:test";
+import { reloadOutcome } from "../mods/file-viewer/lib/reload.js";
+
+// editor: タブが Editor で中身を表示しているか。image: 画像のコピーで中身を表示しているか。
+// edited: 読み込みの間に編集されたか。missing: 読み直したらファイルが無かったか。
+const base = { editor: false, image: false, edited: false, missing: false };
+const outcome = (patch) => reloadOutcome({ ...base, ...patch });
+
+describe("reloadOutcome", () => {
+  test("読み直したらファイルが無かったとき、中身を表示しているタブ（テキストも画像も）は中身を残して「ファイルが無くなった」にする", () => {
+    expect(outcome({ editor: true, missing: true })).toBe("missing");
+    expect(outcome({ editor: true, edited: true, missing: true })).toBe("missing");
+    expect(outcome({ image: true, missing: true })).toBe("missing");
+    expect(outcome({ image: true, editor: true, missing: true })).toBe("missing");
+  });
+
+  test("中身を表示していない開けないファイルの案内のタブは、無くなったことの案内に置き換える", () => {
+    expect(outcome({ missing: true })).toBe("replace");
+  });
+
+  test("読み込みの間に打った文字は捨てず、読み直した内容に置き換えない", () => {
+    expect(outcome({ editor: true, edited: true })).toBe("keep-edits");
+  });
+
+  test("それ以外は読み直した内容に置き換える", () => {
+    expect(outcome({ editor: true })).toBe("replace");
+    expect(outcome({ image: true })).toBe("replace");
+    expect(outcome({})).toBe("replace");
+  });
+});
