@@ -24,3 +24,15 @@ export function kind({ path, size, text }) {
   if (text.includes("\0")) return { type: "unopenable", reason: "binary" };
   return { type: BY_EXTENSION[ext] ?? "code", source: true };
 }
+
+// Editor（code viewer）に渡す言語名。読み替えは同梱 Files と同じ。
+const LANGUAGE = {
+  ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", cjs: "js",
+  toml: "yaml", jsonc: "json", svelte: "html", vue: "html",
+  md: "markdown", markdown: "markdown", svg: "xml", mmd: "txt", mermaid: "txt",
+};
+
+export function languageFor(path) {
+  const ext = extension(path);
+  return LANGUAGE[ext] ?? (ext || "txt");
+}
