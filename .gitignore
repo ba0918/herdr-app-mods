@@ -1,0 +1,4 @@
+# herdr-app check / 起動時に mod フォルダへ生成される型定義
+gpui-kit.d.ts
+
+.agents/scratch/
