@@ -209,6 +209,18 @@ describe("rewriteImages", () => {
     ]);
   });
 
+  test("画像とインラインコードや <!-- --> を包むリンクも、コードとコメントをそのまま残して、外側のリンク先を開く 1 つのリンクになる", () => {
+    const md = '[`v1` ![x](img/a.png)](docs/a.md) 前 <a href="docs/b.md">`v2` <img src="img/b.png" alt="y"></a> 後 [<!-- c --> ![z](img/c.png)](docs/c.md)';
+    const [line] = rewriteImages(md).split("\n");
+    noLeftoverBrackets(line);
+    asParagraph(line);
+    expect(linksIn(line)).toEqual([
+      { name: "`v1` x", to: file("/r/docs/a.md") },
+      { name: "`v2` y", to: file("/r/docs/b.md") },
+      { name: "<!-- c --> z", to: file("/r/docs/c.md") },
+    ]);
+  });
+
   test("画像とほかの文字を包む外側のリンクが #見出し だけなら、最初の画像を開く", () => {
     for (const md of ["[Name ![x](img/a.png) ![y](img/b.png)](#top)", '<a href="#top">Name <img alt="x" src="img/a.png"></a>']) {
       const out = rewriteImages(md);
