@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { resolveLink, rewriteImages, collectDefinitions, splitMermaidBlocks } from "../mods/file-viewer/lib/markdown.js";
 
 // 書き換えた Markdown の中の押せるリンク（Markdown のリンクと HTML の <a>。画像の ![..](..) は含めない）の名前と、押したときの行き先。
@@ -425,6 +425,23 @@ describe("rewriteImages", () => {
     const md = rewriteImages("![仕様](spec.pdf)");
     const href = md.match(/\]\(([^)]+)\)/)[1];
     expect(resolveLink({ from: "/r/README.md", href })).toEqual({ type: "file", path: "/r/spec.pdf" });
+  });
+
+  // app の QuickJS は matchAll のたびに正規表現を作り直す（大きな正規表現で 1 回 0.1 ms ほど）。かたまりごとに何度も呼ぶと、
+  // 30 KB ほどの Markdown で描画の時間の上限を超えて、整形表示が止まった（ガイドの「制約」）。
+  test("書き換えと定義の収集は matchAll を使わない", () => {
+    const md = [
+      "# 見出し", "", "本文 `code` <!-- c --> [a](docs/a.md) ![図](img/a.png) [![b][d]](docs/b.md) <a href=\"x.md\"><img src=\"img/b.png\"></a>", "",
+      "<p align=\"center\"><img src=\"img/c.png\" alt=\"c\"></p>", "", "<img src=\"img/d.png\">", "",
+      "<picture><img src=\"img/e.png\"></picture>", "", "```sh", "echo", "```", "", "[d]: img/d.png",
+    ].join("\n");
+    const spy = spyOn(String.prototype, "matchAll");
+    try {
+      rewriteImages(md, collectDefinitions(md));
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

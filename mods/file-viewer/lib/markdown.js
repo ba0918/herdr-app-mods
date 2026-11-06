@@ -78,6 +78,20 @@ function decodeEntities(text) {
   });
 }
 
+// re（g つき）の text の中の一致をすべて。app の QuickJS は matchAll のたびに正規表現を作り直して遅い（ガイドの「制約」）ので、
+// exec で集める。先に全部集めるので、呼び出し側が同じ正規表現をまた使っても lastIndex は崩れない。
+function matchesOf(text, re) {
+  if (!re.global) throw new TypeError("matchesOf には g つきの正規表現を渡す");
+  const out = [];
+  re.lastIndex = 0;
+  for (let m; (m = re.exec(text));) {
+    out.push(m);
+    if (m[0] === "") re.lastIndex++;
+  }
+  return out;
+}
+const KEEP_RUNS = /\uE000+|[^\uE000]+/g;
+
 // ---- 書いたまま残す部分 ----
 // 段落の中のインラインコードと HTML のコメントは書いたまま残すが、リンクの文字の中にあっても、リンクを 1 つのまとまりとして見る。
 // そこで段落を { text, mask } の組で持つ。text は書いたままの文字列。mask は同じ長さで、コードとコメントの文字を KEEP に、
@@ -99,7 +113,7 @@ function pairOf(parts) {
 function render(s, start, end, fn) {
   if (!hasKeep(s, start, end)) return plain(fn(s.text.slice(start, end)));
   const pieces = [];
-  for (const m of s.mask.slice(start, end).matchAll(/\uE000+|[^\uE000]+/g)) {
+  for (const m of matchesOf(s.mask.slice(start, end), KEEP_RUNS)) {
     const run = sliceOf(s, start + m.index, start + m.index + m[0].length);
     pieces.push(m[0][0] === KEEP ? run : plain(fn(run.text)));
   }
@@ -110,7 +124,7 @@ function render(s, start, end, fn) {
 function replaceIn(s, re, fn) {
   const pieces = [];
   let i = 0;
-  for (const m of s.mask.matchAll(re)) {
+  for (const m of matchesOf(s.mask, re)) {
     const piece = fn(m, m.index);
     if (!piece) continue;
     pieces.push(sliceOf(s, i, m.index), piece);
@@ -284,7 +298,7 @@ function rewriteHtmlBlock(parts, state, loneImg) {
   for (const part of parts) {
     if (part.keep) { out.push(part.text); continue; }
     let i = 0;
-    for (const m of part.text.matchAll(HTML_TOKEN)) {
+    for (const m of matchesOf(part.text, HTML_TOKEN)) {
       out.push(part.text.slice(i, m.index));
       i = m.index + m[0].length;
       const [tag, aAttrs, pictureClose, imgAttrs] = m;
