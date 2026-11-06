@@ -26,6 +26,8 @@ herdr-app の Files パネルでファイルを押すと、メイン領域にタ
 - 開けないファイルを既定のアプリで開くボタン。
 - UTF-8 以外の文字コードの編集。
 - Mermaid の flowchart / sequenceDiagram 以外の図。
+- Markdown 内の `<img>` 以外の HTML の画像（`<picture>` の `<source>`、CSS の背景画像）を押せる名前にすること。
+- Markdown 内のフォルダへのリンクから、Files のツリーでそのフォルダを開くこと。
 
 ## 任せたこと
 
