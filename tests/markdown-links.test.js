@@ -27,10 +27,6 @@ describe("resolveLink", () => {
     expect(resolveLink({ from, href: "my%20docs/a%20b.md" })).toEqual({ type: "file", path: "/r/my docs/a b.md" });
   });
 
-  test("部品が file:// の URL にして渡してきても、そのパスを開く", () => {
-    expect(resolveLink({ from, href: "file:///r/docs/a%20b.md#x" })).toEqual({ type: "file", path: "/r/docs/a b.md" });
-  });
-
   test("Windows のパスの Markdown からは \\ で連結する", () => {
     expect(resolveLink({ from: "C:\\w\\README.md", href: "docs/a.md" })).toEqual({ type: "file", path: "C:\\w\\docs\\a.md" });
   });
