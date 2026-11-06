@@ -109,7 +109,7 @@ export async function checkChanged(path, on, base, { bytes = false } = {}) {
   return { missing: false, changed: hash !== base?.hash, base: { hash, stat } };
 }
 
-// 大きさと更新時刻（中身は読まない）。開けないファイルの変化や、リンク先があるかを見る。無ければ null。
+// 大きさと更新時刻（中身は読まない）。開けないファイルの変化を見る。無ければ null。
 export async function statOf(path, on) {
   if (!on) {
     const r = await exec("powershell", ["-NoProfile", "-Command",
@@ -120,6 +120,16 @@ export async function statOf(path, on) {
   const r = await sh(on, `${STAT} 2>/dev/null || echo missing`, [path]);
   const out = r.stdout.trim();
   return out === "missing" || !out ? null : out;
+}
+
+// 普通のファイルがあるか（中身は読まない。リンクの指す先がフォルダなら false）。リンク先があるかを見る。
+export async function isFile(path, on) {
+  if (!on) {
+    const r = await exec("powershell", ["-NoProfile", "-Command", `Test-Path -LiteralPath ${psQuote(path)} -PathType Leaf`]);
+    return r.code === 0 && r.stdout.trim() === "True";
+  }
+  const r = await sh(on, `[ -f "$1" ]`, [path]);
+  return r.code === 0;
 }
 
 // 基準と同じなら書く。base が null なら、ファイルが無いときだけ作る。

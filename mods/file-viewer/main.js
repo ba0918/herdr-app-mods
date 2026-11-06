@@ -15,7 +15,7 @@ import { imageSize } from "./lib/image.js";
 import { parseMermaid } from "./lib/mermaid/parse.js";
 import { layoutFlowchart, layoutSequence } from "./lib/mermaid/layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
-import { readText, checkChanged, statOf, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR } from "./io.js";
+import { readText, checkChanged, statOf, isFile, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR } from "./io.js";
 import { markdownBody, diagramError } from "./views/markdown.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
@@ -641,8 +641,9 @@ export default class FileViewer extends View {
     if (target.type !== "file") return;
     cx.spawn(async () => {
       // あるかどうかだけを、中身を読まずに見る（テキストとして読むと、上限を超える画像などが無いことになる）。
-      const sig = await statOf(target.path, file.machine).catch(() => null);
-      if (!sig) { notify({ title: "リンク先のファイルが無い", body: target.path, level: "warning" }); return; }
+      // フォルダはファイルではないので、無いものとして扱う。
+      const found = await isFile(target.path, file.machine).catch(() => false);
+      if (!found) { notify({ title: "リンク先のファイルが無い", body: target.path, level: "warning" }); return; }
       openFile({ machine: file.machine, path: target.path, double: false });
     });
   }
