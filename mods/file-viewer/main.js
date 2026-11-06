@@ -8,7 +8,7 @@ import { kind, languageFor } from "./lib/kind.js";
 import { formatSize, limitMessage } from "./lib/size.js";
 import { tabTitles } from "./lib/tabs.js";
 import { splitBom, contentToSave, looksNonUtf8 } from "./lib/save.js";
-import { draftsFor, expiredDrafts } from "./lib/drafts.js";
+import { draftsFor, expiredDrafts, restoredDraft } from "./lib/drafts.js";
 import { resolveLink } from "./lib/markdown.js";
 import { externalNoticeAction, showsDraftChanged } from "./lib/notices.js";
 import { reloadOutcome } from "./lib/reload.js";
@@ -369,17 +369,18 @@ export default class FileViewer extends View {
     const file = this.file;
     const draft = file?.drafts?.find((d) => d.name === name);
     if (!draft || (!file.editor && !file.missing)) return;
+    const { text, bom } = restoredDraft(draft);
     if (!file.editor) {
       // ファイルが無いときは、下書きの内容を入れる Editor を作る。未保存の編集として入れるため空で作る。
       // 改行と末尾の改行・BOM の有無は下書きのものを保つ。SVG は画像のコピーが無いので、ソースとして出す。
-      const view = kind({ path: file.path, size: 0, text: draft.content });
+      const view = kind({ path: file.path, size: 0, text });
       file.view = view.type === "image" ? { type: "code", source: true } : view;
-      file.text = draft.content;
-      file.bom = Boolean(draft.bom);
+      file.text = text;
+      file.bom = bom;
       this.attachEditor(file, "");
     }
     file.drafts = file.drafts.filter((d) => d !== draft);
-    file.editor.set_value(draft.content);
+    file.editor.set_value(text);
     // 復元は編集として扱う（プレビュータブなら固定タブになる）。保存前の確認の基準は下書きに記録したディスクの状態。
     file.base = draft.base;
     this.setDirty(file.editor.value() !== file.shown);
