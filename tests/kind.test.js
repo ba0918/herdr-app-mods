@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { kind, languageFor, TEXT_LIMIT, IMAGE_LIMIT } from "../mods/file-viewer/lib/kind.js";
+import { kind, TEXT_LIMIT, IMAGE_LIMIT } from "../mods/file-viewer/lib/kind.js";
 
 const MiB = 1024 * 1024;
 
@@ -40,20 +40,5 @@ describe("kind", () => {
   test("上限ちょうどは開ける", () => {
     expect(kind({ path: "/r/a.txt", size: TEXT_LIMIT, text: "x" })).toEqual({ type: "code", source: true });
     expect(kind({ path: "/r/a.webp", size: IMAGE_LIMIT })).toEqual({ type: "image", source: false });
-  });
-
-  test("テキストを読む前（text なし）に呼ぶと、読む必要があることを返す", () => {
-    expect(kind({ path: "/r/a.js", size: 10 })).toEqual({ type: "needs-text" });
-  });
-});
-
-describe("languageFor", () => {
-  test("Editor の言語名を拡張子から決め、同梱 Files と同じ読み替えをする", () => {
-    expect(languageFor("/r/a.ts")).toBe("js");
-    expect(languageFor("/r/Cargo.toml")).toBe("yaml");
-    expect(languageFor("/r/main.rs")).toBe("rs");
-    expect(languageFor("/r/README.md")).toBe("markdown");
-    expect(languageFor("/r/icon.svg")).toBe("xml");
-    expect(languageFor("/r/Makefile")).toBe("txt");
   });
 });

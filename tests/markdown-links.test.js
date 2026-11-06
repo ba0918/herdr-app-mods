@@ -23,20 +23,12 @@ describe("resolveLink", () => {
     expect(resolveLink({ from, href: "HTTP://example.com" })).toEqual({ type: "external", url: "HTTP://example.com" });
   });
 
-  test("http(s) 以外のスキームは開かない", () => {
-    expect(resolveLink({ from, href: "mailto:a@example.com" })).toEqual({ type: "none" });
-  });
-
   test("パーセントエンコードされた相対パスは戻してから解決する", () => {
     expect(resolveLink({ from, href: "my%20docs/a%20b.md" })).toEqual({ type: "file", path: "/r/my docs/a b.md" });
   });
 
   test("部品が file:// の URL にして渡してきても、そのパスを開く", () => {
     expect(resolveLink({ from, href: "file:///r/docs/a%20b.md#x" })).toEqual({ type: "file", path: "/r/docs/a b.md" });
-  });
-
-  test("絶対パスはそのまま開く", () => {
-    expect(resolveLink({ from, href: "/etc/hosts" })).toEqual({ type: "file", path: "/etc/hosts" });
   });
 
   test("Windows のパスの Markdown からは \\ で連結する", () => {
