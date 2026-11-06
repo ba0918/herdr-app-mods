@@ -99,7 +99,7 @@ export async function checkChanged(path, on, base, { bytes = false } = {}) {
   return { missing: false, changed: hash !== base?.hash, base: { hash, stat } };
 }
 
-// 開けないファイル（上限超え・バイナリ）が変わったかを見るための、大きさと更新時刻。無ければ null。
+// 大きさと更新時刻（中身は読まない）。開けないファイルの変化や、リンク先があるかを見る。無ければ null。
 export async function statOf(path, on) {
   if (!on) {
     const r = await exec("powershell", ["-NoProfile", "-Command",

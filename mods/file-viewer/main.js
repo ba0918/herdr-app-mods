@@ -639,8 +639,9 @@ export default class FileViewer extends View {
     if (target.type === "external") { cx.open_url(target.url); return; }
     if (target.type !== "file") return;
     cx.spawn(async () => {
-      const r = await checkChanged(target.path, file.machine, null).catch(() => ({ missing: true }));
-      if (r.missing) { notify({ title: "リンク先のファイルが無い", body: target.path, level: "warning" }); return; }
+      // あるかどうかだけを、中身を読まずに見る（テキストとして読むと、上限を超える画像などが無いことになる）。
+      const sig = await statOf(target.path, file.machine).catch(() => null);
+      if (!sig) { notify({ title: "リンク先のファイルが無い", body: target.path, level: "warning" }); return; }
       openFile({ machine: file.machine, path: target.path, double: false });
     });
   }
