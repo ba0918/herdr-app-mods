@@ -105,8 +105,8 @@ APP="$WINHOME/AppData/Local/Programs/herdr-app/herdr-app.exe"
 #    WSL のパスは wslpath -w で UNC パスにすれば、そのまま渡せる
 "$APP" check "$(wslpath -w mods/<name>)"
 
-# 2. app home に反映（保存で hot reload される）
-cp -r mods/<name>/. "$WINHOME/.config/herdr-app/mods/<name>/"
+# 2. app home に反映（保存で hot reload される）。シンボリックリンクはリンク先の中身をコピーし、続けて反映先で check を通す
+scripts/deploy.sh <name>
 
 # 3. 実行中の窓の状態とエラー
 "$APP" status          # errors[] に file / mod のエラーが出る
@@ -115,7 +115,7 @@ cp -r mods/<name>/. "$WINHOME/.config/herdr-app/mods/<name>/"
 "$APP" shot "$(wslpath -w "$WINHOME")\\herdr-shot.png"
 ```
 
-- `cp` で `mods/<name>/main.js` を置き換えても hot reload される。`shot` は Windows 形式のパスを渡すとそこに PNG を書き、そのパスを表示する（どちらも実機で確認）。
+- app home の `mods/<name>/main.js` をコピーで置き換えても hot reload される。`shot` は Windows 形式のパスを渡すとそこに PNG を書き、そのパスを表示する（どちらも実機で確認）。
 - `check` は初回描画と即時の要素までしか見ない。レイアウト計算、仮想リストの遅延行、後から来る非同期状態は検証されないので、実際の窓でも確認する。
 - `check` は対象フォルダに `gpui-kit.d.ts` と `jsconfig.json` を書き込む。
 - 同梱の mod や layout を直接編集すると、次回起動時に `<name>-edited` へ退避されて元に戻される。必ず clone するか別名の mod を作る。
