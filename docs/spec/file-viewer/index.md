@@ -28,6 +28,7 @@ herdr-app の Files パネルでファイルを押すと、メイン領域にタ
 - Mermaid の flowchart / sequenceDiagram 以外の図。
 - Markdown 内の `<img>` 以外の HTML の画像（`<picture>` の `<source>`、CSS の背景画像）を押せる名前にすること。
 - Markdown 内のフォルダへのリンクから、Files のツリーでそのフォルダを開くこと。
+- 大きな Mermaid 単体ファイル（`.mmd`）を、描画の外で解析・配置すること（Markdown の[整形の準備](viewers.md#整形の準備)だけが対象）。
 
 ## 任せたこと
 
