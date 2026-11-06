@@ -333,17 +333,22 @@ function blocksOf(markdown) {
 }
 
 // 文書を、かたまりごとに visit(text, kind, state) で書き換えてつなぐ（"html" と "text" のかたまりだけ渡す）。
-// state.comment は HTML のコメントの中か、state.picture は <picture> の中か（どちらもかたまりをまたぐ）。
+// state.picture は <picture> の中か。HTML のかたまりの間でだけ続ける（段落の中の <picture> は段落で終わる）。
 function mapBlocks(markdown, visit) {
-  const state = { comment: false, picture: false };
+  const state = { picture: false };
   return blocksOf(markdown).map(({ kind, lines }) => {
     const text = lines.join("\n");
-    return kind === "html" || kind === "text" ? visit(text, kind, state) : text;
+    if (kind !== "html" && kind !== "text") return text;
+    const out = visit(text, kind, state);
+    if (kind === "text") state.picture = false;
+    return out;
   }).join("\n");
 }
 
 // かたまりの文字列を、書き換えてよい部分と、インラインコード・HTML のコメントの部分（keep）に分ける。
-function segments(text, state) {
+// 閉じない <!-- はそのかたまりの終わりまで（コメントのかたまりは --> の行まで続き、ほかのかたまりの中のものは
+// CommonMark ではそのかたまりの中だけのもの）。
+function segments(text) {
   const out = [];
   const push = (part, keep = false) => {
     const last = out[out.length - 1];
@@ -355,21 +360,13 @@ function segments(text, state) {
   const mark = /<!--|`+/g;
   let i = 0;
   while (i < text.length) {
-    if (state.comment) {
-      const end = text.indexOf("-->", i);
-      if (end < 0) { push(text.slice(i), true); return out; }
-      push(text.slice(i, end + 3), true);
-      i = end + 3;
-      state.comment = false;
-      continue;
-    }
     mark.lastIndex = i;
     const hit = mark.exec(text);
     if (!hit) { push(text.slice(i)); break; }
     if (hit.index > i) push(text.slice(i, hit.index));
     if (hit[0] === "<!--") {
       const end = text.indexOf("-->", hit.index + 4);
-      if (end < 0) { push(text.slice(hit.index), true); state.comment = true; return out; }
+      if (end < 0) { push(text.slice(hit.index), true); return out; }
       push(text.slice(hit.index, end + 3), true);
       i = end + 3;
       continue;
@@ -394,8 +391,8 @@ function segments(text, state) {
 // ラベルは大文字小文字と空白の違いを無視する。同じラベルは最初の定義。値は書いたままの参照先（<...> を含む）。
 export function collectDefinitions(markdown) {
   const definitions = new Map();
-  mapBlocks(markdown, (text, kind, state) => {
-    const parts = segments(text, state);
+  mapBlocks(markdown, (text, kind) => {
+    const parts = segments(text);
     if (kind !== "text") return text;
     // インラインコードやコメントにかからない行だけを見る。
     const kept = [];
@@ -422,7 +419,7 @@ export function collectDefinitions(markdown) {
 // 行の数は変わりうる（図の行番号は、分けたときの元の Markdown で数える）。
 export function rewriteImages(markdown, definitions = collectDefinitions(markdown)) {
   return mapBlocks(markdown, (text, kind, state) => {
-    const parts = segments(text, state);
+    const parts = segments(text);
     if (kind === "html") return rewriteHtmlBlock(parts, state);
     return parts.map((part) => (part.keep ? part.text : aroundPictures(part.text, state, (t) => rewriteInline(t, definitions)))).join("");
   });

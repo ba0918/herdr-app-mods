@@ -150,6 +150,12 @@ describe("rewriteImages", () => {
     asParagraph(rewriteImages('本文\n<span>\n<img src="img/a.png" alt="図">'));
   });
 
+  test("段落や HTML のかたまりの中の閉じない <!-- と、段落の中の <picture> は、そのかたまりで終わる", () => {
+    for (const md of ["a <!-- b\n\n![x](img/a.png)", "a <picture>\n\n![x](img/a.png)", '<div><!-- b\n\n![x](img/a.png)', "a <!-- b\n\n![x]\n\n[x]: img/a.png"]) {
+      expect(linksIn(rewriteImages(md))).toEqual([{ name: "x", to: file("/r/img/a.png") }]);
+    }
+  });
+
   test("HTML のコメントのかたまりは、--> の行で終わる", () => {
     const out = rewriteImages("<!-- 図 -->\n![z](img/c.png)");
     asParagraph(out);
