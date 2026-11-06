@@ -176,6 +176,28 @@ describe("rewriteImages", () => {
     ]);
   });
 
+  test("画像とほかの文字を包むリンクは、画像を名前の文字にして、外側のリンク先を開く 1 つのリンクになる", () => {
+    const md = '[![x](img/a.png) Name](docs/a.md) 前 <a href="docs/b.md"><img alt="Logo" src="img/b.png"> Name</a> 後 [文 <img src="img/c.png">][d] [普通](docs/e.md)\n\n[d]: docs/d.md';
+    const [line] = rewriteImages(md).split("\n");
+    noLeftoverBrackets(line);
+    asParagraph(line);
+    expect(line).not.toContain("<img");
+    expect(linksIn(line)).toEqual([
+      { name: "x Name", to: file("/r/docs/a.md") },
+      { name: "Logo Name", to: file("/r/docs/b.md") },
+      { name: "文 c.png", to: file("/r/docs/d.md") },
+      { name: "普通", to: file("/r/docs/e.md") },
+    ]);
+  });
+
+  test("画像とほかの文字を包む外側のリンクが #見出し だけなら、最初の画像を開く", () => {
+    for (const md of ["[Name ![x](img/a.png) ![y](img/b.png)](#top)", '<a href="#top">Name <img alt="x" src="img/a.png"></a>']) {
+      const out = rewriteImages(md);
+      noLeftoverBrackets(out);
+      expect(linksIn(out)).toEqual([{ name: md.includes("y") ? "Name x y" : "Name x", to: file("/r/img/a.png") }]);
+    }
+  });
+
   test("参照形式の外側のリンクが #見出し だけなら画像を開き、定義が無ければ中の画像だけを押せる名前にする", () => {
     const out = rewriteImages("[![図](img/a.png)][top]\n\n[top]: #top");
     noLeftoverBrackets(out.split("\n")[0]);

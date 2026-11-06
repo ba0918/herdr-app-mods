@@ -41,11 +41,17 @@ const TITLE = String.raw`(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?`;
 // 画像（インライン形式・参照形式）。1: 代替テキスト、2: インライン形式の参照先、3: 参照形式のラベル（空なら代替テキスト）。
 const IMAGE_SRC = String.raw`!\[([^\]]*)\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]*)\]|(?![\[(]))`;
 const IMAGE = new RegExp(IMAGE_SRC, "g");
-// Markdown のリンクに包まれた画像（Markdown の画像か <img>）。1〜3: Markdown の画像、4: <img> の属性、
-// 5: 外側のインライン形式のリンク先、6: 外側の参照形式のラベル（ラベルは [ ] を含められないので、省略形は無い）。
-const LINKED_IMAGE = new RegExp(String.raw`\[\s*(?:${IMAGE_SRC}|<img\b(${ATTRS})>)\s*\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]+)\])`, "g");
-const LINKED_IMG_TAG = new RegExp(String.raw`<a\b(${ATTRS})>\s*<img\b(${ATTRS})>\s*<\/a\s*>`, "gi");
 const IMG_TAG = new RegExp(String.raw`<img\b(${ATTRS})>`, "gi");
+// 画像（Markdown の画像か <img>）か、\ で打ち消した文字か、[ か ]。1〜3: Markdown の画像（IMAGE と同じ）、4: <img> の属性、
+// 5: \ で打ち消した文字。
+const IMAGE_OR_BRACKET = new RegExp(String.raw`${IMAGE_SRC}|<img\b(${ATTRS})>|(\\.)|[\[\]]`, "gi");
+// Markdown のリンク（中の文字に画像を含みうる）。1: リンクの文字、2: インライン形式のリンク先、3: 参照形式のラベル
+// （ラベルは [ ] を含められないので、省略形は無い）。画像の ![ の [ や、\ で打ち消した [ からは始めない。
+// リンクの文字の並びは、どの文字でも当てはまり方が 1 つになるように分けている（閉じないときに試し直しが増えない）。
+const LINK_TEXT = String.raw`(?:\\.|[^\[\]\\!<]|!(?!\[)|!\[[^\[\]]*\](?:\[[^\[\]]*\])?|<(?!img\b)|<img\b${ATTRS}>)*`;
+const LINK = new RegExp(String.raw`(?<![!\\])\[(${LINK_TEXT})\](?:\(\s*${DEST}${TITLE}\s*\)|\[([^\]]+)\])`, "gi");
+// 段落の中の <a href> と、その中身（入れ子の <a> は含めない）。1: <a> の属性、2: 中身。
+const ANCHOR = new RegExp(String.raw`<a\b(${ATTRS})>([^<]*(?:<(?!\/?a\b)[^<]*)*)<\/a\s*>`, "gi");
 const DEFINITION = /^ {0,3}\[([^\]]+)\]:\s*(<[^>\n]*>|\S+)/;
 
 const normalizeLabel = (label) => label.trim().replace(/\s+/g, " ").toLowerCase();
@@ -101,19 +107,36 @@ function imageSource(alt, dest, label, definitions) {
   return dest === undefined ? null : imageTarget(unwrap(dest), alt, dest.startsWith("<"));
 }
 
-// 段落の中の書き換え（Markdown のリンクにする）。
+// リンクの中身の画像を、名前の文字にする（中の画像を別のリンクにしない）。first: 最初の画像（imageTarget。無ければ null）。
+// brackets: 画像の外の [ ] を文字のままにするか。
+function namesOnly(text, definitions, brackets = false) {
+  let first = null;
+  const named = text.replace(IMAGE_OR_BRACKET, (whole, alt, dest, label, imgAttrs, escaped) => {
+    if (escaped !== undefined) return whole;
+    if (alt === undefined && imgAttrs === undefined) return brackets ? `\\${whole}` : whole;
+    const image = imgAttrs === undefined ? imageSource(alt, dest, label, definitions) : tagImage(imgAttrs);
+    if (!image) return whole;
+    first ??= image;
+    return escapeMarkdown(image.name);
+  });
+  return { text: named.trim(), first };
+}
+
+// 段落の中の書き換え（Markdown のリンクにする）。画像を包むリンク（ほかの文字と並んでいてもよい）は、画像を名前の文字にして、
+// 外側のリンク先を開く 1 つのリンクにする。外側が同じファイル内の #見出し だけなら、最初の画像を開く。
 function rewriteInline(text, definitions) {
   return text
-    .replace(LINKED_IMG_TAG, (whole, aAttrs, imgAttrs) => {
-      const href = attr(aAttrs, "href"), image = tagImage(imgAttrs);
-      if (href === null || !image) return whole;
-      return `[${escapeMarkdown(image.name)}](${markdownDest(outerHref(href, image))})`;
+    .replace(ANCHOR, (whole, aAttrs, inner) => {
+      const href = attr(aAttrs, "href"), named = namesOnly(inner, definitions, true);
+      if (href === null || !named.first) return whole;
+      return `[${named.text}](${markdownDest(outerHref(href, named.first))})`;
     })
-    .replace(LINKED_IMAGE, (whole, alt, dest, label, imgAttrs, outerDest, outerLabel) => {
-      const image = imgAttrs === undefined ? imageSource(alt, dest, label, definitions) : tagImage(imgAttrs);
+    .replace(LINK, (whole, inner, outerDest, outerLabel) => {
+      const named = namesOnly(inner, definitions);
+      // 定義の無い参照形式は、外側がリンクではないので、中の画像だけを書き換える（下の置き換えで）。
       const outer = outerDest ?? definitions.get(normalizeLabel(outerLabel));
-      if (!image || outer === undefined) return whole;
-      return `[${escapeMarkdown(image.name)}](${markdownDest(outerHref(unwrap(outer), image))})`;
+      if (!named.first || outer === undefined) return whole;
+      return `[${named.text}](${markdownDest(outerHref(unwrap(outer), named.first))})`;
     })
     .replace(IMAGE, (whole, alt, dest, label) => {
       const image = imageSource(alt, dest, label, definitions);
