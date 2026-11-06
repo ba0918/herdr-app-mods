@@ -10,7 +10,7 @@ import { tabTitles } from "./lib/tabs.js";
 import { splitBom, contentToSave, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts } from "./lib/drafts.js";
 import { resolveLink } from "./lib/markdown.js";
-import { externalNoticeAction } from "./lib/notices.js";
+import { externalNoticeAction, showsDraftChanged } from "./lib/notices.js";
 import { reloadOutcome } from "./lib/reload.js";
 import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
@@ -393,8 +393,9 @@ export default class FileViewer extends View {
       const r = await checkChanged(file.path, file.machine, draft.base).catch(() => null);
       file.restoring = false;
       if (this.file === file && r && (r.missing || r.changed)) {
-        // 知らせた変化は、外部変更としては知らせない（そこからさらに変わったら知らせる）。
-        file.notice = { kind: "draft-changed" };
+        // 知らせた変化は、外部変更としては知らせない（そこからさらに変わったら知らせる）。選択を待つ知らせが出ていれば、
+        // それを残す（保存前の確認がその変化を示している）。
+        if (showsDraftChanged(file.notice?.kind ?? null)) file.notice = { kind: "draft-changed" };
         file.draftNoticed = r.base?.hash ?? null;
       }
       cx.notify();

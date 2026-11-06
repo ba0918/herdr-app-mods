@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { externalNoticeAction } from "../mods/file-viewer/lib/notices.js";
+import { externalNoticeAction, showsDraftChanged } from "../mods/file-viewer/lib/notices.js";
 
 // 編集中のタブで、ディスクが基準から変わった（今のディスクの基準は h2）とき。
 const base = { dirty: true, changed: true, diskHash: "h2", notice: null, external: null, dismissed: null, draftNoticed: null, restoring: false };
@@ -53,5 +53,17 @@ describe("externalNoticeAction", () => {
   test("ディスクが基準から変わっていなければ何もしない", () => {
     expect(act({ changed: false })).toBe("none");
     expect(act({ changed: false, dirty: false })).toBe("none");
+  });
+});
+
+describe("showsDraftChanged", () => {
+  test("復元のあとの確認が返ったとき、保存前の確認の 3 択か作り直す確認が出ていれば、それを残して「下書きの後にディスクが変わっている」を出さない", () => {
+    expect(showsDraftChanged("conflict")).toBe(false);
+    expect(showsDraftChanged("recreate")).toBe(false);
+  });
+
+  test("ほかの知らせが無いか、知らせるだけのものなら出す", () => {
+    expect(showsDraftChanged(null)).toBe(true);
+    expect(showsDraftChanged("error")).toBe(true);
   });
 });

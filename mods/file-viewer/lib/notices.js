@@ -1,4 +1,4 @@
-// タブの中の知らせが重なったときの、外部変更の知らせの出し方。
+// タブの中の知らせが重なったときの、外部変更の知らせと「下書きの後にディスクが変わっている」の出し方。
 // 外部変更の知らせは、ほかの知らせ（保存前の確認、作り直す確認、保存の失敗、下書きの後の変化）と別に持つ。
 
 // 選択を待つ知らせ。出ている間は外部変更を知らせず、出ていた外部変更の知らせはこれに置き換える。
@@ -20,4 +20,10 @@ export function externalNoticeAction({ dirty, changed, diskHash, notice, externa
   if (external) return "update";
   if (restoring || diskHash === dismissed || diskHash === draftNoticed) return "none";
   return "show";
+}
+
+// 下書きを復元したあとのディスクの確認で、下書きの後にディスクが変わっていたとき、「下書きの後にディスクが変わっている」を出すか。
+// notice: そのとき出ているほかの知らせの種類。確認が返るまでに ctrl-s で選択を待つ知らせが開いていれば、その選択肢を消さないよう出さない。
+export function showsDraftChanged(notice) {
+  return !WAITING.has(notice);
 }
