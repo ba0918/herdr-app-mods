@@ -41,6 +41,16 @@ function splitHead(stdout, lines) {
 
 const sizeOf = (stat) => Number(stat.split("|")[0]);
 
+// 読めなかったときの理由。大きさが分かっていれば添える（開けないファイルの案内に出すため）。
+function readFailure(text, size) {
+  const e = new Error(text);
+  if (Number.isFinite(size)) e.size = size;
+  return e;
+}
+
+// 読み込みのスクリプトが途中で失敗したとき、先に出した stat の行から大きさを取る。無ければ undefined。
+const sizeBefore = (stdout) => { const m = /^(\d+)\|/.exec(stdout); return m ? Number(m[1]) : undefined; };
+
 async function localSize(path) {
   const r = await exec("powershell", ["-NoProfile", "-Command", `(Get-Item -LiteralPath ${psQuote(path)}).Length`]);
   if (r.code !== 0) return null;
@@ -58,14 +68,14 @@ export async function readText(path, on) {
     const size = await localSize(path);
     if (size === null) return { exists: false };
     if (size > TEXT_LIMIT) return { exists: true, size };
-    const text = await readTextFile(path);
+    const text = await readTextFile(path).catch((e) => { throw readFailure(String(e?.message ?? e), size); });
     if (text === null) return { exists: false };
     return { exists: true, size, text, base: { hash: textHash(text), stat: null, text } };
   }
   const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; cat -- "$1"`;
   const r = await sh(on, script, [path, String(TEXT_LIMIT)]);
   if (r.code === 4) return { exists: false };
-  if (r.code !== 0) throw new Error(r.stderr.trim() || `読み込みに失敗した（${r.code}）`);
+  if (r.code !== 0) throw readFailure(r.stderr.trim() || `読み込みに失敗した（${r.code}）`, sizeBefore(r.stdout));
   const [[stat, hash], text] = splitHead(r.stdout, 2);
   const size = sizeOf(stat);
   if (size > TEXT_LIMIT) return { exists: true, size };
@@ -174,7 +184,7 @@ export async function copyImage(path, on, prefix) {
   const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; base64 -w0 -- "$1"`;
   const r = await sh(on, script, [path, String(IMAGE_LIMIT)]);
   if (r.code === 4) return { exists: false };
-  if (r.code !== 0) throw new Error(r.stderr.trim() || "画像を読めなかった");
+  if (r.code !== 0) throw readFailure(r.stderr.trim() || "画像を読めなかった", sizeBefore(r.stdout));
   const [[stat, hash], data] = splitHead(r.stdout, 2);
   const size = sizeOf(stat);
   if (size > IMAGE_LIMIT) return { exists: true, size };

@@ -167,6 +167,7 @@ export default class FileViewer extends View {
       this.attachEditor(file, r.text);
     } catch (e) {
       file.view = { type: "unopenable", reason: "error", message: message(e) };
+      if (e?.size !== undefined) file.size = e.size;
     }
     return file;
   }
