@@ -139,6 +139,7 @@ export default class FileViewer extends View {
       this.file = file;
       this.setDirty(false);
       cx.notify();
+      if (file.cache) await this.dropOtherCaches(file.cache);
       await this.offerDrafts(file);
       cx.notify();
     });
@@ -198,7 +199,6 @@ export default class FileViewer extends View {
     file.dims = file.text !== undefined ? imageSize({ svg: file.text })
       : /svg$/i.test(file.path) ? imageSize({ svg: String.fromCharCode(...r.header.slice(0, 4096)) })
       : imageSize({ bytes: r.header });
-    await this.dropOtherCaches(file.cache);
     return file;
   }
 
@@ -212,7 +212,8 @@ export default class FileViewer extends View {
     }
   }
 
-  // 同じタブの古い画像のコピー（内容が変わる前のもの）を消す。
+  // 同じタブの古い画像のコピー（内容が変わる前のもの）を消す。読み込んだ file を採った後に呼ぶ
+  // （捨てるかもしれない読み込みの途中で呼ぶと、表示中のコピーを消してしまう）。
   async dropOtherCaches(keep) {
     for (const name of await listCache()) {
       const path = `${CACHE_DIR}/${name}`;
@@ -272,6 +273,8 @@ export default class FileViewer extends View {
         next.editor?.release();
         if (next.base && (!file.notice || file.notice.kind === "external")) file.notice = { kind: "external", hash: next.base.hash };
         cx.notify();
+        // 表示中の画像は今の file のコピーを使い続けるので、捨てる読み直しのコピーだけを消す。
+        if (next.cache && next.cache !== file.cache) await removeCache(next.cache);
         return;
       }
       file.editor?.release();
@@ -283,6 +286,7 @@ export default class FileViewer extends View {
       if (file.dirty || file.drafted !== undefined) await deleteDraft(draftName(this.token, file.machine, file.path));
       // 無くなっていたファイルが戻ってきたら、そのファイルの下書きをもう一度聞く。
       if (missing && !next.missing) { await this.offerDrafts(next); cx.notify(); }
+      if (next.cache) await this.dropOtherCaches(next.cache);
     });
   }
 
