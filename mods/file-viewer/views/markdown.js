@@ -3,7 +3,7 @@
 // 文章は TextView、図は図の要素として縦に並べる。
 import { div } from "gpui-kit";
 import { v_flex, TextView } from "gpui-base";
-import { rewriteLocalImages, splitMermaidBlocks } from "../lib/markdown.js";
+import { rewriteImages, collectDefinitions, splitMermaidBlocks } from "../lib/markdown.js";
 import { diagram } from "./mermaid.js";
 
 const PAD_X = 24;
@@ -17,15 +17,25 @@ export function diagramError({ id, message, fence, t }) {
 
 // text: 表示する Markdown。layoutOf(source, firstLine): { layout } か { error }。
 // onLink(url, cx): リンクを押したとき。onDiagram(source, firstLine): 図を押したとき。
-// box: 本文の幅を覚える入れ物（{ width }）。
+// 文章の部分は画像を押せる名前に書き換える。参照形式の定義は、分ける前の文書全体から集めて各部分に渡す
+// （図の行番号は分けたあとの元の Markdown で数えるので、書き換えは行番号に影響しない）。
+function partsOf(text, box) {
+  if (box.parts?.text === text) return box.parts.list;
+  const definitions = collectDefinitions(text);
+  const list = splitMermaidBlocks(text).map((part) => (part.type === "markdown" ? { ...part, text: rewriteImages(part.text, definitions) } : part));
+  box.parts = { text, list };
+  return list;
+}
+
+// box: 本文の幅と、書き換えた部分（同じ内容なら描き直しのたびに書き換えない）を覚える入れ物。
 export function markdownBody({ id, text, layoutOf, onLink, onDiagram, box, t }) {
   const width = Math.max(120, (box.width ?? 800) - PAD_X * 2);
-  const parts = splitMermaidBlocks(text);
+  const parts = partsOf(text, box);
   return v_flex().id(`${id}-scroll`).flex_1().min_h(0).overflow_y_scrollbar().px(PAD_X).py(16).gap(12).text_color(t.foreground)
     .on_size_change((size, cx) => { if (size.width !== box.width) { box.width = size.width; cx.notify(); } })
     .children(parts.map((part, i) => {
       if (part.type === "markdown") {
-        return TextView.markdown(`${id}-${i}`, rewriteLocalImages(part.text)).selectable(true).on_link_click((url, cx) => onLink(url, cx));
+        return TextView.markdown(`${id}-${i}`, part.text).selectable(true).on_link_click((url, cx) => onLink(url, cx));
       }
       const r = layoutOf(part.source, part.firstLine);
       if (r.error) return diagramError({ id: `${id}-${i}`, message: r.error.message, fence: part.fence, t });
