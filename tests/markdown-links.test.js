@@ -295,9 +295,13 @@ describe("rewriteImages", () => {
       ['<img src="img/a.png" alt="図">', ["a"]],
       ['  <img src="img/a.png" alt="図" width="200" />  ', ["a"]],
       ['本文\n\n<img src="img/a.png" alt="図">\n<img src="img/b.png" alt="B">', ["a", "b"]],
+      ['- 項目\n\n  <img src="img/a.png" alt="図">', ["a"]],
     ]) {
       const block = rewriteImages(md).split("\n\n").pop();
-      expect(block.split("\n")[0]).toMatch(/^ {0,3}<a href="[^"]*">\s*$/);
+      const [first, ...rest] = block.split("\n");
+      expect(first).toMatch(/^ {0,3}<a href="[^"]*">\s*$/);
+      // リストの項目の中では、続きの行も同じだけ下げないと項目の外の段落になる。
+      for (const line of rest) expect(line.startsWith(first.match(/^ */)[0])).toBe(true);
       expect(block).not.toContain("<img");
       expect(anchorsIn(block)).toEqual(files.map((f) => file(`/r/img/${f}.png`)));
     }
