@@ -65,7 +65,18 @@ export function layoutFlowchart(graph) {
   g.setDefaultEdgeLabel(() => ({}));
   for (const node of graph.nodes) g.setNode(node.id, nodeSize(node));
   const clusterId = (id) => `\u0000cluster:${id}`;
-  const used = graph.subgraphs.filter((s) => s.nodes.length || graph.subgraphs.some((c) => c.parent === s.id));
+  // 中身のある subgraph だけを枠にする。子の subgraph しか持たないものは、その子に中身があるときだけ。
+  // 中身の無い枠を dagre に渡すと、位置と大きさが決まらない（NaN になる）。
+  const filled = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const s of graph.subgraphs) {
+      if (filled.has(s.id) || !(s.nodes.length || graph.subgraphs.some((c) => c.parent === s.id && filled.has(c.id)))) continue;
+      filled.add(s.id);
+      grew = true;
+    }
+  }
+  const used = graph.subgraphs.filter((s) => filled.has(s.id));
   for (const s of used) g.setNode(clusterId(s.id), {});
   for (const s of used) {
     if (s.parent && used.some((p) => p.id === s.parent)) g.setParent(clusterId(s.id), clusterId(s.parent));
@@ -211,8 +222,12 @@ export function layoutSequence(diagram) {
         });
         y += 10;
         const labelW = textWidth(`${item.type} ${item.sections[0].label}`) + 40;
-        if (!Number.isFinite(inner.min)) { inner.min = xs[0] - 20; inner.max = xs[xs.length - 1] + 20; }
         const pad = 12;
+        if (!Number.isFinite(inner.min)) {
+          // 中身の無い枠は参加者の列全体に、参加者もいなければ見出しの幅だけで置く。
+          if (xs.length) { inner.min = xs[0] - 20; inner.max = xs[xs.length - 1] + 20; }
+          else { inner.min = MARGIN + pad; inner.max = inner.min; }
+        }
         block.x = inner.min - pad;
         block.width = Math.max(inner.max - inner.min + pad * 2, labelW);
         block.height = y - block.y;
