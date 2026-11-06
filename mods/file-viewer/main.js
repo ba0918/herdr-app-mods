@@ -257,9 +257,17 @@ export default class FileViewer extends View {
     const file = this.file;
     if (!file) return;
     const key = this.loadedKey;
+    const before = file.editor?.value();
     cx.spawn(async (cx) => {
       const next = await this.read(file.path, file.machine);
-      if (this.loadedKey !== key) { next.editor?.release(); return; }
+      if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); return; }
+      // 読み込みの間に打った文字は捨てない。読み直さずに、ディスクが変わったことを知らせる。
+      if (file.editor && file.editor.value() !== before) {
+        next.editor?.release();
+        if (next.base && (!file.notice || file.notice.kind === "external")) file.notice = { kind: "external", hash: next.base.hash };
+        cx.notify();
+        return;
+      }
       file.editor?.release();
       if (next.zoom && file.zoom) next.zoom = file.zoom;
       this.file = next;
@@ -401,8 +409,11 @@ export default class FileViewer extends View {
   }
 
   // base を基準に書く（null ならファイルを作る）。食い違えば確認に戻す。
+  // 書いている間（他 machine では exec を何度も往復する）にも編集できるので、書いた内容を基準にし、
+  // それより新しい編集は未保存のまま残す。
   async write(file, base) {
-    const content = preserveLineEndings(file.text ?? "", file.editor.value());
+    const value = file.editor.value();
+    const content = preserveLineEndings(file.text ?? "", value);
     try {
       file.base = await writeText(file.path, file.machine, content, base);
     } catch (e) {
@@ -412,14 +423,20 @@ export default class FileViewer extends View {
       return;
     }
     file.text = content;
-    file.shown = file.editor.value();
+    file.shown = value;
     file.missing = false;
     file.notice = null;
     file.dismissed = null;
-    this.setDirty(false);
-    // 保存したら、このタブの下書きは消す。
-    file.drafted = undefined;
-    await deleteDraft(draftName(this.token, file.machine, file.path));
+    const dirty = file.editor.value() !== value;
+    this.setDirty(dirty);
+    if (dirty) {
+      // 下書きは残し、次の更新で新しい基準のものに書き直す。
+      file.drafted = null;
+    } else {
+      // 保存したら、このタブの下書きは消す。
+      file.drafted = undefined;
+      await deleteDraft(draftName(this.token, file.machine, file.path));
+    }
     // SVG のソースを保存したら、画像表示もコピーし直す。
     if (file.cache) {
       const r = await copyImage(file.path, file.machine, this.token).catch(() => null);
