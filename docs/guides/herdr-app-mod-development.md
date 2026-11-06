@@ -142,9 +142,19 @@ cp -r mods/<name>/. "$WINHOME/.config/herdr-app/mods/<name>/"
 
 パネル側の mod から「大きく開く」ボタンで pane / tab を開く、という組み合わせができる。
 
+mod のタブを開いたときの振る舞い（実機で確認）:
+
+- `run()` は `null` を返すので、mod から `tab.new` しても新しいタブの id は分からない。直後の `spaces()` にもまだ新しいタブは出ない。CLI の `herdr-app do tab.new` は `{space, tab, pane}` を返す。
+- `tab.new` は新しいタブを space の末尾に作り、表示をそのタブに切り替える（別の space を指定しても、その space に切り替わる）。位置は `tab.move {id, index}` で動かす。
+- 開いたコピーの `init(props)` の第 1 引数は `null` で、props は `props()` で読む。`init` の時点の `spaces()` / `focused()` / `panes()` はまだ開く前の状態（前に選ばれていたタブ、新しいペインは無い）を指す。最初の `render` では `panes()` に自分のペインがあり、`focused().pane` が自分のペインになっている。
+- そこで、同じ mod のタブが複数あるときにコピーが自分のタブを特定するには、props に一意な token を入れておき、最初の `render` で「どの token も名乗っていない、その mod のペイン」を自分のものとして `shared` に記録する（複数あれば `focused().pane`）。記録したペインの `tab` に `tab.rename` / `tab.move` を送れば、コピーが自分のタブ名と位置を変えられる。
+- コピーが別のタブを閉じる `tab.close` は、表示中でない space のタブでも表示を切り替えない。
+
 ### 3. キー割り当て
 
 `keys.json` の `"mod:<name>"` セクション、または `"<mod>.<command>"` アクションで mod にコマンドを送り、mod 側は `nextCommand()` で受ける。`keys.json` は少しでも編集すると以後の既定ショートカット更新が止まる点に注意。
+
+`herdr-app do <mod>.<command>` でも表示中のコピーの `nextCommand()` に届く（実機で確認）。開発中、クリックやキー入力の代わりに処理を呼ぶ使い捨ての確かめ方に使える。
 
 ## 実装パターン（同梱 mod から）
 
@@ -153,26 +163,33 @@ cp -r mods/<name>/. "$WINHOME/.config/herdr-app/mods/<name>/"
 - **一覧の取得**: `git status --porcelain=v1 -z --untracked-files=all`、行数は `git diff HEAD --numstat -z`（HEAD が無いリポジトリは `--cached` と作業ツリーを分けて取得）。
 - **長いリスト**: `v_virtual_list(id, count, rowHeight, key, render)` で見えている行だけ描く。縦スクロールバーは `Scrollbar.vertical(id)`、横スクロールは外側の `overflow_x_scrollbar()`。
 - **ファイル表示**: `EditorState.new({ language, value, readonly: true, font_family, syntax })` + `Editor.new(state)`。`EditorState` は `init` かイベントハンドラ内で作り、不要になったら `release()` する。
-- **変化の検知**: app 側のフォルダなら `watchFolder(dir)` のループ、WSL など他 machine ならタイマーでポーリング。
+- **変化の検知**: app 側のフォルダなら `watchFolder(dir)` のループ、WSL など他 machine ならタイマーでポーリング。WSL への `exec` の往復は 1 回 35〜40 ms（`stat` と `sha256sum` を含めて、実機で確認）。
+- **他の mod と処理を共有する**: mod は自分のフォルダの外を import できない（`check` が「resolves outside the application directory」で失敗する）。このリポジトリでは、共有するファイルをシンボリックリンクで置き、`scripts/deploy.sh` がリンク先の中身をコピーする。
 
 ## 制約
 
 | 項目 | 内容 |
 |---|---|
-| `exec` | 30 秒、出力 8 MiB まで |
+| `exec` | 30 秒、出力 8 MiB まで。mod の `exec` は Windows 側で `hc` を起動するので、引数を含むコマンドライン全体が UTF-16 で約 32,000 文字を超えると `cannot run hc: ... (os error 206)` で起動できない。`"` はエスケープで 2 文字になる（ASCII 32,600 文字・日本語 30,000 文字は通り、`"` 20,000 文字は失敗。実機で確認）。標準出力は NUL もそのまま返る |
 | `readTextFile` | 1 MiB まで |
 | `writeTextFile` / `watchFolder` / `pickFolder` | app 側（Windows）のみ |
 | `Editor` | 行番号・折りたたみ・意味的な色分け（keyword, string など）はある。`EditorState` のオプションとメソッドに行単位の背景色・装飾は無い。行へのスクロール API も見当たらない（`scroll_to_item` は `v_virtual_list` 用の `VirtualListScrollHandle` にだけある） |
 | テキスト装飾 | 1 つのテキストの中で範囲ごとに色を変える API は型定義に見当たらない。色を分けたい単位で要素を分ける |
 | 構文解析 | トークナイザ等の API は公開されていない。`Editor` の外で色付けするなら JS 側で行う |
-| 外部ライブラリ | 相対 import で同梱した純 JS（ES modules）は使える。上記の限定的な Node 互換モジュールの範囲を超える Node API に依存するものは動かない |
+| 外部ライブラリ | 相対 import で同梱した純 JS（ES modules）は使える。上記の限定的な Node 互換モジュールの範囲を超える Node API に依存するものは動かない。`Function` コンストラクタ（`Function("return this")()` など）は禁じられていて実行時に例外になる（lodash がこれを使う。実機で確認） |
 | `image(path)` | app home からの相対パスだけ表示できる。絶対パスと、app home の中の名前が「.」で始まるフォルダ（例: `mods/<name>/.cache/`）の下の画像は表示されない（実機で確認）。他 machine の画像は、`exec` で base64 にして運び、app home に書き出してから表示する |
-| `TextView.markdown` | 見出し・表・コードブロック・リンクは表示される。ローカルの画像（相対パス・絶対パス）は表示されない（実機で確認） |
+| `TextView.markdown` | `gpui-base` から import する（`gpui-kit` には無い）。見出し・表・コードブロック・リンクは表示される。ローカルの画像（相対パス・絶対パス）は表示されない（実機で確認） |
+| 線や図形を描く | `PathBuilder.stroke(幅)` / `PathBuilder.fill()` に `move_to` / `line_to` / `add_polygon` / `dash_array` で組んだ path を、`window.paint_path(path, 色).absolute().top(0).left(0).size_full()` として重ねる。座標は、その要素の左上を原点とする論理 px（`"50%"` のような割合も使える）。mod の中の `window` は GPUI の窓で、`herdr` の `window()` とは別物（実機で確認） |
+| 位置指定の文字 | 同じ親の中で `absolute()` にした文字だけの要素が、条件によって描かれないことがあった（Mermaid のシーケンス図で、上段の参加者の箱に重ねた名前だけが出なかった）。名前を箱の要素の子にすると出た。原因は未確認 |
+| `image(path)` の形式 | PNG / JPEG / GIF / BMP / ICO / WebP（静止画とアニメーション）/ SVG を表示できる（app home の下にコピーして、実機で確認） |
+| `fs/promises` | `${appHome()}/...` の形（`/` 区切り）で app home の下の `mkdir` / `writeFile` / `readFile` / `readdir` / `exists` / `unlink` が使える。無いフォルダの `readdir` は例外になる（実機で確認） |
 | `fs/promises` の `writeFile` | 文字列は書ける。`Uint8Array` / `Buffer` を渡すと 0 バイトのファイルになる（実機で確認）。バイナリは base64 の文字列で書き、PowerShell など外部のコマンドでデコードする |
 | `Buffer` / `crypto` | `Buffer.toString("base64")` は空文字列を返す。`createHash().update()` は文字列なら正しく、`Buffer` を渡すと空入力の値になる（実機で確認）。base64 への変換は `btoa`（Latin-1 の文字列のみ）を使う。`TextEncoder` は無い |
-| 他 machine への書き込み | `exec` の引数で内容を渡す。Linux の 1 引数の上限（120 KB は通り、140 KB は失敗）があるので、小分けにして一時ファイルへ追記し、最後に `mv` で置き換える。置き換える直前にディスク上のハッシュ（`sha256sum`）を比べれば、途中で外から書き換えられていたときに止められる。WSL へ約 370 KB を 11 回で約 0.6 秒（どちらも実機で確認） |
-| 閉じるときの呼び出し | `View.close(cx)` は、ペイン・タブ・overlay が消えるときとアプリ終了時に 1 回だけ呼ばれる最後の呼び出しで、閉じるのを止める手段は無い（型定義と AGENTS.md）。後始末は最大 250 ms。表示していないコピーや非アクティブなタブには呼ばれないとも書かれており、終了時に裏のタブで呼ばれるかは読み切れない |
-| `check` | `init` の中で始めた非同期処理（`cx.spawn`）は実行されない。非同期の動きは実機で確かめる |
+| 他 machine への書き込み | `exec` の引数で内容を渡す。上の Windows のコマンドラインの長さの上限が先に効くので、1 回に渡すのは引数としての長さで 24,000 文字程度に抑え（Linux の 1 引数の上限 128 KiB にも収まる）、一時ファイルへ追記して、最後に `mv` で置き換える。置き換える直前にディスク上のハッシュ（`sha256sum`）を比べれば、途中で外から書き換えられていたときに止められる。WSL へ約 416 KB を約 0.6 秒（実機で確認） |
+| 閉じるときの呼び出し | `View.close(cx)` は、ペイン・タブ・overlay が消えるときとアプリ終了時に 1 回だけ呼ばれる最後の呼び出しで、閉じるのを止める手段は無い（型定義と AGENTS.md）。後始末は最大 250 ms。表示していないコピーや非アクティブなタブには呼ばれないとも書かれており、終了時に裏のタブで呼ばれるかは読み切れない。表示中のタブを `tab.close` で閉じたときに呼ばれ、その中の `fs/promises` の書き込みが終わることは実機で確認した |
+| `check` | `init` の中で始めた非同期処理（`cx.spawn`）は実行されない。非同期の動きは実機で確かめる。初回描画に時間がかかると `interrupted` で失敗する（数十万文字を 1 文字ずつ数える処理を `render` で何度も呼ぶと起きた） |
+| `EditorState` | `set_value()` で内容を変えても `"change"` は呼ばれない。`soft_wrap` などのオプションを後から変えるメソッドは無いので、内容を引き継いで作り直す |
+| `herdr-app shot` | 窓が描き直されない間は、最後に描いたフレームを返し続ける（作業中に数十分続いたことがある。最小化などの原因は未確認）。続けて撮った PNG がまったく同じなら、表示の確認には使えない |
 | mod の追加 | `mods/<name>/` を置いた直後は `tab.new {mod}` が `no mod "<name>" in mods/` で失敗することがある。数秒おいて再試行すると通る |
 
 ## Orca 並みのビューアに向けた見通し
