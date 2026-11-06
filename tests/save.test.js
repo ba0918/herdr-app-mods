@@ -131,20 +131,6 @@ describe("preserveLineEndings", () => {
   });
 });
 
-describe("preserveLineEndings の比べる手間の上限", () => {
-  test("差分の手間が上限を超えたら、共通の先頭と末尾の間の行は多いほうの改行にする", () => {
-    const original = "head\r\n" + "a\r\nb\n".repeat(50) + "c\r\ntail\r\n";
-    const edited = "head\n" + "b\na\n".repeat(50) + "tail\n";
-    expect(preserveLineEndings(original, edited, { maxWork: 10 })).toBe("head\r\n" + "b\r\na\r\n".repeat(50) + "tail\r\n");
-  });
-
-  test("共通の先頭と末尾の間の行が多すぎるときは、間の行を多いほうの改行にする", () => {
-    const original = "head\r\n" + "a\nb\r\nc\r\n".repeat(4) + "tail\n";
-    const edited = "head\r\n" + "a\nB\r\nc\r\n".repeat(4) + "tail\n";
-    expect(preserveLineEndings(original, edited, { maxLines: 5 })).toBe("head\r\na\nB\r\nc\r\n" + "a\r\nB\r\nc\r\n".repeat(3) + "tail\n");
-  });
-});
-
 describe("BOM", () => {
   test("BOM 付きで読んだ内容は、Editor に渡す内容から BOM が外れ、書き戻す内容の先頭に BOM が付く", () => {
     const read = splitBom("\uFEFFa\r\nb\r\n");

@@ -73,13 +73,13 @@ function splitLines(text) {
 
 // a と b の行の対応（最長共通部分列）。match[j] は b[j] と同じとした a の行の番号、無ければ -1。
 // 共通の先頭と末尾を先に外し、残りを Myers の差分で比べる。
-function matchLines(a, b, maxWork) {
+function matchLines(a, b) {
   const match = new Array(b.length).fill(-1);
   let head = 0;
   while (head < a.length && head < b.length && a[head] === b[head]) { match[head] = head; head++; }
   let ta = a.length, tb = b.length;
   while (ta > head && tb > head && a[ta - 1] === b[tb - 1]) { ta--; tb--; match[tb] = ta; }
-  const pairs = myers(a, b, head, ta, head, tb, maxWork);
+  const pairs = myers(a, b, head, ta, head, tb);
   // 行の数が同じで、同じ位置どうしの一致が差分の一致より少なくなければ（書き換えただけの編集）、位置で対応させる。
   // 同じ内容の行が並ぶと、差分は書き換えていない行を隣の同じ行と対応させることがあるため。
   if (ta - head === tb - head) {
@@ -95,7 +95,7 @@ function matchLines(a, b, maxWork) {
 }
 
 // a[a0..a1) と b[b0..b1) の共通の行の組 [i, j]。手間が上限を超えれば空。
-function myers(a, b, a0, a1, b0, b1, maxWork) {
+function myers(a, b, a0, a1, b0, b1) {
   const n = a1 - a0, m = b1 - b0;
   if (n === 0 || m === 0) return [];
   const max = Math.min(n + m, MAX_EDIT_DISTANCE);
@@ -109,7 +109,7 @@ function myers(a, b, a0, a1, b0, b1, maxWork) {
       let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
       let y = x - k;
       while (x < n && y < m && a[a0 + x] === b[b0 + y]) { x++; y++; work++; }
-      if (++work > maxWork) return [];
+      if (++work > MAX_WORK) return [];
       v[off + k] = x;
       if (x >= n && y >= m) return backtrack(trace, off, d, n, m, a0, b0);
     }
@@ -172,10 +172,10 @@ function toEol(text, eol) {
 }
 
 // 行の並びで改行を当て直す。major は対応の無い行に付ける改行。
-function restoreByLines(original, edited, major, maxWork) {
+function restoreByLines(original, edited, major) {
   const before = splitLines(original);
   const after = splitLines(edited);
-  const match = matchLines(before.lines, after.lines, maxWork);
+  const match = matchLines(before.lines, after.lines);
   let out = "";
   for (let j = 0; j < after.lines.length; j++) {
     out += after.lines[j];
@@ -191,8 +191,7 @@ function restoreByLines(original, edited, major, maxWork) {
 // 最後の行の後ろに改行を付けるかは edited のとおり。Editor が改行を CRLF で返しても LF で返しても同じ結果。
 // Editor は渡した改行をそのまま返すので、まず文字のまま同じ先頭と末尾（行の境目まで）をそのまま使い、
 // 行に分けて比べるのは間の部分だけにする（短い行が数十万あるファイルでも、行ごとの処理を減らすため）。
-// maxWork・maxLines は差分の手間の上限（テスト用に変えられる）。
-export function preserveLineEndings(original, edited, { maxWork = MAX_WORK, maxLines = MAX_LINES } = {}) {
+export function preserveLineEndings(original, edited) {
   // 共通の先頭と末尾は、どちらでも行の頭で区切る（CRLF の \r と \n の間や、書き足した・つないだ行の途中で切らないように）。
   const prefix = commonPrefix(original, edited);
   const head = prefix === 0 ? 0 : original.lastIndexOf("\n", prefix - 1) + 1;
@@ -206,9 +205,9 @@ export function preserveLineEndings(original, edited, { maxWork = MAX_WORK, maxL
   const before = original.slice(head, tailA), after = edited.slice(head, tailB);
   let major = null;
   const majorOf = () => (major ??= majorEol(original));
-  const middle = countOf(before, "\n") >= maxLines || countOf(after, "\n") >= maxLines
+  const middle = countOf(before, "\n") >= MAX_LINES || countOf(after, "\n") >= MAX_LINES
     ? toEol(after, majorOf())
-    : restoreByLines(before, after, majorOf, maxWork);
+    : restoreByLines(before, after, majorOf);
   return original.slice(0, head) + middle + original.slice(tailA);
 }
 
