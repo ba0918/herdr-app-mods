@@ -2,7 +2,7 @@
 // 他 machine（WSL・ssh）は exec で sh を動かし、基準（内容の sha256）は machine 側の sha256sum で取る。
 // このコンピュータ（machine が null）は readTextFile / writeTextFile と、文字列のハッシュを使う。
 import { exec, readTextFile, writeTextFile, appHome } from "herdr";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import * as fs from "fs/promises";
 import { TEXT_LIMIT, IMAGE_LIMIT, extension } from "./lib/kind.js";
 import { splitForWrite } from "./lib/save.js";
@@ -13,6 +13,9 @@ export const DRAFTS_DIR = "file-viewer-drafts";
 const HEADER_BYTES = 256 * 1024;
 
 const STAT = `stat -L -c '%s|%y' -- "$1"`;
+// 保存の各スクリプトの先頭。$1 のパス（リンクなら指す先）を real、そのフォルダを d、
+// 同じフォルダの一時ファイル（接尾辞 $2）を t にする。$(...) は末尾の改行を落とすので x を足して戻す。
+const LOCATE = `real=$( { readlink -f -- "$1" 2>/dev/null || printf '%s\\n' "$1"; }; printf x); real=\${real%?x}; case $real in */*) d=\${real%/*}; d=\${d:-/} ;; *) d=. ;; esac; t="$d/.\${real##*/}.file-viewer-$2"`;
 
 // 保存を止めた理由。stale: ディスクが基準から変わった、missing / exists: ファイルの有無が想定と違う。
 export class WriteConflict extends Error {
@@ -59,7 +62,7 @@ export async function readText(path, on) {
     if (text === null) return { exists: false };
     return { exists: true, size, text, base: { hash: textHash(text), stat: null, text } };
   }
-  const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum -- "$1" | cut -d' ' -f1; cat -- "$1"`;
+  const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; cat -- "$1"`;
   const r = await sh(on, script, [path, String(TEXT_LIMIT)]);
   if (r.code === 4) return { exists: false };
   if (r.code !== 0) throw new Error(r.stderr.trim() || `読み込みに失敗した（${r.code}）`);
@@ -81,7 +84,7 @@ export async function checkChanged(path, on, base) {
   const stat = r.stdout.trim();
   if (stat === "missing") return { missing: true };
   if (base && stat === base.stat) return { missing: false, changed: false, base };
-  const h = await sh(on, `sha256sum -- "$1" | cut -d' ' -f1`, [path]);
+  const h = await sh(on, `sha256sum < "$1" | cut -d' ' -f1`, [path]);
   if (h.code !== 0) return { missing: true };
   const hash = h.stdout.trim();
   return { missing: false, changed: hash !== base?.hash, base: { hash, stat } };
@@ -96,30 +99,32 @@ export async function writeText(path, on, text, base) {
     catch (e) { throw /stale|match|exist/i.test(String(e)) ? new WriteConflict(base ? "stale" : "exists") : e; }
     return { hash: textHash(text), stat: null, text };
   }
-  const prep = await sh(on, `real=$(readlink -f -- "$1" 2>/dev/null || printf %s "$1"); [ -e "$real" ] && [ ! -w "$real" ] && { echo "書き込み権限が無い" >&2; exit 2; }; d=$(dirname -- "$real"); [ -w "$d" ] || { echo "フォルダに書き込めない: $d" >&2; exit 2; }; t="$d/.$(basename -- "$real").file-viewer-$$"; : > "$t" || exit 1; printf '%s\\n%s\\n' "$real" "$t"`, [path]);
+  // 実体のパスと一時ファイルの名前は、どのスクリプトでも引数（パスと JS で決めた接尾辞）から組み立て直す。
+  // 標準出力でパスを読み戻すと、改行を含む名前で別のファイルを取り違えるため。
+  const suffix = randomUUID();
+  const prep = await sh(on, `${LOCATE}; [ -e "$real" ] && [ ! -w "$real" ] && { echo "書き込み権限が無い" >&2; exit 2; }; [ -w "$d" ] || { printf 'フォルダに書き込めない: %s\\n' "$d" >&2; exit 2; }; if [ -e "$t" ] || [ -L "$t" ]; then echo "一時ファイルの名前がすでに使われている" >&2; exit 1; fi; set -C; printf '' > "$t" || exit 1`, [path, suffix]);
   if (prep.code !== 0) throw new Error(prep.stderr.trim() || "保存の準備に失敗した");
-  const [[real, temp]] = splitHead(prep.stdout, 2);
   try {
     for (const part of splitForWrite(text)) {
-      const r = await sh(on, `printf '%s' "$2" >> "$1"`, [temp, part]);
+      const r = await sh(on, `${LOCATE}; [ -f "$t" ] && [ ! -L "$t" ] || { echo "一時ファイルが無い" >&2; exit 1; }; printf '%s' "$3" >> "$t"`, [path, suffix, part]);
       if (r.code !== 0) throw new Error(r.stderr.trim() || "書き込みに失敗した");
     }
   } catch (e) {
-    await sh(on, `rm -f -- "$1"`, [temp]).catch(() => {});
+    await sh(on, `${LOCATE}; rm -f -- "$t"`, [path, suffix]).catch(() => {});
     throw e;
   }
-  const finish = `real=$1; t=$2; want=$3
+  const finish = `${LOCATE}; want=$3
 if [ -n "$want" ]; then
   [ -e "$real" ] || { rm -f -- "$t"; echo missing; exit 3; }
-  [ "$(sha256sum -- "$real" | cut -d' ' -f1)" = "$want" ] || { rm -f -- "$t"; echo stale; exit 3; }
+  [ "$(sha256sum < "$real" | cut -d' ' -f1)" = "$want" ] || { rm -f -- "$t"; echo stale; exit 3; }
   chmod --reference="$real" -- "$t" 2>/dev/null
 else
   [ -e "$real" ] && { rm -f -- "$t"; echo exists; exit 3; }
 fi
-h=$(sha256sum -- "$t" | cut -d' ' -f1)
+h=$(sha256sum < "$t" | cut -d' ' -f1)
 mv -f -- "$t" "$real" || { rm -f -- "$t"; exit 1; }
 printf '%s\\n' "$h"; ${STAT.replace('"$1"', '"$real"')}`;
-  const r = await sh(on, finish, [real, temp, base?.hash ?? ""]);
+  const r = await sh(on, finish, [path, suffix, base?.hash ?? ""]);
   if (r.code === 3) throw new WriteConflict(r.stdout.trim());
   if (r.code !== 0) throw new Error(r.stderr.trim() || "置き換えに失敗した");
   const [[hash, stat]] = splitHead(r.stdout, 2);
@@ -144,7 +149,7 @@ export async function copyImage(path, on, prefix) {
     if (Number(size) > IMAGE_LIMIT) return { exists: true, size: Number(size) };
     return { exists: true, size: Number(size), base: { hash, stat: null }, cache: `${CACHE_DIR}/${name}`, header: base64ToBytes(header) };
   }
-  const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum -- "$1" | cut -d' ' -f1; base64 -w0 -- "$1"`;
+  const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; base64 -w0 -- "$1"`;
   const r = await sh(on, script, [path, String(IMAGE_LIMIT)]);
   if (r.code === 4) return { exists: false };
   if (r.code !== 0) throw new Error(r.stderr.trim() || "画像を読めなかった");
