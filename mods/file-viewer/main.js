@@ -13,7 +13,7 @@ import { imageSize } from "./lib/image.js";
 import { parseMermaid } from "./lib/mermaid/parse.js";
 import { layoutFlowchart, layoutSequence } from "./lib/mermaid/layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
-import { readText, checkChanged, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR } from "./io.js";
+import { readText, checkChanged, statOf, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR } from "./io.js";
 import { markdownBody, diagramError } from "./views/markdown.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
@@ -156,7 +156,7 @@ export default class FileViewer extends View {
       }
       file.size = r.size;
       file.view = kind({ path, size: r.size, text: r.text });
-      if (file.view.type === "unopenable") return file;
+      if (file.view.type === "unopenable") { await this.sign(file); return file; }
       file.text = r.text;
       file.base = r.base;
       file.readonly = looksNonUtf8(r.text);
@@ -165,6 +165,11 @@ export default class FileViewer extends View {
       file.view = { type: "unopenable", reason: "error", message: message(e) };
     }
     return file;
+  }
+
+  // 開けないファイルの案内のタブは基準（内容のハッシュ）を持たないので、大きさと更新時刻で変化を見る。
+  async sign(file) {
+    file.sig = await statOf(file.path, file.machine).catch(() => null);
   }
 
   // 画像は app home にコピーして表示する。SVG はソースも読んで Editor に入れる（1 MiB まで）。
@@ -177,7 +182,7 @@ export default class FileViewer extends View {
     }
     file.size = r.size;
     file.view = kind({ path: file.path, size: r.size });
-    if (file.view.type === "unopenable") return file;
+    if (file.view.type === "unopenable") { await this.sign(file); return file; }
     file.cache = r.cache;
     file.base = r.base;
     file.zoom = new Zoom();
@@ -357,6 +362,7 @@ export default class FileViewer extends View {
   poll(cx) {
     const file = this.file;
     if (!file || file.loading || file.polling || file.saving || !this.visible()) return;
+    if (file.view?.type === "unopenable" && file.view.reason !== "missing") { this.pollUnopenable(file, cx); return; }
     if (!file.base && !file.missing) return;
     file.polling = true;
     const key = this.loadedKey, base = file.base;
@@ -381,6 +387,22 @@ export default class FileViewer extends View {
         cx.notify();
       } catch {
         // 一時的な失敗（machine に届かない等）は次の確認で取り直す。
+      } finally {
+        file.polling = false;
+      }
+    });
+  }
+
+  // 開けないファイルの案内（上限超え・バイナリ・読み込みの失敗）のタブ。変わったか、前回が読み込みの失敗なら読み直す。
+  pollUnopenable(file, cx) {
+    file.polling = true;
+    cx.spawn(async (cx) => {
+      try {
+        const sig = await statOf(file.path, file.machine);
+        if (this.file !== file) return;
+        if (file.view.reason === "error" || sig !== file.sig) this.reload(cx);
+      } catch {
+        // machine に届かない等は次の確認で取り直す。
       } finally {
         file.polling = false;
       }

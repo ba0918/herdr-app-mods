@@ -99,6 +99,19 @@ export async function checkChanged(path, on, base, { bytes = false } = {}) {
   return { missing: false, changed: hash !== base?.hash, base: { hash, stat } };
 }
 
+// 開けないファイル（上限超え・バイナリ）が変わったかを見るための、大きさと更新時刻。無ければ null。
+export async function statOf(path, on) {
+  if (!on) {
+    const r = await exec("powershell", ["-NoProfile", "-Command",
+      `$i=Get-Item -LiteralPath ${psQuote(path)} -ErrorAction SilentlyContinue; if ($i) { "$($i.Length)|$($i.LastWriteTimeUtc.Ticks)" } else { 'missing' }`]);
+    const out = r.stdout.trim();
+    return r.code !== 0 || out === "missing" || !out ? null : out;
+  }
+  const r = await sh(on, `${STAT} 2>/dev/null || echo missing`, [path]);
+  const out = r.stdout.trim();
+  return out === "missing" || !out ? null : out;
+}
+
 // 基準と同じなら書く。base が null なら、ファイルが無いときだけ作る。
 // 他 machine は同じフォルダの一時ファイルに小分けに追記し、直前にハッシュを比べてから mv で置き換える。
 // 戻り値は新しい基準。食い違いは WriteConflict、書けないときは Error（理由つき）。
