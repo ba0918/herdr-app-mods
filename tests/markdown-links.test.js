@@ -1,6 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { resolveLink, rewriteImages, collectDefinitions, splitMermaidBlocks } from "../mods/file-viewer/lib/markdown.js";
 
+// 書き換えた Markdown の中の押せるリンク（Markdown のリンクと HTML の <a>）の名前と、押したときの行き先。
+function linksIn(text, from = "/r/README.md") {
+  const unHtml = (t) => t.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const unMd = (t) => t.replace(/\\([\\[\]])/g, "$1");
+  return [...text.matchAll(/<a href="([^"]*)">([^<]*)<\/a>|\[((?:\\.|[^\]\\])*)\]\((<[^>]*>|[^)\s]+)\)/g)].map((m) => {
+    const href = m[1] !== undefined ? unHtml(m[1]) : m[4].replace(/^<(.*)>$/, "$1");
+    return { name: m[1] !== undefined ? unHtml(m[2]) : unMd(m[3]), to: resolveLink({ from, href }) };
+  });
+}
+const file = (path) => ({ type: "file", path });
+
 describe("resolveLink", () => {
   const from = "/r/README.md";
 
@@ -117,14 +128,34 @@ describe("rewriteImages", () => {
     expect(rewriteImages(md)).toBe("```md\n![x](a.png)\n```\n`![y](b.png)` [z](fv-image:c.png)\n<!-- ![c](d.png)\n<img src=\"e.png\"> -->\n後 <!-- <img src=\"f.png\"> --> [g](fv-image:g.png)");
   });
 
-  test("<picture> の中の <source> と style 属性の background-image は書き換えず、<img> は書き換える", () => {
+  // <picture> の中は押せない文字になる（文言は仕様が任せている）。押せるリンクが無く、名前と場所が出ることだけを見る。
+  const unclickable = (text) => {
+    expect(text).not.toContain("<img");
+    expect(text).not.toContain("<a ");
+    expect(text).not.toContain("](");
+  };
+
+  test("<picture> の中の <source> と style 属性の background-image は書き換えず、<img> は押せない名前と場所になる", () => {
     const md = '<picture><source srcset="a.webp" type="image/webp"><img src="a.png" alt="A"></picture>\n\n<div style="background-image: url(bg.png)">x</div>';
-    expect(rewriteImages(md)).toBe('<picture><source srcset="a.webp" type="image/webp">画像: A（a.png）</picture>\n\n<div style="background-image: url(bg.png)">x</div>');
+    const [picture, blank, div] = rewriteImages(md).split("\n");
+    expect(picture.startsWith('<picture><source srcset="a.webp" type="image/webp">')).toBe(true);
+    expect(picture.endsWith("</picture>")).toBe(true);
+    const inside = picture.slice('<picture><source srcset="a.webp" type="image/webp">'.length, -"</picture>".length);
+    unclickable(inside);
+    expect(inside).toContain("A");
+    expect(inside).toContain("a.png");
+    expect([blank, div]).toEqual(["", '<div style="background-image: url(bg.png)">x</div>']);
   });
 
-  test("<picture> の中の <img> は（部品が <a> を押せるリンクにしないので）押せない文字「画像: 名前（場所）」になる。行をまたいでも同じ", () => {
+  test("<picture> の中の <img> は（部品が <a> を押せるリンクにしないので）押せない名前と場所になる。行をまたいでも同じ", () => {
     const md = '<picture>\n  <source media="(prefers-color-scheme: dark)" srcset="d.png">\n  <img alt="ロゴ" src="img/logo.png">\n</picture>\n\n<p>\n<img src="img/a.png" alt="図">\n</p>';
-    expect(rewriteImages(md)).toBe('<picture>\n  <source media="(prefers-color-scheme: dark)" srcset="d.png">\n  画像: ロゴ（img/logo.png）\n</picture>\n\n<p>\n<a href="fv-image:img/a.png">図</a>\n</p>');
+    const lines = rewriteImages(md).split("\n");
+    expect(lines.slice(0, 2)).toEqual(["<picture>", '  <source media="(prefers-color-scheme: dark)" srcset="d.png">']);
+    unclickable(lines[2]);
+    expect(lines[2]).toContain("ロゴ");
+    expect(lines[2]).toContain("img/logo.png");
+    expect(lines.slice(3, 6)).toEqual(["</picture>", "", "<p>"]);
+    expect(linksIn(lines[6])).toEqual([{ name: "図", to: file("/r/img/a.png") }]);
   });
 
   test("![仕様](spec.pdf) を押した行き先は spec.pdf", () => {
