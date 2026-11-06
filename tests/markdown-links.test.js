@@ -138,6 +138,26 @@ describe("rewriteImages", () => {
     expect(rewriteImages('<div>\n<a href="docs/a.md"><img src="img/a.png" alt="図"></a>\n</div>')).toBe('<div>\n<a href="docs/a.md">図</a>\n</div>');
   });
 
+  // HTML のかたまりの中の <a> の、押したときの行き先。
+  const anchorsIn = (text) => [...text.matchAll(/<a\b[^>]*\bhref="([^"]*)"/g)].map((m) => resolveLink({ from: "/r/README.md", href: m[1].replace(/&amp;/g, "&") }));
+
+  test("HTML のかたまりで、行をまたいで <a href> に包まれた画像は、外側の 1 つのリンクの中の名前になる", () => {
+    const logo = rewriteImages('<p align="center">\n  <a href="https://example.com">\n    <img src="logo.png" alt="Logo">\n    <br>Example\n  </a>\n</p>');
+    expect(anchorsIn(logo)).toEqual([{ type: "external", url: "https://example.com" }]);
+    expect(logo).not.toContain("<img");
+    expect(logo).toContain("Logo");
+    const two = rewriteImages('<div>\n<a href="docs/a.md">\n<img src="img/a.png" alt="A"> <img src="img/b.png" alt="B">\n</a>\n</div>');
+    expect(anchorsIn(two)).toEqual([file("/r/docs/a.md")]);
+    expect(two).not.toContain("<img");
+    for (const name of ["A", "B"]) expect(two).toContain(name);
+  });
+
+  test("HTML のかたまりで、行をまたいだ外側のリンクが #見出し だけなら、画像を開く", () => {
+    const out = rewriteImages('<div>\n<a href="#top">\n  <img src="img/a.png" alt="図">\n</a>\n</div>');
+    expect(anchorsIn(out)).toEqual([file("/r/img/a.png")]);
+    expect(out).toContain("図");
+  });
+
   test("外側のリンクが同じファイル内の #見出し だけなら、画像を開く", () => {
     expect(rewriteImages("[![図](img/a.png)](#top)")).toBe("[図](fv-image:img/a.png)");
     expect(rewriteImages('<div>\n<a href="#top"><img src="img/a.png" alt="図"></a>\n</div>')).toBe('<div>\n<a href="fv-image:img/a.png">図</a>\n</div>');

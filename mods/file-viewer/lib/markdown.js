@@ -120,19 +120,6 @@ function rewriteInline(text, definitions) {
     });
 }
 
-// HTML のかたまりの中の書き換え（押せる <a> にする。Markdown の書き方はここでは効かないので触らない）。
-function rewriteHtml(text) {
-  const link = (href, name) => `<a href="${escapeHtml(href)}">${escapeHtml(name)}</a>`;
-  return text
-    .replace(LINKED_IMG_TAG, (whole, aAttrs, imgAttrs) => {
-      const href = attr(aAttrs, "href"), image = tagImage(imgAttrs);
-      return href !== null && image ? link(outerHref(href, image), image.name) : whole;
-    })
-    .replace(IMG_TAG, (whole, attrs) => {
-      const image = tagImage(attrs);
-      return image ? link(image.href, image.name) : whole;
-    });
-}
 
 // <picture> の中の <img>。部品は <picture> の中の <a> を押せるリンクにしない（実機で確認）ので、
 // 画像があったことと場所を押せない文字で出す。
@@ -142,6 +129,46 @@ function rewritePictureImages(text) {
     const image = src !== null && imageTarget(src, attr(attrs, "alt"));
     return image ? escapeHtml(`画像: ${image.name}（${src}）`) : whole;
   });
+}
+
+// HTML のかたまりの中の書き換え（押せる <a> にする。Markdown の書き方はここでは効かないので触らない）。
+// parts は segments の結果。開いている <a href> の中の <img> は名前だけにして、外側の <a> を押せるリンクに残す
+// （外側の行き先が同じファイル内の #見出し だけなら、その <a> の行き先を最初の画像にする）。<picture> の中は押せない文字。
+const HTML_TOKEN = /<a\b([^>]*)>|<\/a\s*>|<(\/?)picture\b[^>]*>|<img\b([^>]*)>/gi;
+function rewriteHtmlBlock(parts, state) {
+  const out = [];
+  let anchor = null; // { href, at: out の中の開きタグの位置 }
+  for (const part of parts) {
+    if (part.keep) { out.push(part.text); continue; }
+    let i = 0;
+    for (const m of part.text.matchAll(HTML_TOKEN)) {
+      out.push(part.text.slice(i, m.index));
+      i = m.index + m[0].length;
+      const [tag, aAttrs, pictureClose, imgAttrs] = m;
+      if (imgAttrs === undefined) {
+        out.push(tag);
+        if (aAttrs !== undefined) {
+          const href = attr(aAttrs, "href");
+          anchor = href === null ? null : { href, at: out.length - 1 };
+        } else if (pictureClose !== undefined) state.picture = pictureClose === "";
+        else anchor = null;
+        continue;
+      }
+      const image = tagImage(imgAttrs);
+      if (!image) out.push(tag);
+      else if (state.picture) out.push(rewritePictureImages(tag));
+      else if (!anchor) out.push(`<a href="${escapeHtml(image.href)}">${escapeHtml(image.name)}</a>`);
+      else {
+        out.push(escapeHtml(image.name));
+        if (anchor.href.startsWith("#")) {
+          out[anchor.at] = `<a href="${escapeHtml(image.href)}">`;
+          anchor.href = image.href;
+        }
+      }
+    }
+    out.push(part.text.slice(i));
+  }
+  return out.join("");
 }
 
 // <picture> の外は rewrite で、中は押せない文字で書き換える。state.picture は行をまたぐ <picture> の中か。
@@ -365,9 +392,11 @@ export function collectDefinitions(markdown) {
 // （```mermaid で文書を分けたときは、分ける前の文書全体から集めたもの）。行をまたぐ書き方を 1 行にまとめるので、
 // 行の数は変わりうる（図の行番号は、分けたときの元の Markdown で数える）。
 export function rewriteImages(markdown, definitions = collectDefinitions(markdown)) {
-  return mapBlocks(markdown, (text, kind, state) => segments(text, state)
-    .map((part) => (part.keep ? part.text : aroundPictures(part.text, state, (t) => (kind === "html" ? rewriteHtml(t) : rewriteInline(t, definitions)))))
-    .join(""));
+  return mapBlocks(markdown, (text, kind, state) => {
+    const parts = segments(text, state);
+    if (kind === "html") return rewriteHtmlBlock(parts, state);
+    return parts.map((part) => (part.keep ? part.text : aroundPictures(part.text, state, (t) => rewriteInline(t, definitions)))).join("");
+  });
 }
 
 // 整形表示の部品の中に図を埋め込めないので、Markdown を ```mermaid ブロックの境目で区切る。
