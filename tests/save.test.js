@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { splitForWrite, utf8Length, preserveLineEndings, looksNonUtf8 } from "../mods/file-viewer/lib/save.js";
+import { splitForWrite, utf8Length, argLength, preserveLineEndings, looksNonUtf8 } from "../mods/file-viewer/lib/save.js";
 
 describe("splitForWrite", () => {
   const sample = () => {
@@ -25,6 +25,17 @@ describe("splitForWrite", () => {
       expect(utf8Length(part)).toBeLessThanOrEqual(6);
       expect(/[\uD800-\uDBFF]$/.test(part)).toBe(false);
     }
+  });
+
+  test("Windows のコマンドラインに収まるよう、1 断片を引数の長さ 24,000 以下にする（\" と \\ は 2 と数える）", () => {
+    const ascii = "a".repeat(60_000);
+    const quotes = '"'.repeat(30_000);
+    for (const text of [ascii, quotes, "\\".repeat(30_000)]) {
+      const parts = splitForWrite(text);
+      expect(parts.join("")).toBe(text);
+      for (const part of parts) expect(argLength(part)).toBeLessThanOrEqual(24_000);
+    }
+    expect(argLength('a"\\🎉')).toBe(1 + 2 + 2 + 2);
   });
 
   test("空の内容は空の断片 1 つ", () => {

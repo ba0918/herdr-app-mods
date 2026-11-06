@@ -14,20 +14,35 @@ export function utf8Length(text) {
   return bytes;
 }
 
-// exec の 1 引数に収まるよう、UTF-8 で maxBytes 以下の断片に分ける（サロゲートペアは切らない）。
-export function splitForWrite(text, maxBytes = 100_000) {
+// exec の引数としての長さ。mod の exec は Windows 側で hc を起動するので、コマンドライン全体が
+// UTF-16 で約 32,000 文字に収まらないと起動できない。" と \\ はエスケープで 2 文字になりうる。
+export function argLength(text) {
+  let units = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    units += code === 0x22 || code === 0x5c ? 2 : 1;
+  }
+  return units;
+}
+
+// exec の 1 引数に収まるよう分ける。Linux の 1 引数の上限（UTF-8 で maxBytes）と、Windows の
+// コマンドラインの上限（argLength で maxUnits）の両方を守り、サロゲートペアは切らない。
+export function splitForWrite(text, maxBytes = 100_000, maxUnits = 24_000) {
   const parts = [];
-  let start = 0, bytes = 0;
+  let start = 0, bytes = 0, units = 0;
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
     const pair = code >= 0xd800 && code <= 0xdbff && i + 1 < text.length;
     const size = code < 0x80 ? 1 : code < 0x800 ? 2 : pair ? 4 : 3;
-    if (bytes + size > maxBytes) {
+    const width = pair ? 2 : code === 0x22 || code === 0x5c ? 2 : 1;
+    if (bytes + size > maxBytes || units + width > maxUnits) {
       parts.push(text.slice(start, i));
       start = i;
       bytes = 0;
+      units = 0;
     }
     bytes += size;
+    units += width;
     if (pair) i++;
   }
   parts.push(text.slice(start));
