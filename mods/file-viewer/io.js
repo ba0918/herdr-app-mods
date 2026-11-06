@@ -142,14 +142,14 @@ export async function checkUtf8(path, on) {
   return checker.result();
 }
 
-// 普通のファイルがあるか（中身は読まない。リンクの指す先がフォルダなら false）。リンク先があるかを見る。
-export async function isFile(path, on) {
-  if (!on) {
-    const r = await exec("powershell", ["-NoProfile", "-Command", `Test-Path -LiteralPath ${psQuote(path)} -PathType Leaf`]);
-    return r.code === 0 && r.stdout.trim() === "True";
-  }
-  const r = await sh(on, `[ -f "$1" ]`, [path]);
-  return r.code === 0;
+// パスが指すものの種類（中身は読まない。リンクは指す先で見る）。"file" / "folder" / "missing"。リンク先を見る。
+export async function pathKind(path, on) {
+  const r = !on
+    ? await exec("powershell", ["-NoProfile", "-Command",
+      `$p=${psQuote(path)}; if (Test-Path -LiteralPath $p -PathType Leaf) { 'file' } elseif (Test-Path -LiteralPath $p -PathType Container) { 'folder' } else { 'missing' }`])
+    : await sh(on, `if [ -f "$1" ]; then echo file; elif [ -d "$1" ]; then echo folder; else echo missing; fi`, [path]);
+  const out = r.stdout.trim();
+  return r.code === 0 && (out === "file" || out === "folder") ? out : "missing";
 }
 
 // 基準と同じなら書く。base が null なら、ファイルが無いときだけ作る。
