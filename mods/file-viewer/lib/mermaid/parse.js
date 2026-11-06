@@ -81,14 +81,30 @@ const EDGES = [
 
 const ID = /^[A-Za-z0-9_À-￿]+/;
 
+// 描画の部品が受ける色は #rgb / #rrggbb / #rrggbbaa だけ。名前の色や rgb() は捨ててテーマ色に任せる。
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+// , で区切る（rgb(0,0,0) のような括弧の中の , では区切らない）。
+function styleParts(css) {
+  const parts = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i <= css.length; i++) {
+    const c = css[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (i === css.length || (c === "," && depth === 0)) { parts.push(css.slice(start, i)); start = i + 1; }
+  }
+  return parts;
+}
+
 function parseStyle(css) {
   const style = {};
-  for (const part of css.split(",")) {
+  for (const part of styleParts(css)) {
     const [key, ...rest] = part.split(":");
     const value = rest.join(":").trim();
     if (!key || !value) continue;
     const name = key.trim();
-    if (name === "fill" || name === "stroke" || name === "color") style[name] = value;
+    if (name === "fill" || name === "stroke" || name === "color") { if (HEX_COLOR.test(value)) style[name] = value; }
     else if (name === "stroke-width") style.strokeWidth = parseFloat(value);
   }
   return style;
