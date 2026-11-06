@@ -40,7 +40,13 @@ export function createDraftStore(fs, dir) {
       slot = !a ? "a" : !b ? "b" : (a.updatedAt ?? 0) <= (b.updatedAt ?? 0) ? "a" : "b";
     }
     nextSlot.set(name, slot === "a" ? "b" : "a");
-    await fs.writeFile(`${dir()}/${slotFile(name, slot)}`, JSON.stringify(body));
+    try {
+      await fs.writeFile(`${dir()}/${slotFile(name, slot)}`, JSON.stringify(body));
+    } catch (error) {
+      // 書けなかった枠に次も書く。もう一方の枠には書き終えた下書きが入っているので、触らない。
+      nextSlot.set(name, slot);
+      throw error;
+    }
   }
 
   async function remove(name) {

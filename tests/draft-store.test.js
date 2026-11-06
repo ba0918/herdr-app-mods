@@ -41,4 +41,18 @@ describe("下書きの書きかけ", () => {
     const drafts = await store.list();
     expect(drafts.map((d) => d.content)).toEqual(["two"]);
   });
+
+  test("失敗した書き込みを書き直す途中で止まっても、1 つ前に書き終えた下書きが読める", async () => {
+    const fs = memoryFs();
+    const store = createDraftStore(fs, () => "/home/app/file-viewer-drafts");
+    await store.write(NAME, draft("one", 1));
+    await store.write(NAME, draft("two", 2));
+    fs.state.failNextWrite = true;
+    await expect(store.write(NAME, draft("three", 3))).rejects.toThrow();
+    fs.state.failNextWrite = true;
+    await expect(store.write(NAME, draft("three", 4))).rejects.toThrow();
+
+    const drafts = await store.list();
+    expect(drafts.map((d) => d.content)).toEqual(["two"]);
+  });
 });
