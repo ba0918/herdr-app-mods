@@ -2,7 +2,7 @@
 // タブは tab.new {mod: "file-viewer", props: {token, path, machine, preview, index}} で開かれる。
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, props, theme, settings, run, notify } from "herdr";
+import { spaces, props, theme, settings, run, notify, openOverlay, closeOverlay } from "herdr";
 import { kind, languageFor } from "./lib/kind.js";
 import { formatSize, limitMessage } from "./lib/size.js";
 import { tabTitles } from "./lib/tabs.js";
@@ -10,11 +10,14 @@ import { preserveLineEndings, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts } from "./lib/drafts.js";
 import { resolveLink } from "./lib/markdown.js";
 import { imageSize } from "./lib/image.js";
+import { parseMermaid } from "./lib/mermaid/parse.js";
+import { layoutFlowchart, layoutSequence } from "./lib/mermaid/layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR } from "./io.js";
-import { markdownBody } from "./views/markdown.js";
+import { markdownBody, diagramError } from "./views/markdown.js";
 import { imageBody, imageInfo } from "./views/image.js";
-import { Zoom, zoomTools } from "./views/zoom.js";
+import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
+import { diagram } from "./views/mermaid.js";
 
 const POLL_MS = 2000;
 // 画像のコピーの名前: <token>-<内容のハッシュ 12 桁>.<拡張子>（運搬中の .b64 も含む）。
@@ -43,6 +46,12 @@ function button(id, label, t, onClick, active = false) {
 export default class FileViewer extends View {
   init(_props, cx) {
     const p = props() ?? {};
+    this.diagrams = new Map();
+    // 図の拡大表示（タブの上に重ねる窓）として開かれたコピー。
+    if (p.mermaid !== undefined) {
+      this.overlay = { source: p.mermaid, firstLine: p.firstLine ?? 1, zoom: new Zoom({ fitMax: 3 }) };
+      return;
+    }
     this.token = p.token ?? null;
     // init の時点の spaces() はまだ開く前の状態で、各 space で選ばれていたタブを指す。
     // props に位置が無いとき（CLI から開いたときなど）は、そのタブの右に置く。
@@ -53,6 +62,7 @@ export default class FileViewer extends View {
     this.loadedKey = null;
     this.wrap = false;
     this.pendingTitle = null;
+    this.mdBox = {};
     this.focus = cx.focus_handle();
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
     // 表示していないタブでも動き続けるので、閉じるときに呼ばれない場合（裏のタブを閉じた、強制終了）も
@@ -457,6 +467,7 @@ export default class FileViewer extends View {
 
   render(cx) {
     const t = theme();
+    if (this.overlay) return this.renderOverlay(t);
     const me = this.identify();
     this.me = me;
     if (me && this.pane !== me.pane && this.claiming !== me.pane) {
@@ -486,7 +497,7 @@ export default class FileViewer extends View {
     const file = this.file;
     const type = file?.view?.type;
     const source = this.showsSource(rec);
-    const isCode = type === "code" || ((type === "markdown" || type === "image") && source && file?.editor);
+    const isCode = type === "code" || ((type === "markdown" || type === "image" || type === "mermaid") && source && file?.editor);
     const isImage = type === "image" && !source;
     return h_flex().id("fv-toolbar").h(34).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(file?.path ?? ""))
@@ -494,6 +505,12 @@ export default class FileViewer extends View {
       .when(isImage, (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(imageInfo(file))))
       .when(isImage, (el) => el.child(zoomTools({ id: "fv-zoom", zoom: file.zoom, width: file.dims?.width ?? 512, height: file.dims?.height ?? 512, t })))
       .when(type === "markdown", (el) => el.child(button("fv-source", source ? "整形表示" : "ソース", t, (cx) => this.toggleSource(cx), source)))
+      .when(type === "mermaid" && !source && Boolean(file?.editor), (el) => {
+        const r = this.layoutOf(file.editor.value(), 1);
+        file.zoom ??= new Zoom();
+        return r.layout ? el.child(zoomTools({ id: "fv-mmd-zoom", zoom: file.zoom, width: r.layout.width, height: r.layout.height, t })) : el;
+      })
+      .when(type === "mermaid", (el) => el.child(button("fv-source", source ? "図" : "ソース", t, (cx) => this.toggleSource(cx), source)))
       .when(type === "image" && Boolean(file?.view?.source), (el) => el.child(button("fv-source", source ? "画像" : "ソース", t, (cx) => this.toggleSource(cx), source)))
       .when(isCode, (el) => el.child(button("fv-wrap", "折り返し", t, (cx) => { this.wrap = !this.wrap; this.rebuildEditor(cx); }, this.wrap)))
       .when(Boolean(file?.editor && !file.readonly), (el) => el.child(button("fv-save", file.dirty ? "保存 ●" : "保存", t, (cx) => this.save(cx))));
@@ -552,6 +569,50 @@ export default class FileViewer extends View {
     });
   }
 
+  // 図の解析と配置（同じ文は覚えておく）。{ layout } か { error }。
+  layoutOf(source, firstLine) {
+    const key = `${firstLine}\n${source}`;
+    if (!this.diagrams.has(key)) {
+      const r = parseMermaid(source, firstLine);
+      const value = r.error ? { error: r.error } : { layout: r.diagram.type === "flowchart" ? layoutFlowchart(r.diagram) : layoutSequence(r.diagram) };
+      if (this.diagrams.size > 64) this.diagrams.clear();
+      this.diagrams.set(key, value);
+    }
+    return this.diagrams.get(key);
+  }
+
+  // 図を押したら、タブの上に重ねる窓で拡大して見せる（タブは増やさない）。
+  openDiagram(source, firstLine) {
+    openOverlay({ mod: "file-viewer", props: { mermaid: source, firstLine }, kind: "dialog", width: 0.92, height: 0.9 });
+  }
+
+  renderOverlay(t) {
+    const o = this.overlay;
+    const r = this.layoutOf(o.source, o.firstLine);
+    const close = () => closeOverlay(props()?.overlay);
+    const head = h_flex().id("fv-overlay-head").h(36).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
+      .child(div().flex_1().text_size(12).text_color(t.muted).child("図の拡大表示（Esc で閉じる）"))
+      .when(Boolean(r.layout), (el) => el.child(zoomTools({ id: "fv-overlay-zoom", zoom: o.zoom, width: r.layout.width, height: r.layout.height, t })))
+      .child(button("fv-overlay-close", "閉じる", t, close));
+    const body = r.layout
+      ? zoomArea({ id: "fv-overlay-area", zoom: o.zoom, width: r.layout.width, height: r.layout.height, t, content: (w) => diagram(r.layout, w / r.layout.width, t) })
+      : div().p(16).child(r.error.message);
+    return v_flex().id("fv-overlay").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
+      .on_key_down((e, cx) => { if (e.key === "escape") { cx.stop_propagation(); close(); } })
+      .child(head).child(body);
+  }
+
+  // .mmd / .mermaid: 図で開き、枠に収めて拡大・移動できるようにする。描けなければ理由とソース。
+  mermaidFile(file, t) {
+    const r = this.layoutOf(file.editor.value(), 1);
+    if (r.error) {
+      return v_flex().id("fv-mmd").flex_1().min_h(0).overflow_y_scrollbar().p(16)
+        .child(diagramError({ id: "fv-mmd-error", message: r.error.message, fence: "```\n" + file.editor.value() + "\n```", t }));
+    }
+    file.zoom ??= new Zoom();
+    return zoomArea({ id: "fv-mmd-area", zoom: file.zoom, width: r.layout.width, height: r.layout.height, t, content: (w) => diagram(r.layout, w / r.layout.width, t) });
+  }
+
   body(rec, t) {
     const file = this.file;
     if (!file) return div().p(16).text_color(t.dim).child(this.token ? "" : "開くファイルが指定されていない");
@@ -562,8 +623,14 @@ export default class FileViewer extends View {
       return imageBody({ file, t });
     }
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
-      return markdownBody({ id: "fv-markdown", text: file.editor.value(), onLink: (url, cx) => this.followLink(url, cx), t });
+      return markdownBody({
+        id: "fv-markdown", text: file.editor.value(), box: this.mdBox, t,
+        layoutOf: (source, firstLine) => this.layoutOf(source, firstLine),
+        onLink: (url, cx) => this.followLink(url, cx),
+        onDiagram: (source, firstLine) => this.openDiagram(source, firstLine),
+      });
     }
+    if (view.type === "mermaid" && file.editor && !this.showsSource(rec)) return this.mermaidFile(file, t);
     if (file.editor) return Editor.new(file.editor).flex_1().min_h(0);
     return div().p(16).text_color(t.dim).child("表示できない");
   }

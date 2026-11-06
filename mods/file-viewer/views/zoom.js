@@ -6,7 +6,9 @@ import { h_flex } from "gpui-base";
 const MIN = 0.05, MAX = 32, STEP = 1.25;
 
 export class Zoom {
-  constructor() {
+  // fitMax: 枠に収めるときの最大の倍率（画像は 1 = 等倍まで、図の拡大表示は大きくしてよい）。
+  constructor({ fitMax = 1 } = {}) {
+    this.fitMax = fitMax;
     this.fit = true;   // 枠に収まる大きさに追従している
     this.scale = 1;
     this.x = 0;        // 中心からのずれ（px）
@@ -17,7 +19,7 @@ export class Zoom {
 
   fitScale(width, height) {
     if (!this.view || !width || !height) return 1;
-    return Math.min(1, this.view.width / width, this.view.height / height);
+    return Math.min(this.fitMax, this.view.width / width, this.view.height / height);
   }
 
   current(width, height) {
