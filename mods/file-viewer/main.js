@@ -82,9 +82,13 @@ export default class FileViewer extends View {
     // Markdown の整形表示の見え方（lib/markdown-state.js）。開いた中身ごとに作り、外部変更の読み直しや下書きの復元では残す
     // （this.file は読み直しで入れ替わるので、そこには置かない）。
     this.md = null;
-    this.preparing = false;
+    // 描画の外の準備を動かしている非同期処理の印（runPreparation が作る。動かしていなければ null）。
+    this.preparing = null;
     this.focus = cx.focus_handle();
-    cx.timer.every(POLL_MS, (cx) => this.poll(cx));
+    cx.timer.every(POLL_MS, (cx) => {
+      this.watchPreparation(cx);
+      this.poll(cx);
+    });
     // 表示していないタブでも動き続けるので、閉じるときに呼ばれない場合（裏のタブを閉じた、強制終了）も
     // 数秒前までの編集が下書きに残る。
     cx.timer.every(DRAFT_MS, (cx) => this.keepDraft(cx));
@@ -151,6 +155,7 @@ export default class FileViewer extends View {
     // 同じファイルを開き直すこと（A → B → A）もあるので、どの読み込みかは鍵ではなく回数で見分ける。
     const gen = this.loads = (this.loads ?? 0) + 1;
     this.md = null;
+    this.preparing = null;
     this.file?.editor?.release();
     const old = this.file?.cache;
     this.file = { path: target.path, machine: target.machine ?? null, loading: true };
@@ -752,16 +757,17 @@ export default class FileViewer extends View {
   // 描画の外の整形の準備を、1 区間ずつ入出力の await で区切って進める。区間ごとに自分のタブを表示しているかを取り直し
   // （this.me は描画の中でしか取り直さない）、表示していなければ止める（表示に戻った描画で続きを始める）。
   // 描き直しは、出すものが変わったときだけ求める（大きな整形表示の描き直しは重い。ガイドの「制約」）。
+  // 印を外されたら（読み込み直した、見張りが手放した）、その非同期処理は進めずに終える。
   runPreparation(cx) {
-    this.preparing = true;
+    const md = this.md;
+    const run = this.preparing = {};
     cx.spawn(async (cx) => {
       try {
-        while (this.md?.busy) {
+        while (this.preparing === run && md.busy) {
           // spawn の中身は最初の await まで、呼んだ描画の中で動き、そこでの cx.notify() は例外になる（ガイドの「制約」）ので、
           // 区間の前に区切る。
           await pauseForApp();
-          const md = this.md;
-          if (!md?.busy) break;
+          if (this.preparing !== run || !md.busy) break;
           const me = this.identify();
           if (!(me?.space.active && me.tabInfo?.active)) { md.pause(); break; }
           const shown = md.shown, failure = md.failure;
@@ -769,8 +775,21 @@ export default class FileViewer extends View {
           if (md.shown !== shown || md.failure !== failure) cx.notify();
         }
       } finally {
-        this.preparing = false;
+        if (this.preparing === run) this.preparing = null;
       }
+    });
+  }
+
+  // 描画の外の準備の区間が戻らないまま止まっていないかを見張る（lib/markdown-state.js の watch）。止まると描き直しも
+  // 起きないので、描画ではなくタイマーから見る。手放したら、描き直しで代わりの整形表示を出すか、次の準備を始める。
+  watchPreparation(cx) {
+    if (!this.preparing || !this.md) return;
+    const me = this.identify();
+    if (!this.md.watch(Date.now, Boolean(me?.space.active && me.tabInfo?.active))) return;
+    this.preparing = null;
+    cx.spawn(async (cx) => {
+      await pauseForApp();
+      cx.notify();
     });
   }
 

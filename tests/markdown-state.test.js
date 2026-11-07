@@ -26,6 +26,29 @@ function finish(state, now = clock()) {
 }
 const partsOf = (text) => prepareAll(text).parts;
 
+// 区間から戻らなくなる準備（実機では、await を挟まずに約 0.5 秒を超えた非同期処理を QuickJS が黙って止める。
+// ガイドの「長い同期処理」）。stall(state, now) は 1 区間を始めて、区間に入ったところで止め、tick から戻らずに抜ける。
+function stallable() {
+  let stalling = false, stalled = false;
+  const start = (text) => {
+    const prep = startPreparation(text);
+    const advance = prep.advance;
+    prep.advance = (budget, now) => {
+      if (!stalling) return advance(budget, now);
+      stalled = true;
+      return false;
+    };
+    return prep;
+  };
+  const stall = (state, now) => {
+    stalling = true;
+    expect(() => state.tick(100, () => { if (stalled) throw new Error("止まった"); return now(); })).toThrow("止まった");
+    stalling = false;
+    stalled = false;
+  };
+  return { start, stall };
+}
+
 describe("整形表示に入るとき", () => {
   test("準備が描画の中で済む文書は、すぐ整形表示になる", () => {
     const s = makeState();
@@ -203,6 +226,63 @@ describe("失敗したとき", () => {
     now.skip(9_000);
     s.tick(0, now);
     expect(s.display().kind).toBe("preparing");
+  });
+
+  test("区間から戻らないまま、表示している間の時間で 10 秒を超えたら、代わりの整形表示と「終わらなかった」知らせにし、次の準備を始められる", () => {
+    const { start, stall } = stallable();
+    const s = makeState({ start });
+    const now = clock(1);
+    s.open(big("a"));
+    stall(s, now);
+    now.skip(9_000);
+    expect(s.watch(now, true)).toBe(false);
+    expect(s.display().kind).toBe("preparing");
+    now.skip(1_000);
+    expect(s.watch(now, true)).toBe(true);
+    expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts(big("a")), notices: [{ kind: "timeout" }] });
+    s.change(big("b"));
+    finish(s, now);
+    expect(s.display()).toEqual({ kind: "formatted", parts: partsOf(big("b")), notices: [] });
+  });
+
+  test("区間から戻らない間も、タブを表示していない時間は数えない", () => {
+    const { start, stall } = stallable();
+    const s = makeState({ start });
+    const now = clock(1);
+    s.open(big("a"));
+    stall(s, now);
+    now.skip(60_000);
+    expect(s.watch(now, false)).toBe(false);
+    expect(s.watch(now, true)).toBe(false);
+    expect(s.display().kind).toBe("preparing");
+    now.skip(10_001);
+    expect(s.watch(now, true)).toBe(true);
+    expect(s.display().notices).toEqual([{ kind: "timeout" }]);
+  });
+
+  test("区間から戻らなかった準備を、中身が変わって捨てていたら、待たずに次の準備を始められ、今の中身の結果を出す", () => {
+    const { start, stall } = stallable();
+    const s = makeState({ start });
+    const now = clock(1);
+    s.open(big("a"));
+    stall(s, now);
+    s.change(big("b"));
+    expect(s.watch(now, true)).toBe(true);
+    expect(s.display()).toEqual({ kind: "preparing", notices: [] });
+    finish(s, now);
+    expect(s.display()).toEqual({ kind: "formatted", parts: partsOf(big("b")), notices: [] });
+  });
+
+  test("区間から戻っている準備は、表示していなくて止めていても、見張りでは終わらせない", () => {
+    const s = makeState();
+    const now = clock(1);
+    s.open(big("a"));
+    s.tick(0, now);
+    s.pause();
+    now.skip(60_000);
+    expect(s.watch(now, true)).toBe(false);
+    expect(s.display().kind).toBe("preparing");
+    expect(s.busy).toBe(true);
   });
 
   test("画像を押せる名前にする処理が例外を投げたら、代わりの整形表示と理由（例外のメッセージ）の知らせ", () => {
