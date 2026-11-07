@@ -30,10 +30,15 @@ function crossHead(to, size) {
   return [[{ x: to.x - size, y: to.y - size }, { x: to.x + size, y: to.y + size }], [{ x: to.x - size, y: to.y + size }, { x: to.x + size, y: to.y - size }]];
 }
 
-function text(id, label, { x, y, width, height, color, size, bold }) {
-  return v_flex().id(id).absolute().left(x).top(y).w(width).h(height).items_center().justify_center().text_color(color).text_size(size)
+// 行に分けた文字を、真ん中にそろえて並べる。
+function lines(id, label, { color, size, bold }) {
+  return v_flex().id(id).items_center().justify_center().text_color(color).text_size(size)
     .when(Boolean(bold), (el) => el.font_semibold())
     .children(labelLines(label).map((line) => div().whitespace_nowrap().line_height(size * (LINE_HEIGHT / FONT_SIZE)).child(line)));
+}
+
+function text(id, label, { x, y, width, height, ...style }) {
+  return lines(id, label, style).absolute().left(x).top(y).w(width).h(height);
 }
 
 const scaled = (s) => (p) => ({ x: p.x * s, y: p.y * s });
@@ -83,12 +88,14 @@ function flowchart(l, s, t) {
     if (poly) {
       out.push(paint(polygon(poly, true), fill));
       out.push(paint(PathBuilder.stroke(Math.max(1, (st.strokeWidth ?? 1) * s)).add_polygon(poly.map((q) => [q.x, q.y]), true).build(), stroke));
+      out.push(text(`n-${n.id}`, n.label, { x, y, width: w, height: h, color, size: FONT_SIZE * s }));
     } else {
       const radius = n.shape === "round" ? 8 * s : n.shape === "stadium" || n.shape === "circle" || n.shape === "double-circle" ? Math.min(w, h) / 2 : n.shape === "cylinder" ? 10 * s : 3 * s;
+      // 名前は箱の要素の子にする（同じ親の中で位置指定した文字だけの要素は、描かれないことがある。ガイドの「位置指定の文字」）。
       out.push(div().absolute().left(x).top(y).w(w).h(h).rounded(radius).bg(fill).border_color(stroke).border(Math.max(1, (st.strokeWidth ?? 1) * s))
-        .when(n.shape === "double-circle" || n.shape === "subroutine", (el) => el.child(div().absolute().left(4 * s).top(n.shape === "subroutine" ? 0 : 4 * s).right(4 * s).bottom(n.shape === "subroutine" ? 0 : 4 * s).rounded(n.shape === "subroutine" ? 0 : radius).border_color(stroke).border(1))));
+        .when(n.shape === "double-circle" || n.shape === "subroutine", (el) => el.child(div().absolute().left(4 * s).top(n.shape === "subroutine" ? 0 : 4 * s).right(4 * s).bottom(n.shape === "subroutine" ? 0 : 4 * s).rounded(n.shape === "subroutine" ? 0 : radius).border_color(stroke).border(1)))
+        .child(lines(`n-${n.id}`, n.label, { color, size: FONT_SIZE * s }).size_full()));
     }
-    out.push(text(`n-${n.id}`, n.label, { x, y, width: w, height: h, color, size: FONT_SIZE * s }));
   }
   for (const [i, e] of l.edges.entries()) {
     if (!e.label) continue;
