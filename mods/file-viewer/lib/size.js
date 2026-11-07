@@ -8,10 +8,18 @@ export function formatSize(bytes) {
   return `${(bytes / MiB).toFixed(1)} MiB`;
 }
 
+// QuickJS の toLocaleString は桁区切りを付けないことがあるので自前で区切る。
+const formatBytes = (bytes) => `${String(bytes).replace(/\B(?=(\d{3})+$)/g, ",")} バイト`;
+
+// 上限と今の大きさを並べて出すときの 2 つの文字列。丸めると同じになるなら、超えたことが読み取れるようにバイト数で出す。
+export function formatSizes(limit, size) {
+  const pair = [formatSize(limit), formatSize(size)];
+  return pair[0] === pair[1] ? [formatBytes(limit), formatBytes(size)] : pair;
+}
+
 function formatLimit(bytes) {
   if (bytes % MiB === 0) return `${bytes / MiB} MiB`;
-  // QuickJS の toLocaleString は桁区切りを付けないことがあるので自前で区切る。
-  return `${String(bytes).replace(/\B(?=(\d{3})+$)/g, ",")} バイト`;
+  return formatBytes(bytes);
 }
 
 export function limitMessage({ limit, size }) {

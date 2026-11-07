@@ -5,7 +5,7 @@ import { randomUUID } from "crypto";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
 import { spaces, props, theme, settings, run, notify, openOverlay, closeOverlay } from "herdr";
 import { kind, languageFor } from "./lib/kind.js";
-import { formatSize, limitMessage } from "./lib/size.js";
+import { formatSize, formatSizes, limitMessage } from "./lib/size.js";
 import { tabTitles } from "./lib/tabs.js";
 import { splitBom, contentToSave, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts, restoredDraft, offersDrafts } from "./lib/drafts.js";
@@ -46,7 +46,8 @@ function when(ms) {
 // 整形表示の知らせ（lib/markdown-state.js の display().notices の 1 つ）の文言。
 function markdownNotice(n) {
   if (n.kind === "over" && n.by === "bytes") {
-    return `大きすぎるので整形表示をせず、ソース表示で開いている（整形表示の上限 ${formatSize(n.limit)}、今の内容 ${formatSize(n.size)}）`;
+    const [limit, size] = formatSizes(n.limit, n.size);
+    return `大きすぎるので整形表示をせず、ソース表示で開いている（整形表示の上限 ${limit}、今の内容 ${size}）`;
   }
   if (n.kind === "over") return `図が多すぎるので整形表示をせず、ソース表示で開いている（整形表示の上限 図 ${n.limit} 個、今の内容 図 ${n.size} 個）`;
   if (n.kind === "image") return `画像を押せる名前にできなかったので、画像と図をそのまま表示している（${n.message}）`;
