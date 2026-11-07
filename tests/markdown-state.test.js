@@ -147,7 +147,7 @@ describe("整形表示を出したまま中身が変わるとき", () => {
     expect(s.display()).toEqual({ kind: "formatted", parts: partsOf(big("c")), notices: [] });
   });
 
-  test("前の整形表示を出している間に描画の中で済む文書に変わっても、差し替えたあとの準備は描画の外でする", () => {
+  test("前の整形表示を出している間に描画の中で済む文書に変わったら、差し替えのあとの描画で今の中身の整形表示になる", () => {
     const s = makeState();
     s.open(big("a"));
     finish(s);
@@ -155,9 +155,7 @@ describe("整形表示を出したまま中身が変わるとき", () => {
     s.change("small c");
     const shows = (name) => JSON.stringify(s.display().parts) === JSON.stringify(partsOf(big(name)));
     for (let i = 0; i < 1000 && shows("a"); i++) s.tick(0, clock());
-    expect(s.display()).toEqual({ kind: "previous", parts: partsOf(big("b")), notices: [] });
-    expect(s.busy).toBe(true);
-    finish(s);
+    s.sync("small c");
     expect(s.display()).toEqual({ kind: "formatted", parts: partsOf("small c"), notices: [] });
   });
 

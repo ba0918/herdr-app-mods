@@ -56,12 +56,14 @@ export class MarkdownState {
 
   // 描画のたびに、今の中身を渡す。変わっていれば change と同じ。同じ中身で、描画の中の準備が戻っていなければ、
   // その描画は打ち切られた（ガイドの「描画の時間」）と見なし、同じ中身の準備を描画の外の準備（区切り、見張り、10 秒の上限）に移す。
+  // 整形表示の場所で、今の中身の準備がまだ始まっていなければ（区間の続きから任された描画の中で済む大きさの中身）、ここで始める。
   sync(text) {
     if (text !== this.text) {
       this.change(text);
       return;
     }
     if (this.trying === text) this.begin(text, false);
+    else if (this.mode === "formatted" && !this.job && this.shown?.text !== text) this.begin(text, this.judge(text).inRender);
   }
 
   // 中身が変わったとき（ソース表示の打鍵、外部変更の読み直し、下書きの復元）。
@@ -205,14 +207,14 @@ export class MarkdownState {
     this.show({ text, parts: fallbackParts(text), fallback: true });
   }
 
-  // 結果を出し、続きの中身があればやり直す。続きは、区間の続き（tick）や見張りの中で始まるので、描画の中で済む大きさでも
-  // 描画の外の準備にする（その場で一度に進めると、止まったときに見張りも 10 秒の上限も効かない）。
+  // 結果を出し、続きの中身があればやり直す。続きは区間の続き（tick）や見張りの中で始まり、描画の中で済む大きさの中身を
+  // その場で一度に進めると、止まったときに見張りも 10 秒の上限も効かないので、次の描画（sync）に任せる。
   show(shown) {
     this.shown = shown;
     this.job = null;
     const next = this.pending;
     this.pending = null;
-    if (next !== null && next !== shown.text) this.begin(next, false);
+    if (next !== null && next !== shown.text && !this.judge(next).inRender) this.begin(next, false);
   }
 }
 
