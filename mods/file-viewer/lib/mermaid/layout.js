@@ -1,6 +1,6 @@
 // 解析した Mermaid の図の、ノード・辺・参加者の位置を決める。
 // flowchart は同梱の dagre（vendor/dagre.js）で層に分けて並べ、sequenceDiagram は列と行に並べる。
-// 座標は図の左上を原点とした px。テキストの幅は文字数から見積もる（全角は半角の 2 倍）。
+// 座標は図の左上を原点とした px。テキストの幅は、図の SVG の字体で測った 1 文字ずつの幅から見積もる。
 import { layout as dagreLayout, Graph } from "../../vendor/dagre.js";
 
 export const FONT_SIZE = 13;
@@ -13,10 +13,27 @@ function isWide(code) {
     || (code >= 0xffe0 && code <= 0xffe6) || code >= 0x1f000;
 }
 
+// 図の SVG の字体（lib/mermaid/svg.js の Yu Gothic UI）の 13 px での、空白から ~ までの 1 文字の幅（px）。
+// 実機で描いて測った値で、太さ 400 と 600 の広いほう（ガイドの「image(path) の SVG の文字」）。
+const ASCII_WIDTHS = [
+  3.5, 3.8, 5.5, 7.7, 7.1, 10.9, 10.3, 3.2, 4.2, 4.2, 5.5, 8.8, 3.1, 5.1, 3.1, 5.4, 7.2, 6.7, 7.1, 7, 7.5, 7.1, 7.2, 7, 7.2, 7.2,
+  3.1, 3.1, 8.7, 8.8, 8.7, 5.7, 12.2, 8.7, 7.7, 8, 9.2, 6.6, 6.4, 9, 9.4, 3.6, 5.1, 7.8, 6.3, 11.8, 9.8, 9.8, 7.5, 9.8, 8, 6.9,
+  7.2, 9, 8.3, 12.5, 8, 7.5, 7.6, 4.2, 7.2, 4.2, 8.7, 5.4, 3.6, 6.7, 7.7, 6.1, 7.8, 6.9, 4.4, 7.8, 7.4, 3.2, 3.4, 6.9, 3.2,
+  11.3, 7.4, 7.7, 7.7, 7.8, 7.6, 5.6, 4.7, 7.4, 6.6, 9.8, 6.5, 6.6, 6.1, 4.3, 3.4, 4.3, 8.8,
+];
+
+// 1 文字の幅（13 px での px）。かなは漢字より狭い。測っていない文字は広めに見積もる（箱からはみ出させないため）。
+function charWidth(code) {
+  if (code >= 0x20 && code < 0x7f) return ASCII_WIDTHS[code - 0x20];
+  if (code >= 0x3040 && code <= 0x30ff) return 10.8;
+  if (code >= 0xff61 && code <= 0xff9f) return 6.6;
+  return isWide(code) ? 13 : 9.75;
+}
+
 export function textWidth(text, size = FONT_SIZE) {
-  let units = 0;
-  for (const ch of text) units += isWide(ch.codePointAt(0)) ? 2 : 1;
-  return units * size * 0.55;
+  let width = 0;
+  for (const ch of text) width += charWidth(ch.codePointAt(0));
+  return width * (size / 13);
 }
 
 export function labelLines(label) {

@@ -19,9 +19,30 @@ const SAMPLES = {
 };
 
 describe("textWidth", () => {
-  test("全角は半角の 2 倍として文字数から見積もる", () => {
-    expect(textWidth("ab", 10)).toBeCloseTo(textWidth("あ", 10));
-    expect(textWidth("abcd", 10)).toBeGreaterThan(textWidth("ab", 10));
+  // 図の SVG の字体（Yu Gothic UI）の 13 px で、実機で描いた幅（px。太さ 400 と 600 の広いほう。ガイドの「image(path) の SVG の文字」）。
+  const MEASURED = [
+    ["Round Start Hex Flag 0123 Yes?", 183],
+    ["角丸 四角 判定 データベース", 146],
+    ["WWWWWWWWWW", 125],
+    ["mmmmmmmmmm", 113],
+    ["MMMMMMMMMM", 118],
+    ["@@@@@@@@@@", 122],
+    ["iiiiiiiiii", 32],
+    ["1111111111", 67],
+    ["漢漢漢漢漢漢漢漢漢漢", 129],
+    ["アアアアアアアアアア", 102],
+  ];
+
+  test("図の字体で描いた幅より狭く見積もらない（名前が箱からはみ出さない）", () => {
+    for (const [text, px] of MEASURED) expect(textWidth(text, 13)).toBeGreaterThanOrEqual(px - 1e-6);
+  });
+
+  test("図の字体で描いた幅より大きく広げない（箱が文字に比べて大きすぎない）", () => {
+    for (const [text, px] of MEASURED) expect(textWidth(text, 13)).toBeLessThanOrEqual(px * 1.15 + 4);
+  });
+
+  test("大きさに比例する", () => {
+    expect(textWidth("判定 Yes?", 26)).toBeCloseTo(textWidth("判定 Yes?", 13) * 2);
   });
 });
 
