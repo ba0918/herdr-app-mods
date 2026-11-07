@@ -26,9 +26,15 @@ export function scaleLook(colors, scale) {
   return { colors, scale, key: `${colorsKey(colors)}|s${scale}` };
 }
 
+// 枠に収める倍率で書き出す見た目（.mmd の「収まる大きさ」）。frame: { width, height, max }（max: 収めるときの倍率の上限）。
+export function fitLook(colors, frame) {
+  return { colors, fit: frame, key: `${colorsKey(colors)}|f${Math.round(frame.width)}x${Math.round(frame.height)}x${frame.max}` };
+}
+
 // 配置の大きさ { width, height } を、見た目で書き出す大きさ（整数の px）。
 export function exportSize(layout, look) {
-  const scale = look.scale ?? Math.min(1, look.maxWidth / layout.width);
+  const f = look.fit;
+  const scale = look.scale ?? (f ? Math.min(f.max, f.width / layout.width, f.height / layout.height) : Math.min(1, look.maxWidth / layout.width));
   return { width: Math.max(1, Math.round(layout.width * scale)), height: Math.max(1, Math.round(layout.height * scale)) };
 }
 

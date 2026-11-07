@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { diagramFile, exportSize, bodyLook, svgOwner } from "../mods/file-viewer/lib/diagram-files.js";
+import { diagramFile, exportSize, bodyLook, fitLook, svgOwner } from "../mods/file-viewer/lib/diagram-files.js";
 
 const COLORS = { background: "#101112", foreground: "#e1e2e3", muted: "#909192", raised: "#2a2b2c", surface: "#1a1b1c", border: "#3a3b3c" };
 const part = (source, firstLine = 3, width = 300, height = 120) => ({ type: "mermaid", source, firstLine, layout: { width, height } });
@@ -51,6 +51,12 @@ describe("書き出しの大きさ", () => {
 
   test("倍率で書き出す（拡大の窓・.mmd）", () => {
     expect(exportSize({ width: 300, height: 120 }, { colors: COLORS, scale: 3 })).toEqual({ width: 900, height: 360 });
+  });
+
+  test("枠に収める倍率で書き出す（.mmd の「収まる大きさ」。上限の倍率まで）", () => {
+    expect(exportSize({ width: 300, height: 120 }, fitLook(COLORS, { width: 600, height: 600, max: 1 }))).toEqual({ width: 300, height: 120 });
+    expect(exportSize({ width: 1000, height: 400 }, fitLook(COLORS, { width: 500, height: 600, max: 1 }))).toEqual({ width: 500, height: 200 });
+    expect(exportSize({ width: 100, height: 400 }, fitLook(COLORS, { width: 500, height: 200, max: 1 }))).toEqual({ width: 50, height: 200 });
   });
 
   test("書き出しの大きさは整数の px で、出す大きさと同じ（引き伸ばさない）", () => {
