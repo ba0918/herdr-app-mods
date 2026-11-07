@@ -64,8 +64,9 @@ export function zoomTools({ id, zoom, width, height, t }) {
 }
 
 // content(w, h): 表示する大きさ w × h の要素を返す。width / height: 元の大きさ（px）。
-export function zoomArea({ id, zoom, width, height, content, t }) {
-  const scale = zoom.current(width, height);
+// shownScale: 今の倍率と違う倍率の絵を出しているとき（書き直しを待つ間）、その倍率。絵はその大きさのまま置く。
+export function zoomArea({ id, zoom, width, height, content, shownScale = null, t }) {
+  const scale = shownScale ?? zoom.current(width, height);
   const w = Math.max(1, width * scale), h = Math.max(1, height * scale);
   const view = zoom.view ?? { width: 0, height: 0 };
   const left = view.width / 2 + zoom.x - w / 2, top = view.height / 2 + zoom.y - h / 2;

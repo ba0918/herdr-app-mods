@@ -1,6 +1,6 @@
 // file-viewer: 1 つのタブに 1 つのファイルを、内容に合った viewer で表示・編集する。
 // タブは tab.new {mod: "file-viewer", props: {token, path, machine, preview, index}} で開かれる。
-import { View, div } from "gpui-kit";
+import { View, div, image } from "gpui-kit";
 import { randomUUID } from "crypto";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
 import { spaces, props, theme, settings, run, notify, openOverlay, closeOverlay } from "herdr";
@@ -16,8 +16,9 @@ import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
-import { diagramFile, bodyLook, svgOwner } from "./lib/diagram-files.js";
-import { diagramSvg, diagramColors } from "./lib/mermaid/svg.js";
+import { diagramFile, bodyLook, scaleLook, colorsKey, svgOwner } from "./lib/diagram-files.js";
+import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
+import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, writeCacheText, cacheExists, CACHE_DIR, pauseForApp } from "./io.js";
@@ -30,6 +31,8 @@ const POLL_MS = 2000;
 const DRAFT_MS = 3000;
 // 描画の外の整形の準備の 1 区間（仕様の「整形の準備」。ガイドの「長い同期処理」の 0.5 秒より十分短く）。
 const PREPARE_SLICE_MS = 100;
+// 図の拡大の窓の大きさ（タブの窓に対する割合）。
+const OVERLAY_WIDTH = 0.92, OVERLAY_HEIGHT = 0.9;
 // 図の拡大の窓で、配置が止まっていないかを見る間隔。
 const OVERLAY_WATCH_MS = 1000;
 
@@ -72,8 +75,17 @@ export default class FileViewer extends View {
     this.diagrams = new Map();
     // 図の拡大表示（タブの上に重ねる窓）として開かれたコピー。
     if (p.mermaid !== undefined) {
-      // layout: 図の配置（lib/overlay-layout.js。最初の描画で作り、描画の外で配置する）。
-      this.overlay = { source: p.mermaid, firstLine: p.firstLine ?? 1, zoom: new Zoom({ fitMax: 3 }), layout: null };
+      // 開いたタブのコピーが書いた SVG（svg: 配置の大きさの SVG の文字列、shown: 開いたときに出す絵）を受け取り、倍率が変わったら
+      // width と height だけを替えて書き直す（lib/zoom-svg.js）。テーマが変わったら、図を描画の外で配置し直して新しい色で書く
+      // （layout: lib/overlay-layout.js）。書いた SVG の名前は、タブの token に窓の印（mark）を付けたもの。
+      const colors = p.colors ?? diagramColors(theme());
+      this.overlay = {
+        source: p.mermaid, firstLine: p.firstLine ?? 1, token: p.token ?? "fv-overlay", mark: p.mark ?? "z0",
+        size: { width: p.layoutWidth ?? 1, height: p.layoutHeight ?? 1 },
+        zoom: new Zoom({ fitMax: 3 }), layout: null, running: false,
+        colors: { [colorsKey(colors)]: colors }, svgs: { [colorsKey(colors)]: p.svg ?? null },
+        zs: p.shown ? new ZoomSvg({ shown: p.shown, colorsKey: colorsKey(colors) }) : null,
+      };
       cx.timer.every(OVERLAY_WATCH_MS, (cx) => this.watchOverlay(cx));
       return;
     }
@@ -104,7 +116,16 @@ export default class FileViewer extends View {
   }
 
   // 閉じるとき（アプリの終了を含む）は、未保存の編集を下書きに書く。止める手段は無いので確認は出さない。
+  // 図の拡大の窓は、自分が書いた SVG（窓の印の付いたもの）を消す。
   async close() {
+    const o = this.overlay;
+    if (o) {
+      for (const name of await listCache()) {
+        const owner = svgOwner(name);
+        if (owner?.token === o.token && owner.mark === o.mark) await removeCache(`${CACHE_DIR}/${name}`);
+      }
+      return;
+    }
     const file = this.file;
     if (file?.dirty && file.editor) await writeDraft(this.draftOf(file)).catch(() => {});
     // 閉じたタブの画像のコピーと図の SVG（拡大の窓が書いたものも）は消す（アプリの終了でも消えるが、次に開いたときに書き直す）。
@@ -917,41 +938,146 @@ export default class FileViewer extends View {
     return this.diagrams.get(key);
   }
 
-  // 図を押したら、タブの上に重ねる窓で拡大して見せる（タブは増やさない）。
-  openDiagram(source, firstLine) {
-    openOverlay({ mod: "file-viewer", props: { mermaid: source, firstLine }, kind: "dialog", width: 0.92, height: 0.9 });
+  // 図を押したら、タブの上に重ねる窓で拡大して見せる（タブは増やさない）。窓に収まる大きさの SVG を書いて、見えない所で
+  // 読み込ませてから開く。1 秒たっても終わらなければ、本文の SVG を本来の大きさで出して開く（lib/zoom-svg.js の DiagramOpening）。
+  openDiagram(part, cx) {
+    const md = this.md;
+    if (!part.file || !md?.look || this.opening) return;
+    const colors = md.look.colors, l = part.layout;
+    const view = window.viewport_size();
+    // 窓の描ける大きさ（openOverlay の割合から、見出しの高さを引く）に収める倍率の見積もり。ずれたら窓が書き直す。
+    const fit = Math.round(Math.min(3, (view.width * OVERLAY_WIDTH) / l.width, (view.height * OVERLAY_HEIGHT - 36) / l.height) * 1000) / 1000;
+    const mark = `z${Math.random().toString(36).slice(2, 8)}`;
+    const look = scaleLook(colors, fit);
+    const file = diagramFile(this.token, part, look, mark);
+    const text = diagramSvg(l, colors, { width: l.width, height: l.height });
+    const opening = this.opening = { state: new DiagramOpening(Date.now()), file, written: false };
+    cx.spawn(async (cx) => {
+      try {
+        await writeCacheText(file.name, resizeSvg(text, { width: file.exportWidth, height: file.exportHeight }));
+        opening.state.wrote();
+        opening.written = true;
+      } catch {
+        opening.state.failed();
+      }
+      cx.notify();
+      while (this.opening === opening && opening.state.decide(Date.now()) === "wait") await pauseForApp();
+      if (this.opening !== opening) return;
+      this.opening = null;
+      const shown = opening.state.decide(Date.now()) === "fit"
+        ? { name: file.name, path: file.path, width: file.width, height: file.height, scale: fit }
+        : { name: part.file.name, path: part.file.path, width: part.file.width, height: part.file.height, scale: part.file.width / l.width };
+      openOverlay({
+        mod: "file-viewer", kind: "dialog", width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT,
+        props: { mermaid: part.source, firstLine: part.firstLine, token: this.token, mark, colors, layoutWidth: l.width, layoutHeight: l.height, svg: text, shown },
+      });
+      cx.notify();
+    });
   }
 
-  // 図の拡大の窓。図の配置は描画の外でし（重い図で描画が打ち切られないように）、終わるまで「配置中…」を出す。
+  // 拡大の窓を開く前に、書いた絵を見えない所で読み込ませる要素。
+  openingPreload() {
+    const opening = this.opening;
+    if (!opening?.written) return null;
+    return preloadImages({ id: "fv-open-preload", files: [opening.file], onLoaded: () => opening.state.loaded() });
+  }
+
+  // 図の拡大の窓。受け取った SVG を画像で出し、倍率やテーマが変わったら書き直す（書き終えて読み込むまで前の絵のまま）。
   renderOverlay(t, cx) {
     const o = this.overlay;
-    if (!o.layout) {
-      o.layout = new OverlayLayout(() => this.layoutOf(o.source, o.firstLine));
-      // spawn の中身は最初の await まで、呼んだ描画の中で動く（ガイドの「制約」）ので、配置の前に区切る。
-      cx.spawn(async (cx) => {
-        await pauseForApp();
-        o.layout.run();
-        cx.notify();
-      });
-    }
-    const r = o.layout.shown;
     const close = () => closeOverlay(props()?.overlay);
     const head = h_flex().id("fv-overlay-head").h(36).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().text_size(12).text_color(t.muted).child("図の拡大表示（Esc で閉じる）"))
-      .when(Boolean(r?.layout), (el) => el.child(zoomTools({ id: "fv-overlay-zoom", zoom: o.zoom, width: r.layout.width, height: r.layout.height, t })))
+      .when(Boolean(o.zs), (el) => el.child(zoomTools({ id: "fv-overlay-zoom", zoom: o.zoom, width: o.size.width, height: o.size.height, t })))
       .child(button("fv-overlay-close", "閉じる", t, close));
-    const body = !r ? div().p(16).text_color(t.dim).child("配置中…")
-      : r.layout
-        ? zoomArea({ id: "fv-overlay-area", zoom: o.zoom, width: r.layout.width, height: r.layout.height, t, content: (w) => diagram(r.layout, w / r.layout.width, t) })
-        : div().p(16).child(r.error.message);
-    return v_flex().id("fv-overlay").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
+    const root = v_flex().id("fv-overlay").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .on_key_down((e, cx) => { if (e.key === "escape") { cx.stop_propagation(); close(); } })
-      .child(head).child(body);
+      .child(head);
+    if (!o.zs) return root.child(div().p(16).text_color(t.dim).child("図を表示できない"));
+    const colors = diagramColors(t), key = colorsKey(colors);
+    o.colors[key] ??= colors;
+    o.zs.recolor(key);
+    if (o.zoom.view) o.zs.request(Math.round(o.zoom.current(o.size.width, o.size.height) * 1000) / 1000);
+    this.runOverlayWrites(cx);
+    const { file, notice } = o.zs.display();
+    const preloads = o.zs.preloads();
+    return root
+      .when(Boolean(notice), (el) => el.child(this.banner("fv-overlay-notice", `図を書き出せなかった（${notice.kind === "timeout" ? "10 秒たっても終わらなかった" : notice.message}）`, t, t.blocked)))
+      .child(zoomArea({
+        id: "fv-overlay-area", zoom: o.zoom, width: o.size.width, height: o.size.height, shownScale: file.scale, t,
+        content: () => image(file.path).w(file.width).h(file.height),
+      }))
+      .when(preloads.length > 0, (el) => el.child(preloadImages({ id: "fv-overlay-preload", files: preloads, onLoaded: (name, cx) => {
+        if (!o.zs.loadedImage(name)) return;
+        cx.notify();
+        cx.spawn(async () => this.dropOverlaySvgs());
+      } })));
   }
 
-  // 図の拡大の窓の配置が、非同期処理の止まりで途中のまま残っていれば、描けなかったことにして描き直す。
+  // 拡大の窓の書き出し直しを、描画の外で 1 つずつ進める。
+  runOverlayWrites(cx) {
+    const o = this.overlay;
+    if (o.running) return;
+    const first = o.zs.task();
+    if (!first) return;
+    o.running = true;
+    cx.spawn(async (cx) => {
+      try {
+        await pauseForApp();
+        for (let task = first; task; task = o.zs.task()) {
+          try {
+            const text = await this.overlaySvgText(task.colorsKey);
+            const file = diagramFile(o.token, { source: o.source, layout: o.size }, scaleLook(o.colors[task.colorsKey], task.scale), o.mark);
+            if (!(await cacheExists(file.name))) await writeCacheText(file.name, resizeSvg(text, { width: file.exportWidth, height: file.exportHeight }));
+            o.zs.wrote(task, file);
+          } catch (e) {
+            o.zs.failed(task, message(e));
+          }
+          cx.notify();
+        }
+      } finally {
+        o.running = false;
+      }
+    });
+  }
+
+  // 色の鍵の色で描いた、配置の大きさの SVG の文字列。まだ無ければ、図を配置し直して作る（描画の外で呼ぶ）。
+  async overlaySvgText(key) {
+    const o = this.overlay;
+    if (o.svgs[key]) return o.svgs[key];
+    if (!o.layout?.shown) {
+      o.layout = new OverlayLayout(() => layoutMermaid(o.source, o.firstLine));
+      await pauseForApp();
+      o.layout.run();
+    }
+    const r = o.layout.shown;
+    if (r.error) throw new Error(r.error.message);
+    o.svgs[key] = diagramSvg(r.layout, o.colors[key], { width: o.size.width, height: o.size.height });
+    return o.svgs[key];
+  }
+
+  // 拡大の窓が書いた SVG のうち、もう出していないもの（前の倍率・色の絵）を消す。
+  async dropOverlaySvgs() {
+    const o = this.overlay;
+    for (const name of await listCache()) {
+      const owner = svgOwner(name);
+      if (owner?.token !== o.token || owner.mark !== o.mark || o.zs.keep().has(name)) continue;
+      await removeCache(`${CACHE_DIR}/${name}`);
+    }
+  }
+
+  // 拡大の窓の見張り: 書き直しが 10 秒たっても終わらないとき、配置し直しが止まったときは、前の絵のまま知らせる。
   watchOverlay(cx) {
-    if (!this.overlay?.layout?.watch()) return;
+    const o = this.overlay;
+    if (!o?.zs) return;
+    let changed = o.zs.watch(Date.now());
+    if (o.layout?.watch()) {
+      // 配置の途中で止まった非同期処理は戻らないので、書いていた書き出しを失敗にして、次の書き出しを始められるようにする。
+      if (o.zs.writing) o.zs.failed(o.zs.writing, o.layout.shown.error.message);
+      o.running = false;
+      changed = true;
+    }
+    if (!changed) return;
     cx.spawn(async (cx) => {
       await pauseForApp();
       cx.notify();
@@ -980,12 +1106,12 @@ export default class FileViewer extends View {
     }
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
       const md = this.md.display();
-      const preload = this.preloadsOf(this.md);
+      const preload = [this.preloadsOf(this.md), this.openingPreload()].filter(Boolean);
       if (md.kind === "preparing" || md.kind === "loading") return markdownWaiting({ id: "fv-markdown-waiting", loading: md.kind === "loading", box: this.mdBox, preload, t });
       return markdownBody({
         id: "fv-markdown", parts: md.parts, box: this.mdBox, preload, t,
         onLink: (url, cx) => this.followLink(url, cx),
-        onDiagram: (part) => this.openDiagram(part.source, part.firstLine),
+        onDiagram: (part, cx) => this.openDiagram(part, cx),
       });
     }
     if (view.type === "mermaid" && file.editor && !this.showsSource(rec)) return this.mermaidFile(file, t);
