@@ -16,7 +16,8 @@ import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
-import { diagramFile, bodyLook, scaleLook, colorsKey, svgOwner } from "./lib/diagram-files.js";
+import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, svgOwner } from "./lib/diagram-files.js";
+import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
 import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
@@ -746,9 +747,8 @@ export default class FileViewer extends View {
       // 整形表示の上限を超えている間は、整形表示に切り替えるボタンを出さない。
       .when(type === "markdown" && (!source || Boolean(md?.formatButton)), (el) => el.child(button("fv-source", source ? "整形表示" : "ソース", t, (cx) => this.toggleSource(cx), source)))
       .when(type === "mermaid" && !source && Boolean(file?.editor), (el) => {
-        const r = this.layoutOf(file.editor.value(), 1);
-        file.zoom ??= new Zoom();
-        return r.layout ? el.child(zoomTools({ id: "fv-mmd-zoom", zoom: file.zoom, width: r.layout.width, height: r.layout.height, t })) : el;
+        const l = this.mmdLayout();
+        return l && file.zoom ? el.child(zoomTools({ id: "fv-mmd-zoom", zoom: file.zoom, width: l.width, height: l.height, t })) : el;
       })
       .when(type === "mermaid", (el) => el.child(button("fv-source", source ? "図" : "ソース", t, (cx) => this.toggleSource(cx), source)))
       .when(type === "image" && Boolean(file?.view?.source), (el) => el.child(button("fv-source", source ? "画像" : "ソース", t, (cx) => this.toggleSource(cx), source)))
@@ -777,7 +777,9 @@ export default class FileViewer extends View {
     if (n?.kind === "error") out.push(this.banner("fv-error", n.text, t, t.blocked, [["close", "閉じる"]]));
     if (n?.kind === "draft-changed") out.push(this.banner("fv-draft-changed", "下書きの後にディスクが変わっている（保存するときに確かめる）", t, t.working, [["close", "閉じる"]]));
     // 整形表示の知らせ（知らせるだけのもの。閉じられない）。
-    for (const [i, m] of (file.view?.type === "markdown" ? this.md?.display().notices ?? [] : []).entries()) {
+    const shownNotices = !this.md ? [] : file.view?.type === "markdown" ? this.md.display().notices
+      : file.view?.type === "mermaid" && this.md.display().kind !== "source" ? diagramFileView(this.md.display()).notices : [];
+    for (const [i, m] of shownNotices.entries()) {
       out.push(this.banner(`fv-md-notice-${i}`, markdownNotice(m), t, m.kind === "over" ? t.working : t.blocked));
     }
     for (const [i, d] of (file.drafts ?? []).entries()) {
@@ -793,12 +795,12 @@ export default class FileViewer extends View {
   // 表示の切り替え（整形 / ソース）はタブごとに記録に持つ。既定は整形表示。Markdown は、整形表示の上限で移した
   // ソース表示も含めて、見え方の決まり（this.md）に従う（記録には利用者が選んだものだけを書く）。
   showsSource(rec) {
-    if (this.file?.view?.type === "markdown" && this.md) return this.md.display().kind === "source";
+    if (this.preparedType() && this.md) return this.md.display().kind === "source";
     return rec?.mode === "source";
   }
 
   toggleSource(cx) {
-    const md = this.file?.view?.type === "markdown" ? this.md : null;
+    const md = this.preparedType() ? this.md : null;
     if (md) {
       if (md.display().kind === "source") {
         md.enter();
@@ -816,16 +818,20 @@ export default class FileViewer extends View {
   // 描画のたびに、Markdown の今の内容を見え方の決まりに渡す（開いたとき・中身が変わったとき）。描画の中で済む大きさなら、
   // ここで整形の準備を終える（前の描画がその準備の途中で打ち切られていたら、描画の外に移す）。描画の外で準備するものがあれば、
   // 区切りながら進める。
+  // .mmd も同じ決まり（lib/mmd.js）で、ファイル全体を図 1 つの文書として準備する。
   syncMarkdown(rec, t, cx) {
     const file = this.file;
-    if (!file || file.loading || file.view?.type !== "markdown" || !file.editor) return;
+    const type = this.preparedType();
+    if (!type || file.loading || !file.editor) return;
     const text = file.editor.value();
+    const look = type === "markdown" ? this.bodyLook(t) : this.mmdLook(t);
     if (!this.md) {
-      this.md = new MarkdownState({ fileOf: (part, look) => diagramFile(this.token, part, look) });
-      this.md.setLook(this.bodyLook(t));
+      const fileOf = (part, look) => diagramFile(this.token, part, look);
+      this.md = type === "markdown" ? new MarkdownState({ fileOf }) : diagramFileState({ fileOf });
+      this.md.setLook(look);
       this.md.open(text, { userSource: rec?.mode === "source" });
     } else {
-      this.md.setLook(this.bodyLook(t));
+      this.md.setLook(look);
       this.md.sync(text);
     }
     if (this.md.needsRun && !this.preparing && this.visible()) this.runPreparation(cx);
@@ -835,6 +841,27 @@ export default class FileViewer extends View {
       this.cleaned = md.shown;
       cx.spawn(async () => this.dropUnusedSvgs(md));
     }
+  }
+
+  // 整形の準備の決まり（this.md）で出すファイルの種類（"markdown" | "mermaid"）。ほかは null。
+  preparedType() {
+    const type = this.file?.view?.type;
+    return type === "markdown" || type === "mermaid" ? type : null;
+  }
+
+  // .mmd の図の見た目（テーマの色と、今の倍率。枠に収める倍率なら枠の大きさ）。枠の大きさがまだ分からなければ、窓の描ける大きさで見積もる。
+  mmdLook(t) {
+    const zoom = this.file.zoom ??= new Zoom();
+    const colors = diagramColors(t);
+    if (!zoom.fit) return scaleLook(colors, zoom.scale);
+    const view = zoom.view ?? { width: window.viewport_size().width, height: window.viewport_size().height };
+    return fitLook(colors, { width: view.width, height: view.height, max: zoom.fitMax });
+  }
+
+  // .mmd の図の配置（準備中の中身か、出している中身のもの）。まだ無ければ null。
+  mmdLayout() {
+    const part = (this.md?.job?.parts ?? this.md?.shown?.parts)?.[0];
+    return part?.layout ?? null;
   }
 
   // 本文の図の見た目（テーマの色と本文の幅）。本文の幅がまだ分からなければ、窓の描ける大きさから見積もる。
@@ -1084,15 +1111,27 @@ export default class FileViewer extends View {
     });
   }
 
-  // .mmd / .mermaid: 図で開き、枠に収めて拡大・移動できるようにする。描けなければ理由とソース。
+  // .mmd / .mermaid: 図で開き、枠に収めて拡大・移動できるようにする。図は書き出した SVG の画像で出し、準備の間は「整形中…」。
+  // 描けなければ理由とソース。
   mermaidFile(file, t) {
-    const r = this.layoutOf(file.editor.value(), 1);
-    if (r.error) {
-      return v_flex().id("fv-mmd").flex_1().min_h(0).overflow_y_scrollbar().p(16)
-        .child(diagramError({ id: "fv-mmd-error", message: r.error.message, fence: "```\n" + file.editor.value() + "\n```", t }));
+    const zoom = file.zoom ??= new Zoom();
+    const v = diagramFileView(this.md.display());
+    const preload = [this.preloadsOf(this.md)].filter(Boolean);
+    if (v.kind === "preparing") {
+      return div().id("fv-mmd-waiting").relative().flex_1().min_h(0).size_full().px(16).py(16).text_color(t.dim)
+        .on_size_change((size, cx) => { if (size.width !== zoom.view?.width || size.height !== zoom.view?.height) { zoom.view = size; cx.notify(); } })
+        .children(preload).child("整形中…");
     }
-    file.zoom ??= new Zoom();
-    return zoomArea({ id: "fv-mmd-area", zoom: file.zoom, width: r.layout.width, height: r.layout.height, t, content: (w) => diagram(r.layout, w / r.layout.width, t) });
+    if (v.kind === "error") {
+      return v_flex().id("fv-mmd").flex_1().min_h(0).overflow_y_scrollbar().p(16)
+        .child(diagramError({ id: "fv-mmd-error", message: v.message, fence: "```\n" + file.editor.value() + "\n```", t }));
+    }
+    const { layout: l, file: svg } = v.part;
+    return v_flex().id("fv-mmd-box").relative().flex_1().min_h(0).size_full().children(preload)
+      .child(zoomArea({
+        id: "fv-mmd-area", zoom, width: l.width, height: l.height, shownScale: svg.width / l.width, t,
+        content: () => image(svg.path).w(svg.width).h(svg.height),
+      }));
   }
 
   body(rec, t) {
