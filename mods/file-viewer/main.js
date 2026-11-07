@@ -26,7 +26,6 @@ import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteCo
 import { markdownBody, markdownWaiting, preloadImages, bodyWidth, diagramError } from "./views/markdown.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
-import { diagram } from "./views/mermaid.js";
 
 const POLL_MS = 2000;
 const DRAFT_MS = 3000;
@@ -73,7 +72,6 @@ function button(id, label, t, onClick, active = false) {
 export default class FileViewer extends View {
   init(_props, cx) {
     const p = props() ?? {};
-    this.diagrams = new Map();
     // 図の拡大表示（タブの上に重ねる窓）として開かれたコピー。
     if (p.mermaid !== undefined) {
       // 開いたタブのコピーが書いた SVG（svg: 配置の大きさの SVG の文字列、shown: 開いたときに出す絵）を受け取り、倍率が変わったら
@@ -955,15 +953,7 @@ export default class FileViewer extends View {
     });
   }
 
-  // 図の解析と配置（同じ文は覚えておく）。{ layout } か { error }。
-  layoutOf(source, firstLine) {
-    const key = `${firstLine}\n${source}`;
-    if (!this.diagrams.has(key)) {
-      if (this.diagrams.size > 64) this.diagrams.clear();
-      this.diagrams.set(key, layoutMermaid(source, firstLine));
-    }
-    return this.diagrams.get(key);
-  }
+
 
   // 図を押したら、タブの上に重ねる窓で拡大して見せる（タブは増やさない）。窓に収まる大きさの SVG を書いて、見えない所で
   // 読み込ませてから開く。1 秒たっても終わらなければ、本文の SVG を本来の大きさで出して開く（lib/zoom-svg.js の DiagramOpening）。
