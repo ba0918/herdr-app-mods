@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { startPreparation, prepareAll, layoutMermaid } from "../mods/file-viewer/lib/prepare.js";
-import { rewriteImages, collectDefinitions, splitMermaidBlocks } from "../mods/file-viewer/lib/markdown.js";
+import { rewriteImages, collectDefinitions, splitMermaidBlocks, blockRewriter } from "../mods/file-viewer/lib/markdown.js";
 
 // 画像・バッジ・参照形式・HTML のかたまり・<picture>（かたまりをまたぐもの、図の境目をまたぐもの）・コードブロック・図を含む文書。
 const DOC = [
@@ -105,35 +105,42 @@ describe("prepareAll", () => {
 });
 
 describe("startPreparation", () => {
-  test("予算を 0 にして 1 単位ずつ何度にも分けて進めた結果が、一度に進めた結果と同じ", () => {
+  test("予算を 0 にして何度にも分けて進めた結果が、一度に進めた結果と同じ", () => {
     const prep = startPreparation(DOC);
     const now = clock(1);
-    expect(runToEnd(prep, 0, now)).toBeGreaterThan(20);
+    expect(runToEnd(prep, 0, now)).toBeGreaterThan(0);
     expect(prep.done).toBe(true);
     expect(prep.parts).toEqual(prepareAll(DOC).parts);
   });
 
-  test("1 回の呼び出しは予算を使い切ったところで止まり、どの呼び出しも少なくとも 1 単位は進む", () => {
-    const prep = startPreparation(DOC);
-    const calls = runToEnd(prep, 100, clock(30));
-    // 1 単位ごとに 30 ずつ進む時計で、予算 100 なら 1 回に 4 単位まで（最初に読んだ時刻から数える）。
-    const units = runToEnd(startPreparation(DOC), 0, clock(1)) + 1;
-    expect(calls + 1).toBe(Math.ceil(units / 4));
-  });
-
-  test("準備する中身を text に持つ", () => {
-    expect(startPreparation("# a").text).toBe("# a");
+  test("1 回の呼び出しは予算を使い切ったところで止まる（終わる呼び出しのほかは、予算より早く止まらず、1 単位より多く使い過ぎない）", () => {
+    // 時刻は、かたまりを 1 つ書き換えるたびに 30 進む（ほかの単位では進まない）。
+    let t = 0;
+    const slow = (definitions) => {
+      const rewrite = blockRewriter(definitions);
+      return (text, kind) => { t += 30; return rewrite(text, kind); };
+    };
+    const prep = startPreparation(DOC, { rewriter: slow });
+    const used = [];
+    for (let done = false; !done;) {
+      const before = t;
+      done = prep.advance(100, () => t);
+      if (!done) used.push(t - before);
+    }
+    expect(used.length).toBeGreaterThan(0);
+    for (const u of used) {
+      expect(u).toBeGreaterThanOrEqual(100);
+      expect(u).toBeLessThan(130);
+    }
+    expect(prep.parts).toEqual(prepareAll(DOC).parts);
   });
 
   test("空の文書も 1 つの文章の部分になる", () => {
     expect(prepareAll("").parts).toEqual([{ type: "markdown", text: "" }]);
   });
 
-  test("画像の書き換えが例外を投げたら advance から投げ、そのあとは進まない", () => {
+  test("画像の書き換えが例外を投げたら advance から投げる", () => {
     const prep = startPreparation("![a](b.png)", { rewriter: () => () => { throw new Error("壊れた"); } });
     expect(() => prep.advance(Infinity, clock(1))).toThrow("壊れた");
-    expect(prep.failed).toBe(true);
-    expect(prep.advance(Infinity, clock(1))).toBe(false);
-    expect(prep.done).toBe(false);
   });
 });

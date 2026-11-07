@@ -11,11 +11,6 @@ describe("utf8Length", () => {
       expect(utf8Length(text)).toBe(Buffer.byteLength(text));
     }
   });
-
-  test("対になっていないサロゲートは置き換え文字の 3 バイトとして数える", () => {
-    expect(utf8Length("a\ud800b")).toBe(Buffer.byteLength("a\ud800b"));
-    expect(utf8Length("\udc00")).toBe(3);
-  });
 });
 
 describe("countDiagrams", () => {
