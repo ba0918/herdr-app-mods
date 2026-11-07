@@ -28,9 +28,12 @@ const partsOf = (text) => prepareAll(text).parts;
 
 // 区間から戻らなくなる準備（実機では、await を挟まずに約 0.5 秒を超えた非同期処理を QuickJS が黙って止める。
 // ガイドの「長い同期処理」）。stall(state, now) は 1 区間を始めて、区間に入ったところで止め、tick から戻らずに抜ける。
+// halt(run) は、run の中で描画の中の準備を始めたところで止め、戻らずに抜ける（実機では、描画の時間を超えた描画を app が
+// interrupted で打ち切る。ガイドの「描画の時間」）。
 function stallable() {
-  let stalling = false, stalled = false;
+  let stalling = false, stalled = false, halting = false;
   const start = (text) => {
+    if (halting) throw new Error("打ち切られた");
     const prep = startPreparation(text);
     const advance = prep.advance;
     prep.advance = (budget, now) => {
@@ -46,7 +49,12 @@ function stallable() {
     stalling = false;
     stalled = false;
   };
-  return { start, stall };
+  const halt = (run) => {
+    halting = true;
+    expect(run).toThrow("打ち切られた");
+    halting = false;
+  };
+  return { start, stall, halt };
 }
 
 describe("整形表示に入るとき", () => {
@@ -137,6 +145,20 @@ describe("整形表示を出したまま中身が変わるとき", () => {
     expect(s.display()).toEqual({ kind: "previous", parts: partsOf(big("b")), notices: [] });
     finish(s);
     expect(s.display()).toEqual({ kind: "formatted", parts: partsOf(big("c")), notices: [] });
+  });
+
+  test("前の整形表示を出している間に描画の中で済む文書に変わっても、差し替えたあとの準備は描画の外でする", () => {
+    const s = makeState();
+    s.open(big("a"));
+    finish(s);
+    s.change(big("b"));
+    s.change("small c");
+    const shows = (name) => JSON.stringify(s.display().parts) === JSON.stringify(partsOf(big(name)));
+    for (let i = 0; i < 1000 && shows("a"); i++) s.tick(0, clock());
+    expect(s.display()).toEqual({ kind: "previous", parts: partsOf(big("b")), notices: [] });
+    expect(s.busy).toBe(true);
+    finish(s);
+    expect(s.display()).toEqual({ kind: "formatted", parts: partsOf("small c"), notices: [] });
   });
 
   test("描画の中で済む文書に変わったら、すぐ差し替える", () => {
@@ -283,6 +305,32 @@ describe("失敗したとき", () => {
     expect(s.watch(now, true)).toBe(false);
     expect(s.display().kind).toBe("preparing");
     expect(s.busy).toBe(true);
+  });
+
+  test("開いたときの描画の中の準備が戻らないまま、次の描画が同じ中身で来たら、描画の外の準備に移して整形表示まで進む", () => {
+    const { start, halt } = stallable();
+    const s = makeState({ start });
+    halt(() => s.open("small a"));
+    s.sync("small a");
+    expect(s.display()).toEqual({ kind: "preparing", notices: [] });
+    expect(s.busy).toBe(true);
+    finish(s);
+    expect(s.display()).toEqual({ kind: "formatted", parts: partsOf("small a"), notices: [] });
+  });
+
+  test("整形表示を出したまま書き換えたときの描画の中の準備が戻らないまま、次の描画が同じ中身で来たら、描画の外の準備に移し、終わらなければ 10 秒で代わりの整形表示にする", () => {
+    const { start, stall, halt } = stallable();
+    const s = makeState({ start });
+    const now = clock(1);
+    s.open("small a");
+    halt(() => s.change("small b"));
+    s.sync("small b");
+    expect(s.display()).toEqual({ kind: "previous", parts: partsOf("small a"), notices: [] });
+    expect(s.busy).toBe(true);
+    stall(s, now);
+    now.skip(10_001);
+    expect(s.watch(now, true)).toBe(true);
+    expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts("small b"), notices: [{ kind: "timeout" }] });
   });
 
   test("画像を押せる名前にする処理が例外を投げたら、代わりの整形表示と理由（例外のメッセージ）の知らせ", () => {

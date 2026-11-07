@@ -741,7 +741,8 @@ export default class FileViewer extends View {
   // ---- Markdown の整形の準備 ----
 
   // 描画のたびに、Markdown の今の内容を見え方の決まりに渡す（開いたとき・中身が変わったとき）。描画の中で済む大きさなら、
-  // ここで整形の準備を終える。描画の外で準備するものがあれば、区切りながら進める。
+  // ここで整形の準備を終える（前の描画がその準備の途中で打ち切られていたら、描画の外に移す）。描画の外で準備するものがあれば、
+  // 区切りながら進める。
   syncMarkdown(rec, cx) {
     const file = this.file;
     if (!file || file.loading || file.view?.type !== "markdown" || !file.editor) return;
@@ -749,8 +750,8 @@ export default class FileViewer extends View {
     if (!this.md) {
       this.md = new MarkdownState();
       this.md.open(text, { userSource: rec?.mode === "source" });
-    } else if (text !== this.md.text) {
-      this.md.change(text);
+    } else {
+      this.md.sync(text);
     }
     if (this.md.busy && !this.preparing && this.visible()) this.runPreparation(cx);
   }

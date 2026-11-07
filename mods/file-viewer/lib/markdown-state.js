@@ -22,6 +22,7 @@ export class MarkdownState {
     this.pending = null;     // 前の整形表示を出している間に変わった中身（今の準備が終わったらやり直す）
     this.failure = null;     // 失敗の知らせ { kind: "image", message } | { kind: "timeout" }
     this.slice = null;       // 区間を進めている準備（区間から戻らなければ残る）
+    this.trying = null;      // 描画の中で準備している中身（描画が打ち切られて戻らなければ残る）
   }
 
   // 描画の外で進める準備があるか。
@@ -53,10 +54,21 @@ export class MarkdownState {
     this.mode = "source";
   }
 
+  // 描画のたびに、今の中身を渡す。変わっていれば change と同じ。同じ中身で、描画の中の準備が戻っていなければ、
+  // その描画は打ち切られた（ガイドの「描画の時間」）と見なし、同じ中身の準備を描画の外の準備（区切り、見張り、10 秒の上限）に移す。
+  sync(text) {
+    if (text !== this.text) {
+      this.change(text);
+      return;
+    }
+    if (this.trying === text) this.begin(text, false);
+  }
+
   // 中身が変わったとき（ソース表示の打鍵、外部変更の読み直し、下書きの復元）。
   change(text) {
     if (text === this.text) return;
     this.text = text;
+    this.trying = null;
     const { inRender, over } = this.judge(text);
     this.over = over;
     if (this.mode === "source" || over) {
@@ -164,18 +176,22 @@ export class MarkdownState {
 
   // text の準備を始める。描画の中で済む大きさなら、その場で最後まで進める。
   begin(text, inRender) {
+    this.trying = null;
     if (!inRender) {
       this.job = { text, prep: this.start(text), elapsed: 0, last: null };
       return;
     }
     this.job = null;
+    this.trying = text;
     const prep = this.start(text);
     try {
       prep.advance(Infinity, () => 0);
     } catch (e) {
+      this.trying = null;
       this.fail(text, { kind: "image", message: String(e?.message ?? e) });
       return;
     }
+    this.trying = null;
     this.succeed(text, prep.parts);
   }
 
@@ -189,13 +205,14 @@ export class MarkdownState {
     this.show({ text, parts: fallbackParts(text), fallback: true });
   }
 
-  // 結果を出し、続きの中身があればやり直す。
+  // 結果を出し、続きの中身があればやり直す。続きは、区間の続き（tick）や見張りの中で始まるので、描画の中で済む大きさでも
+  // 描画の外の準備にする（その場で一度に進めると、止まったときに見張りも 10 秒の上限も効かない）。
   show(shown) {
     this.shown = shown;
     this.job = null;
     const next = this.pending;
     this.pending = null;
-    if (next !== null && next !== shown.text) this.begin(next, this.judge(next).inRender);
+    if (next !== null && next !== shown.text) this.begin(next, false);
   }
 }
 
