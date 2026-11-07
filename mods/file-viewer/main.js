@@ -16,6 +16,7 @@ import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
+import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR, pauseForApp } from "./io.js";
 import { markdownBody, markdownPreparing, diagramError } from "./views/markdown.js";
@@ -29,6 +30,8 @@ const CACHE_NAME = /^(.+)-[0-9a-f]{12}\.[^.]+(\.b64)?$/;
 const DRAFT_MS = 3000;
 // 描画の外の整形の準備の 1 区間（仕様の「整形の準備」。ガイドの「長い同期処理」の 0.5 秒より十分短く）。
 const PREPARE_SLICE_MS = 100;
+// 図の拡大の窓で、配置が止まっていないかを見る間隔。
+const OVERLAY_WATCH_MS = 1000;
 
 function syntaxColors(t) {
   return { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 };
@@ -66,7 +69,9 @@ export default class FileViewer extends View {
     this.diagrams = new Map();
     // 図の拡大表示（タブの上に重ねる窓）として開かれたコピー。
     if (p.mermaid !== undefined) {
-      this.overlay = { source: p.mermaid, firstLine: p.firstLine ?? 1, zoom: new Zoom({ fitMax: 3 }) };
+      // layout: 図の配置（lib/overlay-layout.js。最初の描画で作り、描画の外で配置する）。
+      this.overlay = { source: p.mermaid, firstLine: p.firstLine ?? 1, zoom: new Zoom({ fitMax: 3 }), layout: null };
+      cx.timer.every(OVERLAY_WATCH_MS, (cx) => this.watchOverlay(cx));
       return;
     }
     this.token = p.token ?? null;
@@ -633,7 +638,7 @@ export default class FileViewer extends View {
 
   render(cx) {
     const t = theme();
-    if (this.overlay) return this.renderOverlay(t);
+    if (this.overlay) return this.renderOverlay(t, cx);
     const me = this.identify();
     this.me = me;
     if (me && this.pane !== me.pane && this.claiming !== me.pane) {
@@ -827,20 +832,40 @@ export default class FileViewer extends View {
     openOverlay({ mod: "file-viewer", props: { mermaid: source, firstLine }, kind: "dialog", width: 0.92, height: 0.9 });
   }
 
-  renderOverlay(t) {
+  // 図の拡大の窓。図の配置は描画の外でし（重い図で描画が打ち切られないように）、終わるまで「配置中…」を出す。
+  renderOverlay(t, cx) {
     const o = this.overlay;
-    const r = this.layoutOf(o.source, o.firstLine);
+    if (!o.layout) {
+      o.layout = new OverlayLayout(() => this.layoutOf(o.source, o.firstLine));
+      // spawn の中身は最初の await まで、呼んだ描画の中で動く（ガイドの「制約」）ので、配置の前に区切る。
+      cx.spawn(async (cx) => {
+        await pauseForApp();
+        o.layout.run();
+        cx.notify();
+      });
+    }
+    const r = o.layout.shown;
     const close = () => closeOverlay(props()?.overlay);
     const head = h_flex().id("fv-overlay-head").h(36).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().text_size(12).text_color(t.muted).child("図の拡大表示（Esc で閉じる）"))
-      .when(Boolean(r.layout), (el) => el.child(zoomTools({ id: "fv-overlay-zoom", zoom: o.zoom, width: r.layout.width, height: r.layout.height, t })))
+      .when(Boolean(r?.layout), (el) => el.child(zoomTools({ id: "fv-overlay-zoom", zoom: o.zoom, width: r.layout.width, height: r.layout.height, t })))
       .child(button("fv-overlay-close", "閉じる", t, close));
-    const body = r.layout
-      ? zoomArea({ id: "fv-overlay-area", zoom: o.zoom, width: r.layout.width, height: r.layout.height, t, content: (w) => diagram(r.layout, w / r.layout.width, t) })
-      : div().p(16).child(r.error.message);
+    const body = !r ? div().p(16).text_color(t.dim).child("配置中…")
+      : r.layout
+        ? zoomArea({ id: "fv-overlay-area", zoom: o.zoom, width: r.layout.width, height: r.layout.height, t, content: (w) => diagram(r.layout, w / r.layout.width, t) })
+        : div().p(16).child(r.error.message);
     return v_flex().id("fv-overlay").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .on_key_down((e, cx) => { if (e.key === "escape") { cx.stop_propagation(); close(); } })
       .child(head).child(body);
+  }
+
+  // 図の拡大の窓の配置が、非同期処理の止まりで途中のまま残っていれば、描けなかったことにして描き直す。
+  watchOverlay(cx) {
+    if (!this.overlay?.layout?.watch()) return;
+    cx.spawn(async (cx) => {
+      await pauseForApp();
+      cx.notify();
+    });
   }
 
   // .mmd / .mermaid: 図で開き、枠に収めて拡大・移動できるようにする。描けなければ理由とソース。
