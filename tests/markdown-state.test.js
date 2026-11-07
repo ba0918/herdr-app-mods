@@ -415,10 +415,11 @@ describe("図の SVG の書き出し", () => {
     s.setLook(LOOK);
     return s;
   }
-  // まだ書いていない SVG を全部書いたことにする。書いた名前の並び。
+  // まだ書いていない SVG を全部書き、app がその画像を読み込んだことにする。書いた名前の並び。
   function writeAll(s, now = clock()) {
     const names = [];
     for (let task; (task = s.writeTask());) { names.push(task.name); s.wrote(task.name, now()); }
+    for (const f of s.preloads()) s.loadedImage(f.name, now());
     return names;
   }
   const shownFiles = (s) => s.display().parts.filter((p) => p.type === "mermaid").map((p) => p.file.name);
@@ -537,6 +538,7 @@ describe("図の SVG の書き出し", () => {
     now.skip(60_000);
     const task = s.writeTask();
     s.wrote(task.name, now());
+    s.loadedImage(task.name, now());
     expect(s.display().kind).toBe("formatted");
   });
 
@@ -578,5 +580,42 @@ describe("図の SVG の書き出し", () => {
     expect([...s.keep()].sort()).toEqual(["flowchart LR; a1-->a2@c1|w800", "flowchart LR; b1-->b2@c1|w800"]);
     writeAll(s);
     expect([...s.keep()]).toEqual(["flowchart LR; b1-->b2@c1|w800"]);
+  });
+
+  test("書いた図の画像を app が読み込み終えるまで、その結果を出さず、読み込む間は前の見え方のまま", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    const task = s.writeTask();
+    s.wrote(task.name, 1);
+    expect(s.display().kind).toBe("loading");
+    expect(s.preloads().map((f) => f.name)).toEqual([task.name]);
+    expect(s.loadedImage(task.name, 2)).toBe(true);
+    expect(s.display().kind).toBe("formatted");
+    expect(s.preloads()).toEqual([]);
+  });
+
+  test("画像の読み込みを待つ間は、描画の外で進める処理は要らない（読み込みの知らせを待つ）", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    expect(s.needsRun).toBe(true);
+    s.wrote(s.writeTask().name, 1);
+    expect(s.busy).toBe(true);
+    expect(s.needsRun).toBe(false);
+  });
+
+  test("画像の読み込みを待つ時間も、表示している間だけ 10 秒に数える（見張りで数える）", () => {
+    const s = svgState();
+    const now = clock(1);
+    s.open(smallD("a"));
+    s.wrote(s.writeTask().name, now());
+    now.skip(30_000);
+    expect(s.watch(now, false)).toBe(false);
+    expect(s.display().kind).toBe("loading");
+    expect(s.watch(now, true)).toBe(false);
+    now.skip(9_000);
+    expect(s.watch(now, true)).toBe(false);
+    now.skip(1_500);
+    expect(s.watch(now, true)).toBe(true);
+    expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts(smallD("a")), notices: [{ kind: "timeout" }] });
   });
 });

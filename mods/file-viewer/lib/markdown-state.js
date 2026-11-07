@@ -1,8 +1,9 @@
 // markdown viewer の整形表示の見え方の決まり（仕様の「整形の準備」「整形表示の上限」）。
 // 出来事（開く、整形表示に入る、ソース表示を選ぶ、中身が変わる、区間を進める、図の SVG を書いた、表示しなくなる）を受けて、
 // 何を出すか（display）と、準備を捨てる・続ける・やり直すかを決める。画面へのつなぎは main.js。
-// 図の SVG の書き出しは整形の準備の続き（仕様の「描き方」）で、準備の結果の図を全部書き終えるまで、その結果は出さない。
-// 書き出しそのもの（ファイルへの書き込み）は main.js がして、書いた・失敗したを wrote / writeFailed で知らせる。
+// 図の SVG の書き出しは整形の準備の続き（仕様の「描き方」）で、準備の結果の図を全部書き、app が画像として読み込み終えるまで、
+// その結果は出さない。書き出しそのもの（ファイルへの書き込み）は main.js がして、書いた・失敗したを wrote / writeFailed で、
+// 見えない所に置いて読み込ませた画像（preloads）が読み込み終えたことを loadedImage で知らせる。
 import { startPreparation, fallbackParts } from "./prepare.js";
 import { judgeSize } from "./render-size.js";
 
@@ -20,6 +21,7 @@ export class MarkdownState {
     this.fileOf = fileOf;
     this.look = null;          // 図の見た目（色と書き出しの大きさ。{ key, ... }）
     this.written = new Set();  // 書いた SVG の名前
+    this.loaded = new Set();   // app が画像として読み込み終えた SVG の名前（読み込む前に出すと、図の場所が空いて見える）
     this.entry = "prepare";    // 整形表示に入った形: "load"（開く・プレビュータブの入れ替え）| "prepare"（ソース表示から戻る）
     this.text = null;        // 今の中身
     this.mode = "formatted"; // "formatted" | "source"（出しているのは整形表示の場所か、ソース表示か）
@@ -146,6 +148,31 @@ export class MarkdownState {
     return i < 0 ? null : { ...files[i], part: job.parts[i] };
   }
 
+  // 描画の外で進める処理（準備の区間か、SVG の書き込み）があるか。画像の読み込みだけを待っているときは false。
+  get needsRun() {
+    const job = this.job;
+    return job !== null && (!job.parts || this.writeTask() !== null);
+  }
+
+  // 書いたが、app がまだ画像として読み込んでいない SVG（見えない所に置いて読み込ませる）。
+  preloads() {
+    const job = this.job;
+    if (!job?.parts) return [];
+    return this.filesFor(job.parts).filter((f) => f && this.written.has(f.name) && !this.loaded.has(f.name));
+  }
+
+  // app が SVG を画像として読み込み終えたとき。t: 今の時刻。出すものが変わったら true。
+  loadedImage(name, t) {
+    if (this.loaded.has(name)) return false;
+    this.loaded.add(name);
+    const job = this.job;
+    if (!job?.parts) return false;
+    const shown = this.shown;
+    this.count(job, t);
+    this.settle(job);
+    return this.shown !== shown;
+  }
+
   // 図の SVG を書いた（または、もうあった）とき。t: 今の時刻。書くのにかかった時間も、準備を動かしている時間に数える。
   wrote(name, t) {
     this.written.add(name);
@@ -202,6 +229,7 @@ export class MarkdownState {
   // 表示している間の時間で上限を超えたところで終わらなかったことにする。中身が変わって捨てた準備なら待たない。
   // 区間を動かしていたものを手放して、次の準備を始めてよくなったら true。
   watch(now, visible) {
+    if (!this.slice && this.job?.parts) return this.watchLoads(now, visible);
     const job = this.slice;
     if (!job) return false;
     if (job !== this.job) {
@@ -218,6 +246,19 @@ export class MarkdownState {
     if (job.elapsed <= this.timeLimit) return false;
     this.slice = null;
     this.fail(job.text, { kind: "timeout" });
+    return true;
+  }
+
+  // 画像の読み込みを待つ間（区間も書き込みも無く、知らせを待つだけ）の時間を、表示している間だけ数える。終わらなかったら true。
+  watchLoads(now, visible) {
+    const job = this.job;
+    if (!visible) {
+      job.last = null;
+      return false;
+    }
+    this.count(job, now());
+    if (job.elapsed <= this.timeLimit) return false;
+    this.timeout(job);
     return true;
   }
 
@@ -306,7 +347,7 @@ export class MarkdownState {
   }
 
   allWritten(files) {
-    return files.every((f) => !f || this.written.has(f.name));
+    return files.every((f) => !f || (this.written.has(f.name) && this.loaded.has(f.name)));
   }
 
   // 準備の結果の部分ごとの、今の見た目で書く SVG（図でない部分と描けない図は null）。同じ結果と見た目なら覚えておいたものを返す。
