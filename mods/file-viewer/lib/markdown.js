@@ -388,14 +388,14 @@ function htmlStart(line, paragraph) {
 
 // フェンスの始まり。{ char, length, info, maxIndent } か null。` のフェンスの言語の欄に ` があればフェンスではない。
 // maxIndent は行頭の空白の上限（閉じる行にも使う）。
-function fenceOpen(line, maxIndent = 3) {
+export function fenceOpen(line, maxIndent = 3) {
   const m = FENCE_OPEN.exec(line);
   if (!m || m[1].length > maxIndent || (m[2][0] === "`" && m[3].includes("`"))) return null;
   return { char: m[2][0], length: m[2].length, info: m[3].trim().split(/\s+/)[0], maxIndent };
 }
 
 // フェンスを閉じる行か。開いた並びと同じ文字で、同じ長さ以上の並びのあとに空白しか無い行だけが閉じる。
-function closesFence(line, fence) {
+export function closesFence(line, fence) {
   const m = FENCE_CLOSE.exec(line);
   return Boolean(m) && m[1].length <= fence.maxIndent && m[2][0] === fence.char && m[2].length >= fence.length;
 }
