@@ -14,11 +14,11 @@ import { externalNoticeAction, showsDraftChanged } from "./lib/notices.js";
 import { reloadOutcome, carryOver } from "./lib/reload.js";
 import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
-import { parseMermaid } from "./lib/mermaid/parse.js";
-import { layoutFlowchart, layoutSequence } from "./lib/mermaid/layout.js";
+import { layoutMermaid } from "./lib/prepare.js";
+import { MarkdownState } from "./lib/markdown-state.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
-import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR } from "./io.js";
-import { markdownBody, diagramError } from "./views/markdown.js";
+import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR, pauseForApp } from "./io.js";
+import { markdownBody, markdownPreparing, diagramError } from "./views/markdown.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
 import { diagram } from "./views/mermaid.js";
@@ -27,6 +27,8 @@ const POLL_MS = 2000;
 // 画像のコピーの名前: <token>-<内容のハッシュ 12 桁>.<拡張子>（運搬中の .b64 も含む）。
 const CACHE_NAME = /^(.+)-[0-9a-f]{12}\.[^.]+(\.b64)?$/;
 const DRAFT_MS = 3000;
+// 描画の外の整形の準備の 1 区間（仕様の「整形の準備」。ガイドの「長い同期処理」の 0.5 秒より十分短く）。
+const PREPARE_SLICE_MS = 100;
 
 function syntaxColors(t) {
   return { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 };
@@ -39,6 +41,16 @@ const pad = (n) => String(n).padStart(2, "0");
 function when(ms) {
   const d = new Date(ms);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// 整形表示の知らせ（lib/markdown-state.js の display().notices の 1 つ）の文言。
+function markdownNotice(n) {
+  if (n.kind === "over" && n.by === "bytes") {
+    return `大きすぎるので整形表示をせず、ソース表示で開いている（整形表示の上限 ${formatSize(n.limit)}、今の内容 ${formatSize(n.size)}）`;
+  }
+  if (n.kind === "over") return `図が多すぎるので整形表示をせず、ソース表示で開いている（整形表示の上限 図 ${n.limit} 個、今の内容 図 ${n.size} 個）`;
+  if (n.kind === "image") return `画像を押せる名前にできなかったので、画像と図をそのまま表示している（${n.message}）`;
+  return "整形の準備が終わらなかったので、画像と図をそのまま表示している";
 }
 
 function button(id, label, t, onClick, active = false) {
@@ -67,6 +79,10 @@ export default class FileViewer extends View {
     this.wrap = false;
     this.pendingTitle = null;
     this.mdBox = {};
+    // Markdown の整形表示の見え方（lib/markdown-state.js）。開いた中身ごとに作り、外部変更の読み直しや下書きの復元では残す
+    // （this.file は読み直しで入れ替わるので、そこには置かない）。
+    this.md = null;
+    this.preparing = false;
     this.focus = cx.focus_handle();
     cx.timer.every(POLL_MS, (cx) => this.poll(cx));
     // 表示していないタブでも動き続けるので、閉じるときに呼ばれない場合（裏のタブを閉じた、強制終了）も
@@ -134,6 +150,7 @@ export default class FileViewer extends View {
     this.loadedKey = fileKey(target.machine, target.path);
     // 同じファイルを開き直すこと（A → B → A）もあるので、どの読み込みかは鍵ではなく回数で見分ける。
     const gen = this.loads = (this.loads ?? 0) + 1;
+    this.md = null;
     this.file?.editor?.release();
     const old = this.file?.cache;
     this.file = { path: target.path, machine: target.machine ?? null, loading: true };
@@ -628,6 +645,7 @@ export default class FileViewer extends View {
       cx.spawn(async () => this.syncTitle(me));
     }
     if (this.file?.editor && this.themeKey !== themeKey(t)) cx.spawn(async (cx) => this.rebuildEditor(cx));
+    this.syncMarkdown(rec, cx);
 
     return v_flex().id("fv-root").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .track_focus(this.focus).on_key_down((e, cx) => this.onKey(e, cx))
@@ -640,6 +658,7 @@ export default class FileViewer extends View {
     const file = this.file;
     const type = file?.view?.type;
     const source = this.showsSource(rec);
+    const md = type === "markdown" ? this.md?.display() : null;
     const isCode = type === "code" || ((type === "markdown" || type === "image" || type === "mermaid") && source && file?.editor);
     const isImage = type === "image" && !source;
     return h_flex().id("fv-toolbar").h(34).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border)
@@ -647,7 +666,8 @@ export default class FileViewer extends View {
       .when(Boolean(rec?.preview), (el) => el.child(button("fv-pin", "固定", t, (cx) => { putRecord(this.token, { preview: false }); cx.notify(); })))
       .when(isImage, (el) => el.child(div().flex_none().text_size(12).text_color(t.muted).child(imageInfo(file))))
       .when(isImage, (el) => el.child(zoomTools({ id: "fv-zoom", zoom: file.zoom, width: file.dims?.width ?? 512, height: file.dims?.height ?? 512, t })))
-      .when(type === "markdown", (el) => el.child(button("fv-source", source ? "整形表示" : "ソース", t, (cx) => this.toggleSource(cx), source)))
+      // 整形表示の上限を超えている間は、整形表示に切り替えるボタンを出さない。
+      .when(type === "markdown" && (!source || Boolean(md?.formatButton)), (el) => el.child(button("fv-source", source ? "整形表示" : "ソース", t, (cx) => this.toggleSource(cx), source)))
       .when(type === "mermaid" && !source && Boolean(file?.editor), (el) => {
         const r = this.layoutOf(file.editor.value(), 1);
         file.zoom ??= new Zoom();
@@ -679,6 +699,10 @@ export default class FileViewer extends View {
     if (n?.kind === "recreate") out.push(this.banner("fv-recreate", "ファイルが無くなっている。今の内容で作り直す？", t, t.blocked, [["recreate", "作り直す"], ["cancel", "やめる"]]));
     if (n?.kind === "error") out.push(this.banner("fv-error", n.text, t, t.blocked, [["close", "閉じる"]]));
     if (n?.kind === "draft-changed") out.push(this.banner("fv-draft-changed", "下書きの後にディスクが変わっている（保存するときに確かめる）", t, t.working, [["close", "閉じる"]]));
+    // 整形表示の知らせ（知らせるだけのもの。閉じられない）。
+    for (const [i, m] of (file.view?.type === "markdown" ? this.md?.display().notices ?? [] : []).entries()) {
+      out.push(this.banner(`fv-md-notice-${i}`, markdownNotice(m), t, m.kind === "over" ? t.working : t.blocked));
+    }
     for (const [i, d] of (file.drafts ?? []).entries()) {
       out.push(h_flex().id(`fv-draft-${i}`).flex_none().px(12).py(6).gap(8).items_center().border_b(1).border_color(t.border).bg(t.raised)
         .child(div().w(3).h(16).flex_none().rounded(2).bg(t.accent))
@@ -689,14 +713,63 @@ export default class FileViewer extends View {
     return out;
   }
 
-  // 表示の切り替え（Markdown の整形 / ソース）はタブごとに記録に持つ。既定は整形表示。
+  // 表示の切り替え（整形 / ソース）はタブごとに記録に持つ。既定は整形表示。Markdown は、整形表示の上限で移した
+  // ソース表示も含めて、見え方の決まり（this.md）に従う（記録には利用者が選んだものだけを書く）。
   showsSource(rec) {
+    if (this.file?.view?.type === "markdown" && this.md) return this.md.display().kind === "source";
     return rec?.mode === "source";
   }
 
   toggleSource(cx) {
-    putRecord(this.token, { mode: this.showsSource(record(this.token)) ? null : "source" });
+    const md = this.file?.view?.type === "markdown" ? this.md : null;
+    if (md) {
+      if (md.display().kind === "source") md.enter();
+      else md.toSource();
+      putRecord(this.token, { mode: md.userSource ? "source" : null });
+    } else {
+      putRecord(this.token, { mode: this.showsSource(record(this.token)) ? null : "source" });
+    }
     cx.notify();
+  }
+
+  // ---- Markdown の整形の準備 ----
+
+  // 描画のたびに、Markdown の今の内容を見え方の決まりに渡す（開いたとき・中身が変わったとき）。描画の中で済む大きさなら、
+  // ここで整形の準備を終える。描画の外で準備するものがあれば、区切りながら進める。
+  syncMarkdown(rec, cx) {
+    const file = this.file;
+    if (!file || file.loading || file.view?.type !== "markdown" || !file.editor) return;
+    const text = file.editor.value();
+    if (!this.md) {
+      this.md = new MarkdownState();
+      this.md.open(text, { userSource: rec?.mode === "source" });
+    } else if (text !== this.md.text) {
+      this.md.change(text);
+    }
+    if (this.md.busy && !this.preparing && this.visible()) this.runPreparation(cx);
+  }
+
+  // 描画の外の整形の準備を、1 区間ずつ入出力の await で区切って進める。区間ごとに自分のタブを表示しているかを取り直し
+  // （this.me は描画の中でしか取り直さない）、表示していなければ止める（表示に戻った描画で続きを始める）。
+  // 描き直しは、出すものが変わったときだけ求める（大きな整形表示の描き直しは重い。ガイドの「制約」）。
+  runPreparation(cx) {
+    this.preparing = true;
+    cx.spawn(async (cx) => {
+      try {
+        while (this.md?.busy) {
+          const md = this.md;
+          const me = this.identify();
+          if (!(me?.space.active && me.tabInfo?.active)) { md.pause(); break; }
+          const shown = md.shown, failure = md.failure;
+          md.tick(PREPARE_SLICE_MS, Date.now);
+          if (md.shown !== shown || md.failure !== failure) cx.notify();
+          if (!md.busy) break;
+          await pauseForApp();
+        }
+      } finally {
+        this.preparing = false;
+      }
+    });
   }
 
   // 整形表示のリンク。http(s) はブラウザ、ほかのファイルは viewer のタブ（プレビュー）で開く。
@@ -719,16 +792,8 @@ export default class FileViewer extends View {
   layoutOf(source, firstLine) {
     const key = `${firstLine}\n${source}`;
     if (!this.diagrams.has(key)) {
-      const r = parseMermaid(source, firstLine);
-      let value;
-      try {
-        value = r.error ? { error: r.error } : { layout: r.diagram.type === "flowchart" ? layoutFlowchart(r.diagram) : layoutSequence(r.diagram) };
-      } catch {
-        // 解析で断れなかった配置できない図。どの行かは分からないので、図の 1 行目を指す。
-        value = { error: { kind: "syntax", message: `${firstLine} 行目の文法エラー` } };
-      }
       if (this.diagrams.size > 64) this.diagrams.clear();
-      this.diagrams.set(key, value);
+      this.diagrams.set(key, layoutMermaid(source, firstLine));
     }
     return this.diagrams.get(key);
   }
@@ -775,9 +840,10 @@ export default class FileViewer extends View {
       return imageBody({ file, t });
     }
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
+      const md = this.md.display();
+      if (md.kind === "preparing") return markdownPreparing({ id: "fv-markdown-preparing", t });
       return markdownBody({
-        id: "fv-markdown", text: file.editor.value(), box: this.mdBox, t,
-        layoutOf: (source, firstLine) => this.layoutOf(source, firstLine),
+        id: "fv-markdown", parts: md.parts, box: this.mdBox, t,
         onLink: (url, cx) => this.followLink(url, cx),
         onDiagram: (source, firstLine) => this.openDiagram(source, firstLine),
       });

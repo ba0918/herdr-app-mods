@@ -142,6 +142,12 @@ export async function checkUtf8(path, on) {
   return checker.result();
 }
 
+// 長い処理の区切り。非同期処理は約 0.5 秒続けて動くと黙って止まり、マイクロタスクの await では区切れない（ガイドの「制約」）ので、
+// 副作用の無い入出力（app home の有無の確認）を待つ。
+export async function pauseForApp() {
+  await fs.exists(appHome());
+}
+
 // パスが指すものの種類（中身は読まない。リンクは指す先で見る）。"file" / "folder" / "missing"。リンク先を見る。
 export async function pathKind(path, on) {
   const r = !on
