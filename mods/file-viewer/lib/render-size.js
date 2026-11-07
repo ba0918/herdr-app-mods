@@ -4,7 +4,7 @@
 import { fenceOpen, closesFence } from "./markdown.js";
 
 // これ以下なら描画の中で整形の準備をする。chars: 文字数（JavaScript の文字列の長さ）、diagrams: ```mermaid の図の数。
-export const PREPARE_IN_RENDER = { chars: 23279, diagrams: 3 };
+export const PREPARE_IN_RENDER = { chars: 21314, diagrams: 3 };
 // これを超えたら整形表示をしない。bytes: UTF-8 にした大きさ、diagrams: ```mermaid の図の数。
 export const RENDER_LIMIT = { bytes: 229153, diagrams: 100 };
 
