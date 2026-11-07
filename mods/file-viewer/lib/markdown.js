@@ -411,19 +411,22 @@ function indentOf(line) {
   return width;
 }
 
-// 文書の行を、かたまり { kind, lines } の並びに分ける。kind: "code"（書き換えない）・"html"・"text"・"blank"。
+// 文書の行を、かたまり { kind, lines } に分けて、終わったものから順に返す。kind: "code"（書き換えない）・"html"・"text"・"blank"。
 // 文章のかたまりは段落の単位（見出し・区切りの線・リストの項目の行で新しく始める）で、インラインコードはその中でだけ閉じる。
-function blocksOf(markdown) {
-  const blocks = [];
+// 少しずつ進められるように、文書全体を分け終える前に、終わったかたまりを返す。
+export function* blocksIn(markdown) {
   // paragraph: 直前の行が段落の続きを受ける行か。list: リストの中か（下げた行をコードブロックにしない）。blank: 直前が空行か文書の先頭か。
   // html: 続いている HTML のかたまり（htmlStart の戻り値）。
   let fence = null, indented = false, html = null, paragraph = false, list = false, blank = true;
+  let current = null;
+  const finished = [];
   const add = (kind, line, fresh = false) => {
-    const last = blocks[blocks.length - 1];
-    if (!fresh && last?.kind === kind) last.lines.push(line);
-    else blocks.push({ kind, lines: [line] });
+    if (!fresh && current?.kind === kind) { current.lines.push(line); return; }
+    if (current) finished.push(current);
+    current = { kind, lines: [line] };
   };
   for (const line of markdown.split("\n")) {
+    while (finished.length) yield finished.shift();
     if (fence) {
       add("code", line);
       if (closesFence(line, fence)) fence = null;
@@ -470,20 +473,24 @@ function blocksOf(markdown) {
     paragraph = false;
     blank = false;
   }
-  return blocks;
+  yield* finished;
+  if (current) yield current;
 }
 
-// 文書を、かたまりごとに visit(text, kind, state) で書き換えてつなぐ（"html" と "text" のかたまりだけ渡す）。
-// state.picture は <picture> の中か。HTML のかたまりの間でだけ続ける（段落の中の <picture> は段落で終わる）。
-function mapBlocks(markdown, visit) {
+// かたまりごとに画像を書き換える関数（text: かたまりの文字列、kind: かたまりの種類）。"html" と "text" のかたまりだけを書き換える。
+// 同じ関数に文書のかたまりを順に渡す。<picture> の中かを HTML のかたまりの間でだけ持ち越す（段落の中の <picture> は段落で終わる）。
+// definitions は collectDefinitions の結果。
+export function blockRewriter(definitions) {
   const state = { picture: false };
-  return blocksOf(markdown).map(({ kind, lines }) => {
-    const text = lines.join("\n");
+  return (text, kind) => {
     if (kind !== "html" && kind !== "text") return text;
-    const out = visit(text, kind, state);
+    const parts = segments(text);
+    const out = kind === "html"
+      ? rewriteHtmlBlock(parts, state, LONE_IMG.exec(text.split("\n", 1)[0])?.[1] ?? null)
+      : aroundPictures(pairOf(parts), state, (s) => rewriteInline(s, definitions)).text;
     if (kind === "text") state.picture = false;
     return out;
-  }).join("\n");
+  };
 }
 
 // かたまりの文字列を、書き換えてよい部分と、インラインコード・HTML のコメントの部分（keep）に分ける。
@@ -528,19 +535,22 @@ function segments(text) {
   return out;
 }
 
-// 参照形式の定義（[id]: path）を、文書全体（コードブロック・HTML のかたまりの外）から集める。CommonMark と同じく、
-// 定義は段落の始まりにだけ並べられ（段落の続きの行は定義にならない）、インラインコードやコメントより先に読む。
+// かたまり（blocksIn の 1 つ）の中の参照形式の定義（[id]: path）を definitions に足す。CommonMark と同じく、定義は段落の始まりにだけ
+// 並べられ（段落の続きの行は定義にならない）、インラインコードやコメントより先に読む。コードブロック・HTML のかたまりの中は読まない。
 // ラベルは大文字小文字と空白の違いを無視する。同じラベルは最初の定義。値は書いたままの参照先（<...> を含む）。
+export function addDefinitions({ kind, lines }, definitions) {
+  if (kind !== "text") return;
+  const text = lines.join("\n");
+  DEFINITION.lastIndex = 0;
+  for (let m; DEFINITION.lastIndex < text.length && (m = DEFINITION.exec(text)) && m[1].trim();) {
+    if (!definitions.has(normalizeLabel(m[1]))) definitions.set(normalizeLabel(m[1]), m[2]);
+  }
+}
+
+// 参照形式の定義を、文書全体から集める（addDefinitions）。
 export function collectDefinitions(markdown) {
   const definitions = new Map();
-  mapBlocks(markdown, (text, kind) => {
-    if (kind !== "text") return text;
-    DEFINITION.lastIndex = 0;
-    for (let m; DEFINITION.lastIndex < text.length && (m = DEFINITION.exec(text)) && m[1].trim();) {
-      if (!definitions.has(normalizeLabel(m[1]))) definitions.set(normalizeLabel(m[1]), m[2]);
-    }
-    return text;
-  });
+  for (const block of blocksIn(markdown)) addDefinitions(block, definitions);
   return definitions;
 }
 
@@ -548,11 +558,10 @@ export function collectDefinitions(markdown) {
 // （```mermaid で文書を分けたときは、分ける前の文書全体から集めたもの）。行をまたぐ書き方を 1 行にまとめるので、
 // 行の数は変わりうる（図の行番号は、分けたときの元の Markdown で数える）。
 export function rewriteImages(markdown, definitions = collectDefinitions(markdown)) {
-  return mapBlocks(markdown, (text, kind, state) => {
-    const parts = segments(text);
-    if (kind === "html") return rewriteHtmlBlock(parts, state, LONE_IMG.exec(text.split("\n", 1)[0])?.[1] ?? null);
-    return aroundPictures(pairOf(parts), state, (s) => rewriteInline(s, definitions)).text;
-  });
+  const rewrite = blockRewriter(definitions);
+  const out = [];
+  for (const { kind, lines } of blocksIn(markdown)) out.push(rewrite(lines.join("\n"), kind));
+  return out.join("\n");
 }
 
 // 整形表示の部品の中に図を埋め込めないので、Markdown を ```mermaid ブロックの境目で区切る。
