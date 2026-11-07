@@ -401,3 +401,182 @@ describe("整形表示の上限", () => {
     expect(s.userSource).toBe(true);
   });
 });
+
+describe("図の SVG の書き出し", () => {
+  // 見た目（色と大きさ）の代わり。名前は図のソースと見た目の鍵から決まる。
+  const LOOK = { key: "c1|w800" };
+  const WIDE = { key: "c1|w500" };
+  const fileOf = (part, look) => ({ name: `${part.source.trim()}@${look.key}`, path: `cache/${part.source.trim()}@${look.key}`, width: 10, height: 5 });
+  const withDiagram = (head, name) => `${head}\n\n\`\`\`mermaid\nflowchart LR; ${name}1-->${name}2\n\`\`\`\n`;
+  const smallD = (name, above = "") => withDiagram(`small ${above}`, name);
+  const bigD = (name) => withDiagram(big(name), name);
+  function svgState(options = {}) {
+    const s = makeState({ fileOf, ...options });
+    s.setLook(LOOK);
+    return s;
+  }
+  // まだ書いていない SVG を全部書いたことにする。書いた名前の並び。
+  function writeAll(s, now = clock()) {
+    const names = [];
+    for (let task; (task = s.writeTask());) { names.push(task.name); s.wrote(task.name, now()); }
+    return names;
+  }
+  const shownFiles = (s) => s.display().parts.filter((p) => p.type === "mermaid").map((p) => p.file.name);
+
+  test("開くとき、描画の中で済む文書でも、まだ書いていない図があれば読み込み中のまま待ち、書き終えたら整形表示", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    expect(s.display()).toEqual({ kind: "loading", notices: [] });
+    expect(s.busy).toBe(true);
+    expect(writeAll(s)).toEqual(["flowchart LR; a1-->a2@c1|w800"]);
+    expect(s.display().kind).toBe("formatted");
+    expect(shownFiles(s)).toEqual(["flowchart LR; a1-->a2@c1|w800"]);
+    expect(s.busy).toBe(false);
+  });
+
+  test("図の無い文書は書き出しが無いので、すぐ整形表示", () => {
+    const s = svgState();
+    s.open("small 図なし");
+    expect(s.display().kind).toBe("formatted");
+    expect(s.writeTask()).toBe(null);
+  });
+
+  test("ソース表示から戻るときは、まだ書いていない図があれば「整形中…」、書き出し済みの図だけならすぐ整形表示", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    writeAll(s);
+    s.toSource();
+    s.enter();
+    expect(s.display().kind).toBe("formatted");
+    s.toSource();
+    s.change(smallD("b"));
+    s.enter();
+    expect(s.display()).toEqual({ kind: "preparing", notices: [] });
+    writeAll(s);
+    expect(shownFiles(s)).toEqual(["flowchart LR; b1-->b2@c1|w800"]);
+  });
+
+  test("整形表示を出したまま中身が変わったら、書き終えるまで前の整形表示を出す", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    writeAll(s);
+    s.change(smallD("b"));
+    expect(s.display().kind).toBe("previous");
+    expect(shownFiles(s)).toEqual(["flowchart LR; a1-->a2@c1|w800"]);
+    writeAll(s);
+    expect(s.display().kind).toBe("formatted");
+    expect(shownFiles(s)).toEqual(["flowchart LR; b1-->b2@c1|w800"]);
+  });
+
+  test("描画の外で準備する文書は、準備のあと全部の図を書き終えてから整形表示を出す", () => {
+    const s = svgState();
+    s.open(bigD("a"));
+    const now = clock();
+    for (let i = 0; i < 1000 && !s.writeTask(); i++) s.tick(0, now);
+    expect(s.display().kind).toBe("preparing");
+    expect(s.busy).toBe(true);
+    writeAll(s);
+    expect(s.display().kind).toBe("formatted");
+  });
+
+  test("書いてある図は書き直さない（図より上の行が変わっても）", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    writeAll(s);
+    s.change(smallD("a", "上の行を足した"));
+    expect(s.writeTask()).toBe(null);
+    expect(s.display().kind).toBe("formatted");
+  });
+
+  test("本文の幅が変わったら、新しい大きさで書けるまで前の大きさの結果を出し、書けたら替える", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    writeAll(s);
+    s.setLook(WIDE);
+    expect(s.display().kind).toBe("formatted");
+    expect(shownFiles(s)).toEqual(["flowchart LR; a1-->a2@c1|w800"]);
+    expect(writeAll(s)).toEqual(["flowchart LR; a1-->a2@c1|w500"]);
+    expect(shownFiles(s)).toEqual(["flowchart LR; a1-->a2@c1|w500"]);
+  });
+
+  test("見た目が変わっても名前が同じなら、書かずにすぐ替える", () => {
+    const sameName = (part, look) => fileOf(part, { key: "same" });
+    const s = svgState({ fileOf: sameName });
+    s.open(smallD("a"));
+    writeAll(s);
+    s.setLook(WIDE);
+    expect(s.busy).toBe(false);
+    expect(s.writeTask()).toBe(null);
+  });
+
+  test("書き出しを待つ間に中身が変わると（何も出していないとき）、今の中身の図を書く", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    s.change(smallD("b"));
+    expect(writeAll(s)).toEqual(["flowchart LR; b1-->b2@c1|w800"]);
+    expect(shownFiles(s)).toEqual(["flowchart LR; b1-->b2@c1|w800"]);
+  });
+
+  test("書き出しを待つ時間も 10 秒に数え、超えたら代わりの整形表示と「終わらなかった」知らせ", () => {
+    const s = svgState();
+    const now = clock(1);
+    s.open(smallD("a"));
+    s.tick(0, now);
+    now.skip(10_001);
+    const task = s.writeTask();
+    s.wrote(task.name, now());
+    expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts(smallD("a")), notices: [{ kind: "timeout" }] });
+  });
+
+  test("表示していなくて止めている間は、書き出しを待つ時間に数えない", () => {
+    const s = svgState();
+    const now = clock(1);
+    s.open(smallD("a"));
+    s.tick(0, now);
+    s.pause();
+    now.skip(60_000);
+    const task = s.writeTask();
+    s.wrote(task.name, now());
+    expect(s.display().kind).toBe("formatted");
+  });
+
+  test("最初の書き出しが例外で失敗したら、代わりの整形表示と「図を書き出せなかった（理由）」の知らせ", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    const task = s.writeTask();
+    s.writeFailed(task.name, "書けない", clock()());
+    expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts(smallD("a")), notices: [{ kind: "write", message: "書けない" }] });
+    expect(s.busy).toBe(false);
+  });
+
+  test("出している SVG が無くなっていたら、書き直すまで書いていない図と同じに待つ", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    writeAll(s);
+    s.toSource();
+    s.enter();
+    s.lost(["flowchart LR; a1-->a2@c1|w800"]);
+    expect(s.display()).toEqual({ kind: "preparing", notices: [] });
+    expect(writeAll(s)).toEqual(["flowchart LR; a1-->a2@c1|w800"]);
+    expect(s.display().kind).toBe("formatted");
+  });
+
+  test("出していない SVG が無くなっていても、表示は変えない", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    writeAll(s);
+    s.lost(["ほかの図@c1|w800"]);
+    expect(s.display().kind).toBe("formatted");
+    expect(s.busy).toBe(false);
+  });
+
+  test("使っている SVG の名前は、出している整形表示と、書いている途中の結果のもの", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    writeAll(s);
+    s.change(smallD("b"));
+    expect([...s.keep()].sort()).toEqual(["flowchart LR; a1-->a2@c1|w800", "flowchart LR; b1-->b2@c1|w800"]);
+    writeAll(s);
+    expect([...s.keep()]).toEqual(["flowchart LR; b1-->b2@c1|w800"]);
+  });
+});
