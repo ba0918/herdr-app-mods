@@ -687,7 +687,16 @@ export default class FileViewer extends View {
       }
       cx.spawn(async () => this.syncTitle(me));
     }
-    if (this.file?.editor && this.themeKey !== themeKey(t)) cx.spawn(async (cx) => this.rebuildEditor(cx));
+    if (this.file?.editor && this.themeKey !== themeKey(t) && !this.rebuilding) {
+      // spawn の中身は最初の await まで描画の中で動く（ガイドの「cx.spawn の始まり」）。Editor の作り直しと cx.notify() は
+      // 描画の中ではできないので、先に区切る。
+      this.rebuilding = true;
+      cx.spawn(async (cx) => {
+        await pauseForApp();
+        this.rebuilding = false;
+        this.rebuildEditor(cx);
+      });
+    }
     // 表示に戻ったら、出している図の SVG があるかを確かめる（表示していない間に掃除で消えていれば書き直す）。
     const shownNow = this.visible();
     if (shownNow && !this.wasVisible) this.checkSvgs(cx);
