@@ -4,6 +4,8 @@ import { prepareAll, startPreparation, fallbackParts } from "../mods/file-viewer
 
 // 大きさの判定の代わり: "small" で始まる文書は描画の中で準備し、"OVER" を含む文書は整形表示の上限を超える。
 const OVER = { kind: "bytes", limit: 10, size: 20 };
+// 整形表示の上限の知らせ（超えたのがバイト数か図の数かを by に持つ）。
+const OVER_NOTICE = { kind: "over", by: "bytes", limit: 10, size: 20 };
 const judge = (text) => ({ inRender: text.startsWith("small"), over: text.includes("OVER") ? OVER : null });
 // 何単位もかかる大きな文書（描画の外で準備する）。
 const big = (name) => `# ${name}\n\n` + Array.from({ length: 5 }, (_, i) => `段落 ${i} ![図](img/${name}-${i}.png)\n`).join("\n");
@@ -235,7 +237,7 @@ describe("整形表示の上限", () => {
   test("整形表示に入るときに超えていれば、ソース表示と理由の知らせで、整形表示のボタンを出さない", () => {
     const s = makeState();
     s.open("OVER");
-    expect(s.display()).toEqual(sourceView([{ kind: "over", ...OVER }], false));
+    expect(s.display()).toEqual(sourceView([OVER_NOTICE], false));
     expect(s.busy).toBe(false);
   });
 
@@ -243,7 +245,7 @@ describe("整形表示の上限", () => {
     const s = makeState();
     s.open("small a");
     s.change("small OVER");
-    expect(s.display()).toEqual(sourceView([{ kind: "over", ...OVER }], false));
+    expect(s.display()).toEqual(sourceView([OVER_NOTICE], false));
   });
 
   test("上限で移したソース表示のまま下回ったら、ソース表示のまま、知らせを消してボタンを出す", () => {
@@ -262,7 +264,7 @@ describe("整形表示の上限", () => {
     s.open("small a", { userSource: true });
     expect(s.display()).toEqual(sourceView([], true));
     s.change("small OVER");
-    expect(s.display()).toEqual(sourceView([{ kind: "over", ...OVER }], false));
+    expect(s.display()).toEqual(sourceView([OVER_NOTICE], false));
     s.change("small b");
     expect(s.display()).toEqual(sourceView([], true));
   });
@@ -270,7 +272,7 @@ describe("整形表示の上限", () => {
   test("利用者が選んだソース表示で開いた文書が上限を超えていれば、理由の知らせを出す", () => {
     const s = makeState();
     s.open("OVER", { userSource: true });
-    expect(s.display()).toEqual(sourceView([{ kind: "over", ...OVER }], false));
+    expect(s.display()).toEqual(sourceView([OVER_NOTICE], false));
   });
 
   test("利用者がソース表示を選んだかを返す（上限で移したソース表示は含めない）", () => {

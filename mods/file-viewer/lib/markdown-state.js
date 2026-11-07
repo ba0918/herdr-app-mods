@@ -102,11 +102,12 @@ export class MarkdownState {
   }
 
   // 出すもの。整形表示の場所なら { kind: "formatted" | "previous" | "fallback" | "preparing", parts?, notices }、
-  // ソース表示なら { kind: "source", notices, formatButton }。notices は知らせ（{ kind: "over", limit, size }・
+  // ソース表示なら { kind: "source", notices, formatButton }。notices は知らせ（{ kind: "over", by: "bytes" | "diagrams", limit, size }・
   // { kind: "image", message }・{ kind: "timeout" }）。
   display() {
     if (this.mode === "source") {
-      return { kind: "source", notices: this.over ? [{ kind: "over", ...this.over }] : [], formatButton: !this.over };
+      const over = this.over && { kind: "over", by: this.over.kind, limit: this.over.limit, size: this.over.size };
+      return { kind: "source", notices: over ? [over] : [], formatButton: !over };
     }
     const notices = this.failure ? [this.failure] : [];
     const shown = this.shown;
