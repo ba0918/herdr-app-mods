@@ -757,14 +757,16 @@ export default class FileViewer extends View {
     cx.spawn(async (cx) => {
       try {
         while (this.md?.busy) {
+          // spawn の中身は最初の await まで、呼んだ描画の中で動き、そこでの cx.notify() は例外になる（ガイドの「制約」）ので、
+          // 区間の前に区切る。
+          await pauseForApp();
           const md = this.md;
+          if (!md?.busy) break;
           const me = this.identify();
           if (!(me?.space.active && me.tabInfo?.active)) { md.pause(); break; }
           const shown = md.shown, failure = md.failure;
           md.tick(PREPARE_SLICE_MS, Date.now);
           if (md.shown !== shown || md.failure !== failure) cx.notify();
-          if (!md.busy) break;
-          await pauseForApp();
         }
       } finally {
         this.preparing = false;
