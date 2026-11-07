@@ -122,6 +122,25 @@ scripts/deploy.sh <name>
 - 同梱の mod や layout を直接編集すると、次回起動時に `<name>-edited` へ退避されて元に戻される。必ず clone するか別名の mod を作る。
 - 画面が壊れたときの退避: `ctrl-alt-shift-escape` で表示中の layout と `keys.json` を脇に置いて既定の `main` に戻る。
 
+### 確かめ専用の窓（playground）
+
+実機での確認と測定は、作業者の窓ではなく、別の app home で起動した確かめ専用の herdr-app で行う（決まりは [File viewer 仕様の「実機の確かめ」](../spec/file-viewer/index.md#実機の確かめ)）。以下は実機で確かめた手順。
+
+- **app home**: `%USERPROFILE%\.config\herdr-app-playground`（Windows の形式のパス）。mod・layout・設定・`shared.json`（タブごとの記録）は作業者の app と別になる。
+- **起動**（作業者の許可を得たときだけ。起動の瞬間に前面を取りうる）: PowerShell で `$env:HERDR_APP_HOME` をそのフォルダにして `Start-Process` で `herdr-app.exe` を**最小化せずに**起動する。herdr-app は前の位置を覚えていても窓を画面の中に戻すので、起動の直後に、前面にしないまま画面の外へ動かす（Win32 の `SetWindowPos(hwnd, HWND_BOTTOM, -8000, -8000, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE)`。`hwnd` は `Get-Process -Id <pid>` の `MainWindowHandle`）。確かめが全部終わるまで閉じない。終わったら `window.close` で閉じる。
+- **してはいけないこと**: 最小化しない（描かなくなり、`shot` が古い画面を返す）。最小化から戻さない（戻す手順で一度前面を取った）。`SendInput`・`SetCursorPos`・`AppActivate`・`SetForegroundWindow` は使わない（作業者のマウスと前面を動かす）。
+- **操作の送り方**: その窓の `MainWindowHandle` にだけ、Win32 の `PostMessage` で送る。座標はクライアント座標（窓の描ける領域の左上が原点）。前面でない、画面の外の窓でも、次のどれも効いた。
+  - クリック: `WM_MOUSEMOVE` のあと `WM_LBUTTONDOWN`（`wParam` = 1）と `WM_LBUTTONUP`。ボタン（拡大の窓や `.mmd` の倍率の「+」、表示の切り替え）も、整形表示の中の図を押して拡大の窓を開くのも効いた。
+  - ホイール: `WM_MOUSEWHEEL`。`wParam` の上位 16 ビットが量（負で下へ）、`lParam` は**画面座標**（`ClientToScreen` で直す）。量 -600 で整形表示が約 315 px 下がった。ctrl+ホイールを送れるかは確かめていない（倍率はボタンで変える）。
+  - 文字の入力: ソース表示の Editor を押してから、1 文字ずつ `WM_CHAR`（`wParam` = 文字コード）を送ると入った。`WM_KEYDOWN` / `WM_KEYUP` で `VK_RETURN`（13）を送ると改行が入った。
+  - 送る側の PowerShell で `SetProcessDPIAware()` を呼ぶ。この機械では `herdr-app shot` の PNG の大きさがクライアントの大きさ（1280 × 820）と同じで、PNG の上の位置をそのままクライアント座標に使えた（画面の拡大率 1。ツールバーの `h(34)` が 34 px で写る）。
+- **見る・入れる**: WSL から `HERDR_APP_HOME='<Windows の形式のパス>' WSLENV=HERDR_APP_HOME` を付けて `herdr-app.exe` の `status`・`ls`・`do`・`shot`・`check` を呼ぶ。`scripts/deploy.sh` も同じく付けて流す（`deploy.sh` は `cmd.exe` で `%HERDR_APP_HOME%` を読み、続く `status` もこの環境変数を引き継ぐ）。付け忘れると作業者の app に入れることになるので、環境変数を付けて呼ぶ小さなシェルの関数を作り、その関数でだけ呼ぶ。`shot` は前面でない窓でも今の画面を撮れた。
+- **選んでいるスペースとタブは窓ごと**: playground で `space.new` や `tab.new` をすると playground の表示は切り替わるが、作業者の窓の `status` の `space` と `tab` は変わらなかった。
+- **守ること**: playground への操作（`do`・`PostMessage`・deploy）のたびに、その直前と直後で、作業者の窓の `status`（`HERDR_APP_HOME` を付けない）の `space` と `tab` と、前面の窓のプロセス（`GetForegroundWindow` と `GetWindowThreadProcessId`）を取って比べ、記録に追記する。操作の前後で作業者の窓が変わった、または前面が playground になったら、その操作をやめる。操作と操作の間に作業者の窓や前面が変わるのは作業者の操作なので気にしない。
+- **スペース**: 確かめのタブは machine `wsl` の確かめ専用のスペースに開く。`space.new {"name", "folder", "machine": "wsl"}` で作ると、端末のタブが 1 つ付いてくる。スペースとタブは herdr-core を通して共有されるので、作業者の窓のスペースの一覧にも並ぶ。作業者がそのスペースを表示していない間は、作業者の app はそのタブの file-viewer のコピーを動かさなかった（作業者の app の `shared.json` の `file-viewer:tabs` にそのタブの記録ができず、`file-viewer-cache/` も空のまま、`status` の `errors` も空）。作業者がそのスペースを表示したときにどうなるかは確かめていない。終わったら `space.close {"id", "confirmed": true}` で閉じる。
+- **playground の中でだけしてよいこと**: layout の反映（`scripts/deploy.sh layout` を同じ環境変数で）と `layout.switch`、テーマの切り替え（`do app.theme`）。`main-viewer` に切り替えて「Files」を押すと、file-tree のツリーが出た。
+- **メモリ**: mod を入れ直すたびに playground のメモリが減って戻らない（下の「制約」の「メモリ」）。入れ直す前に確かめのタブを閉じ、入れ直す回数を減らす。`status` に `out of memory` が出る、表示に `Null"null"` が出る、playground が落ちる・描かなくなったときは、製品の不具合と取り違えず、作業者に再起動の許可を求める。
+
 ## 組み込み方
 
 ### 1. 既存の Files / Changes パネルを差し替える
@@ -183,6 +202,7 @@ mod のタブを開いたときの振る舞い（実機で確認）:
 | 線や図形を描く | `PathBuilder.stroke(幅)` / `PathBuilder.fill()` に `move_to` / `line_to` / `add_polygon` / `dash_array` で組んだ path を、`window.paint_path(path, 色).absolute().top(0).left(0).size_full()` として重ねる。座標は、その要素の左上を原点とする論理 px（`"50%"` のような割合も使える）。mod の中の `window` は GPUI の窓で、`herdr` の `window()` とは別物（実機で確認） |
 | 位置指定の文字 | 同じ親の中で `absolute()` にした文字だけの要素が、条件によって描かれないことがあった（Mermaid のシーケンス図で、上段の参加者の箱に重ねた名前だけが出なかった）。名前を箱の要素の子にすると出た。原因は未確認 |
 | `image(path)` の形式 | PNG / JPEG / GIF / BMP / ICO / WebP（静止画とアニメーション）/ SVG を表示できる（app home の下にコピーして、実機で確認） |
+| `image(path)` の SVG の文字 | SVG の中の `<text>` は、Windows に入っている字体（Segoe UI・Yu Gothic UI・Meiryo など）で描かれる。Herdr が同梱する字体（mod の UI の字体の Geist、端末の JetBrains Mono）は使えず、`font-family` に指定しても、指定しなくても、明朝のような字体になる（`font-weight` の 400 と 600 も同じ）。`font-family="Segoe UI, Yu Gothic UI, sans-serif"` のように日本語の無い字体を先に並べて日本語を混ぜると、英数字まで等幅のように見える別の字体で描かれた（並べた 2 つ目の字体には移らない）。`"Yu Gothic UI"` だけにすると、英数字も日本語も Yu Gothic UI で描かれた。SVG の文字は、部品で描く文字より細く見える（部品の文字は色つきの縁取りで描かれ、SVG の文字は灰色の縁取り）。Yu Gothic UI の 13 px の文字の幅（同じ文字を 10 個並べた幅の 1/10）は、英数字が 2.7〜12.5 px（`i` 3.0、`n` 7.2、`m` 11.0、`M` 11.5、`W` 12.1〜12.5、数字 6.7〜7.5、`@` 12.2）、漢字 12.8、ひらがな 10.4、カタカナ 9.9、半角カタカナ 6.5、空白 約 3.1 px（太さ 600 は少し広く、最大で 0.9 px 増える）。file-viewer の図の文字の幅の見積もり（`lib/mermaid/layout.js` の `textWidth`）の元の作り（半角 0.55 em、全角 1.1 em）は、英字の見本「Round Start Hex Flag 0123 Yes?」で 214.5 px（Yu Gothic UI で 179 px）、日本語の見本「角丸 四角 判定 データベース」で 193 px（同 144 px）と広めだが、`m`・`w`・`M`・`W`・`O`・`@` などの広い文字だけの名前では狭すぎて、箱からはみ出しうる（どれも実機で確認） |
 | `fs/promises` | `${appHome()}/...` の形（`/` 区切り）で app home の下の `mkdir` / `writeFile` / `readFile` / `readdir` / `exists` / `unlink` が使える。無いフォルダの `readdir` は例外になる（実機で確認） |
 | `fs/promises` の `writeFile` | 文字列は書ける（UTF-8 で書く。先頭が U+FEFF の文字列を書くと、ファイルの先頭が `EF BB BF` になる）。`Uint8Array` / `Buffer` を渡すと 0 バイトのファイルになる（実機で確認）。バイナリは base64 の文字列で書き、PowerShell など外部のコマンドでデコードする |
 | `Buffer` / `crypto` | `Buffer.toString("base64")` は空文字列を返す。`createHash().update()` は文字列なら正しく、`Buffer` を渡すと空入力の値になる（実機で確認）。base64 への変換は `btoa`（Latin-1 の文字列のみ）を使う。`TextEncoder` は無い |
