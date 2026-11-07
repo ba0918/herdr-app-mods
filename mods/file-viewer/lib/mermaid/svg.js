@@ -207,3 +207,8 @@ export function diagramSvg(layout, colors, { width, height }) {
   const body = layout.type === "flowchart" ? flowchart(layout, colors) : sequence(layout, colors);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${num(width)}" height="${num(height)}" viewBox="0 0 ${num(layout.width)} ${num(layout.height)}">${body.join("")}</svg>`;
 }
+
+// SVG の文字列の書き出しの大きさ（ルートの width と height）だけを替える（中身と viewBox はそのまま。配置し直さずに倍率を変える）。
+export function resizeSvg(svg, { width, height }) {
+  return svg.replace(/^<svg([^>]*?) width="[^"]*" height="[^"]*"/, `<svg$1 width="${num(width)}" height="${num(height)}"`);
+}
