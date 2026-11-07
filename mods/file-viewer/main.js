@@ -55,6 +55,8 @@ function markdownNotice(n) {
   if (n.kind === "over") return `図が多すぎるので整形表示をせず、ソース表示で開いている（整形表示の上限 図 ${n.limit} 個、今の内容 図 ${n.size} 個）`;
   if (n.kind === "image") return `画像を押せる名前にできなかったので、画像と図をそのまま表示している（${n.message}）`;
   if (n.kind === "write") return `図を書き出せなかったので、画像と図をそのまま表示している（${n.message}）`;
+  if (n.kind === "restyle-write") return `図を書き出せなかったので、図は前の色や大きさのまま表示している（${n.message}）`;
+  if (n.kind === "restyle-timeout") return "整形の準備が終わらなかったので、図は前の色や大きさのまま表示している";
   return "整形の準備が終わらなかったので、画像と図をそのまま表示している";
 }
 

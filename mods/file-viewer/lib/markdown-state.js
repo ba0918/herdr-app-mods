@@ -32,7 +32,8 @@ export class MarkdownState {
     // inRender: 描画の中で準備した結果の書き出しを待っている。restyle: 出している結果を、新しい見た目で書き直している。
     this.job = null;
     this.pending = null;     // 前の整形表示を出している間に変わった中身（今の準備が終わったらやり直す）
-    // 失敗の知らせ { kind: "image" | "write", message } | { kind: "timeout" }（代わりの整形表示）
+    // 失敗の知らせ { kind: "image" | "write", message } | { kind: "timeout" }（代わりの整形表示）、
+    // { kind: "restyle-write", message } | { kind: "restyle-timeout" }（書き直しの失敗。前の見た目の絵のまま出す）
     this.failure = null;
     this.slice = null;       // 区間を進めている準備（区間から戻らなければ残る）
     this.trying = null;      // 描画の中で準備している中身（描画が打ち切られて戻らなければ残る）
@@ -182,11 +183,17 @@ export class MarkdownState {
     this.settle(job);
   }
 
-  // 図の SVG を書けなかったとき。代わりの整形表示と知らせにする。
+  // 図の SVG を書けなかったとき。最初の書き出しなら代わりの整形表示と知らせにし、出している結果の書き直し（テーマや本文の幅が
+  // 変わった）なら、前の見た目の絵のまま知らせる（仕様の「色」）。
   writeFailed(name, message, t) {
     const job = this.job;
     if (!job?.parts) return;
     this.count(job, t);
+    if (job.restyle) {
+      this.job = null;
+      this.failure = { kind: "restyle-write", message };
+      return;
+    }
     this.fail(job.text, { kind: "write", message });
   }
 
@@ -342,7 +349,13 @@ export class MarkdownState {
     this.show({ text: job.text, parts: job.parts, fallback: false, files });
   }
 
+  // 10 秒で終わらなかったとき。出している結果の書き直しなら、前の見た目の絵のまま知らせる。
   timeout(job) {
+    if (job.restyle) {
+      this.job = null;
+      this.failure = { kind: "restyle-timeout" };
+      return;
+    }
     this.fail(job.text, { kind: "timeout" });
   }
 

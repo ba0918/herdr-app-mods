@@ -619,3 +619,79 @@ describe("図の SVG の書き出し", () => {
     expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts(smallD("a")), notices: [{ kind: "timeout" }] });
   });
 });
+
+describe("テーマが変わったとき（図の色の書き直し）", () => {
+  const OLD = { key: "old|w800" };
+  const NEW = { key: "new|w800" };
+  const fileOf = (part, look) => ({ name: `${part.source.trim()}@${look.key}`, path: `cache/${part.source.trim()}@${look.key}`, width: 10, height: 5 });
+  const twoDiagrams = (head) => `small ${head}\n\n\`\`\`mermaid\nflowchart LR; A-->B\n\`\`\`\n\n\`\`\`mermaid\nflowchart LR; C-->D\n\`\`\`\n`;
+  function themed() {
+    const s = makeState({ fileOf });
+    s.setLook(OLD);
+    s.open(twoDiagrams("a"));
+    for (let task; (task = s.writeTask());) s.wrote(task.name, 1);
+    for (const f of s.preloads()) s.loadedImage(f.name, 1);
+    return s;
+  }
+  const shownFiles = (s) => s.display().parts.filter((p) => p.type === "mermaid").map((p) => p.file.name);
+
+  test("そろうまで前の色の結果を出し、そろったらまとめて替わる（「整形中…」にしない）", () => {
+    const s = themed();
+    s.setLook(NEW);
+    const first = s.writeTask();
+    s.wrote(first.name, 2);
+    s.loadedImage(first.name, 2);
+    expect(s.display().kind).toBe("formatted");
+    expect(shownFiles(s)).toEqual(["flowchart LR; A-->B@old|w800", "flowchart LR; C-->D@old|w800"]);
+    const second = s.writeTask();
+    s.wrote(second.name, 3);
+    s.loadedImage(second.name, 3);
+    expect(shownFiles(s)).toEqual(["flowchart LR; A-->B@new|w800", "flowchart LR; C-->D@new|w800"]);
+  });
+
+  test("書き出し直しが失敗したら、前の色の結果のまま「図を書き出せなかった」と知らせ、代わりの整形表示にしない", () => {
+    const s = themed();
+    s.setLook(NEW);
+    s.writeFailed(s.writeTask().name, "書けない", 2);
+    expect(s.display().kind).toBe("formatted");
+    expect(shownFiles(s)).toEqual(["flowchart LR; A-->B@old|w800", "flowchart LR; C-->D@old|w800"]);
+    expect(s.display().notices).toEqual([{ kind: "restyle-write", message: "書けない" }]);
+    expect(s.busy).toBe(false);
+  });
+
+  test("10 秒で終わらなかったら、前の色の結果のまま「整形の準備が終わらなかった」と知らせ、代わりの整形表示にしない", () => {
+    const s = themed();
+    const now = clock(1);
+    s.setLook(NEW);
+    s.tick(0, now);
+    now.skip(10_500);
+    s.tick(0, now);
+    expect(s.display().kind).toBe("formatted");
+    expect(shownFiles(s)).toEqual(["flowchart LR; A-->B@old|w800", "flowchart LR; C-->D@old|w800"]);
+    expect(s.display().notices).toEqual([{ kind: "restyle-timeout" }]);
+  });
+
+  test("知らせは、次に書き出せたら消える", () => {
+    const s = themed();
+    s.setLook(NEW);
+    s.writeFailed(s.writeTask().name, "書けない", 2);
+    s.setLook(OLD);
+    s.setLook(NEW);
+    for (let task; (task = s.writeTask());) s.wrote(task.name, 3);
+    for (const f of s.preloads()) s.loadedImage(f.name, 3);
+    expect(s.display().notices).toEqual([]);
+    expect(shownFiles(s)).toEqual(["flowchart LR; A-->B@new|w800", "flowchart LR; C-->D@new|w800"]);
+  });
+
+  test("書き直しの途中で中身が変わったら、新しい中身と新しい色で準備し、それまで前の整形表示を出す", () => {
+    const s = themed();
+    s.setLook(NEW);
+    s.change(twoDiagrams("b"));
+    expect(s.display().kind).toBe("previous");
+    const names = [];
+    for (let task; (task = s.writeTask());) { names.push(task.name); s.wrote(task.name, 2); }
+    for (const f of s.preloads()) s.loadedImage(f.name, 2);
+    expect(names).toEqual(["flowchart LR; A-->B@new|w800", "flowchart LR; C-->D@new|w800"]);
+    expect(s.display().kind).toBe("formatted");
+  });
+});
