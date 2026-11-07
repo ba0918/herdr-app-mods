@@ -38,6 +38,13 @@ describe("carryOver", () => {
     expect(next.drafts).toEqual(drafts);
   });
 
+  test(".mmd の図の拡大と位置（と枠の大きさ）は、読み直しても引き継ぐ", () => {
+    const zoom = { scale: 2, view: { width: 100, height: 80 } };
+    const next = { editor: {}, view: { type: "mermaid" } };
+    carryOver({ editor: {}, view: { type: "mermaid" }, zoom }, next);
+    expect(next.zoom).toBe(zoom);
+  });
+
   test("読み直したら読み取り専用になったか、Editor で中身を出せなくなったタブには残さない", () => {
     for (const next of [{ editor: {}, readonly: true }, { view: { type: "unopenable", reason: "binary" } }]) {
       carryOver({ editor: {}, drafts }, next);

@@ -11,8 +11,9 @@ export function reloadOutcome({ editor, image, edited, missing }) {
   return "replace";
 }
 
-// 読み直した内容（next）に置き換えるとき、前の file（prev）から引き継ぐもの: 画像の拡大と位置、答えていない「復元 / 破棄」の下書き。
+// 読み直した内容（next）に置き換えるとき、前の file（prev）から引き継ぐもの: 画像と .mmd の図の拡大と位置（枠の大きさも持つ。
+// 拡大の部品は枠の大きさが変わったときしか測り直さない）、答えていない「復元 / 破棄」の下書き。
 export function carryOver(prev, next) {
-  if (next.zoom && prev.zoom) next.zoom = prev.zoom;
+  if (prev.zoom && (next.zoom || next.view?.type === "mermaid")) next.zoom = prev.zoom;
   if (prev.drafts?.length && offersDrafts(next)) next.drafts = prev.drafts;
 }
