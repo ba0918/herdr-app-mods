@@ -782,9 +782,10 @@ export default class FileViewer extends View {
   }
 
   // 描画の外の準備の区間が戻らないまま止まっていないかを見張る（lib/markdown-state.js の watch）。止まると描き直しも
-  // 起きないので、描画ではなくタイマーから見る。手放したら、描き直しで代わりの整形表示を出すか、次の準備を始める。
+  // 起きないので、描画ではなくタイマーから見る。止まった非同期処理の finally が動いて印が外れていても見られるよう、
+  // 印の有無では絞らない。手放したら、描き直しで代わりの整形表示を出すか、次の準備を始める。
   watchPreparation(cx) {
-    if (!this.preparing || !this.md) return;
+    if (!this.md?.busy) return;
     const me = this.identify();
     if (!this.md.watch(Date.now, Boolean(me?.space.active && me.tabInfo?.active))) return;
     this.preparing = null;
