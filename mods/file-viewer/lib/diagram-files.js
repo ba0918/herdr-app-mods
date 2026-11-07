@@ -5,8 +5,8 @@
 // 拡大の窓が書くものは、token に窓の印を付けた <token>~<印>-<ハッシュ>.svg にし、持ち主の token は同じに読む。
 
 export const CACHE_DIR = "file-viewer-cache";
-// 書き出す SVG の長いほうの辺の上限（px）。app は SVG を書き出しの大きさの 2 倍の画像にして描くので（推測。ガイドの
-// 「image(path) の SVG」）、大きすぎる絵でメモリを使い切らないようにする。超える倍率では、この大きさの絵を引き伸ばして出す。
+// 書き出す SVG の長いほうの辺の上限（px）。app は SVG を画像にして持つので、拡大の窓で大きな倍率にしたときに、大きすぎる画像で
+// メモリを使い切らないようにする。超える倍率では、この大きさの絵を引き伸ばして出す。
 const MAX_SIDE = 4096;
 
 const COLOR_NAMES = ["background", "foreground", "muted", "raised", "surface", "border"];

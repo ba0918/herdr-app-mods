@@ -10,7 +10,9 @@ import { base64ToBytes } from "./lib/image.js";
 import { createDraftStore } from "./lib/draft-store.js";
 import { utf8Checker } from "./lib/utf8.js";
 
-export const CACHE_DIR = "file-viewer-cache";
+import { CACHE_DIR } from "./lib/diagram-files.js";
+
+export { CACHE_DIR };
 export const DRAFTS_DIR = "file-viewer-drafts";
 const HEADER_BYTES = 256 * 1024;
 
@@ -232,6 +234,16 @@ export async function copyImage(path, on, prefix) {
     `$ErrorActionPreference='Stop'; [IO.File]::WriteAllBytes(${psQuote(cachePath(name))}, [Convert]::FromBase64String([IO.File]::ReadAllText(${psQuote(b64)}))); Remove-Item -LiteralPath ${psQuote(b64)}`]);
   if (d.code !== 0) throw new Error(d.stderr.trim() || "画像のコピーに失敗した");
   return { exists: true, size, base: { hash, stat }, cache: `${CACHE_DIR}/${name}`, header: base64ToBytes(data, HEADER_BYTES) };
+}
+
+// file-viewer-cache/ に文字列のファイルを書く（図の SVG）。name: ファイルの名前。
+export async function writeCacheText(name, text) {
+  await fs.mkdir(`${appHome()}/${CACHE_DIR}`, { recursive: true }).catch(() => {});
+  await fs.writeFile(cachePath(name), text);
+}
+
+export async function cacheExists(name) {
+  return fs.exists(cachePath(name)).catch(() => false);
 }
 
 export async function removeCache(cache) {

@@ -16,17 +16,17 @@ import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
+import { diagramFile, bodyLook, svgOwner } from "./lib/diagram-files.js";
+import { diagramSvg, diagramColors } from "./lib/mermaid/svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
-import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR, pauseForApp } from "./io.js";
-import { markdownBody, markdownPreparing, diagramError } from "./views/markdown.js";
+import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, writeCacheText, cacheExists, CACHE_DIR, pauseForApp } from "./io.js";
+import { markdownBody, markdownWaiting, preloadImages, bodyWidth, diagramError } from "./views/markdown.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
 import { diagram } from "./views/mermaid.js";
 
 const POLL_MS = 2000;
-// 画像のコピーの名前: <token>-<内容のハッシュ 12 桁>.<拡張子>（運搬中の .b64 も含む）。
-const CACHE_NAME = /^(.+)-[0-9a-f]{12}\.[^.]+(\.b64)?$/;
 const DRAFT_MS = 3000;
 // 描画の外の整形の準備の 1 区間（仕様の「整形の準備」。ガイドの「長い同期処理」の 0.5 秒より十分短く）。
 const PREPARE_SLICE_MS = 100;
@@ -54,6 +54,7 @@ function markdownNotice(n) {
   }
   if (n.kind === "over") return `図が多すぎるので整形表示をせず、ソース表示で開いている（整形表示の上限 図 ${n.limit} 個、今の内容 図 ${n.size} 個）`;
   if (n.kind === "image") return `画像を押せる名前にできなかったので、画像と図をそのまま表示している（${n.message}）`;
+  if (n.kind === "write") return `図を書き出せなかったので、画像と図をそのまま表示している（${n.message}）`;
   return "整形の準備が終わらなかったので、画像と図をそのまま表示している";
 }
 
@@ -104,8 +105,9 @@ export default class FileViewer extends View {
   async close() {
     const file = this.file;
     if (file?.dirty && file.editor) await writeDraft(this.draftOf(file)).catch(() => {});
-    // 閉じたタブの画像のコピーは消す（アプリの終了でも消えるが、次に開いたときにコピーし直す）。
+    // 閉じたタブの画像のコピーと図の SVG（拡大の窓が書いたものも）は消す（アプリの終了でも消えるが、次に開いたときに書き直す）。
     await removeCache(file?.cache);
+    for (const name of await listCache()) if (svgOwner(name)?.token === this.token) await removeCache(`${CACHE_DIR}/${name}`);
     file?.editor?.release();
   }
 
@@ -172,7 +174,9 @@ export default class FileViewer extends View {
       this.file = file;
       this.setDirty(false);
       cx.notify();
+      // 前に開いていたファイルの画像のコピーと図の SVG を消す（Markdown の図は、整形表示の差し替えのあとに消す）。
       if (file.cache) await this.dropOtherCaches(file.cache);
+      else if (file.view?.type !== "markdown") await this.dropOtherCaches(null);
       await this.offerDrafts(file);
       cx.notify();
     });
@@ -237,18 +241,44 @@ export default class FileViewer extends View {
   async sweepCaches() {
     const open = openTokens();
     for (const name of await listCache()) {
-      const owner = name.match(CACHE_NAME)?.[1];
+      const owner = svgOwner(name)?.token;
       if (!owner || !open.has(owner)) await removeCache(`${CACHE_DIR}/${name}`);
     }
   }
 
   // 同じタブの古い画像のコピー（内容が変わる前のもの）を消す。読み込んだ file を採った後に呼ぶ
-  // （捨てるかもしれない読み込みの途中で呼ぶと、表示中のコピーを消してしまう）。
+  // （捨てるかもしれない読み込みの途中で呼ぶと、表示中のコピーを消してしまう）。拡大の窓が書いたものは、窓が消す。
   async dropOtherCaches(keep) {
     for (const name of await listCache()) {
       const path = `${CACHE_DIR}/${name}`;
-      if (path !== keep && name.match(CACHE_NAME)?.[1] === this.token) await removeCache(path);
+      const owner = svgOwner(name);
+      if (path !== keep && owner?.token === this.token && !owner.mark) await removeCache(path);
     }
+  }
+
+  // 整形表示の中で使わなくなった図の SVG（差し替えの前の絵、前の色や大きさの絵）を消す。拡大の窓が書いたものは消さない。
+  async dropUnusedSvgs(md) {
+    for (const name of await listCache()) {
+      const owner = svgOwner(name);
+      if (owner?.token !== this.token || owner.mark || !name.endsWith(".svg")) continue;
+      if (this.md !== md || md.keep().has(name)) continue;
+      await removeCache(`${CACHE_DIR}/${name}`);
+      md.lost([name]);
+    }
+  }
+
+  // 出している図の SVG があるかを確かめ、無くなっていれば書き直させる（整形表示に入るときと、表示に戻ったとき）。
+  checkSvgs(cx) {
+    const md = this.md;
+    const files = (md?.shown?.files ?? []).filter(Boolean);
+    if (!files.length) return;
+    cx.spawn(async (cx) => {
+      const missing = [];
+      for (const f of files) if (!(await cacheExists(f.name))) missing.push(f.name);
+      if (!missing.length || this.md !== md) return;
+      md.lost(missing);
+      cx.notify();
+    });
   }
 
   // UTF-8 でない（読み取り専用にする）か。読んだ内容に U+FFFD があるときだけファイルのバイト列を確かめ、
@@ -656,7 +686,11 @@ export default class FileViewer extends View {
       cx.spawn(async () => this.syncTitle(me));
     }
     if (this.file?.editor && this.themeKey !== themeKey(t)) cx.spawn(async (cx) => this.rebuildEditor(cx));
-    this.syncMarkdown(rec, cx);
+    // 表示に戻ったら、出している図の SVG があるかを確かめる（表示していない間に掃除で消えていれば書き直す）。
+    const shownNow = this.visible();
+    if (shownNow && !this.wasVisible) this.checkSvgs(cx);
+    this.wasVisible = shownNow;
+    this.syncMarkdown(rec, t, cx);
 
     return v_flex().id("fv-root").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .track_focus(this.focus).on_key_down((e, cx) => this.onKey(e, cx))
@@ -734,8 +768,10 @@ export default class FileViewer extends View {
   toggleSource(cx) {
     const md = this.file?.view?.type === "markdown" ? this.md : null;
     if (md) {
-      if (md.display().kind === "source") md.enter();
-      else md.toSource();
+      if (md.display().kind === "source") {
+        md.enter();
+        this.checkSvgs(cx);
+      } else md.toSource();
       putRecord(this.token, { mode: md.userSource ? "source" : null });
     } else {
       putRecord(this.token, { mode: this.showsSource(record(this.token)) ? null : "source" });
@@ -748,17 +784,31 @@ export default class FileViewer extends View {
   // 描画のたびに、Markdown の今の内容を見え方の決まりに渡す（開いたとき・中身が変わったとき）。描画の中で済む大きさなら、
   // ここで整形の準備を終える（前の描画がその準備の途中で打ち切られていたら、描画の外に移す）。描画の外で準備するものがあれば、
   // 区切りながら進める。
-  syncMarkdown(rec, cx) {
+  syncMarkdown(rec, t, cx) {
     const file = this.file;
     if (!file || file.loading || file.view?.type !== "markdown" || !file.editor) return;
     const text = file.editor.value();
     if (!this.md) {
-      this.md = new MarkdownState();
+      this.md = new MarkdownState({ fileOf: (part, look) => diagramFile(this.token, part, look) });
+      this.md.setLook(this.bodyLook(t));
       this.md.open(text, { userSource: rec?.mode === "source" });
     } else {
+      this.md.setLook(this.bodyLook(t));
       this.md.sync(text);
     }
-    if (this.md.busy && !this.preparing && this.visible()) this.runPreparation(cx);
+    if (this.md.needsRun && !this.preparing && this.visible()) this.runPreparation(cx);
+    // 差し替えが済んだら、使わなくなった図の SVG を消す。
+    if (this.md.shown !== this.cleaned) {
+      const md = this.md;
+      this.cleaned = md.shown;
+      cx.spawn(async () => this.dropUnusedSvgs(md));
+    }
+  }
+
+  // 本文の図の見た目（テーマの色と本文の幅）。本文の幅がまだ分からなければ、窓の描ける大きさから見積もる。
+  bodyLook(t) {
+    const width = bodyWidth(this.mdBox) ?? Math.max(120, window.viewport_size().width - 48);
+    return bodyLook(diagramColors(t), width);
   }
 
   // 描画の外の整形の準備を、1 区間ずつ入出力の await で区切って進める。区間ごとに自分のタブを表示しているかを取り直し
@@ -769,22 +819,51 @@ export default class FileViewer extends View {
     const md = this.md;
     const run = this.preparing = {};
     cx.spawn(async (cx) => {
+      let notified = Date.now();
       try {
-        while (this.preparing === run && md.busy) {
+        while (this.preparing === run && md.needsRun) {
           // spawn の中身は最初の await まで、呼んだ描画の中で動き、そこでの cx.notify() は例外になる（ガイドの「制約」）ので、
           // 区間の前に区切る。
           await pauseForApp();
-          if (this.preparing !== run || !md.busy) break;
+          if (this.preparing !== run || !md.needsRun) break;
           const me = this.identify();
           if (!(me?.space.active && me.tabInfo?.active)) { md.pause(); break; }
           const shown = md.shown, failure = md.failure;
-          md.tick(PREPARE_SLICE_MS, Date.now);
-          if (md.shown !== shown || md.failure !== failure) cx.notify();
+          const task = md.writeTask();
+          if (task) await this.writeSvg(md, task);
+          else md.tick(PREPARE_SLICE_MS, Date.now);
+          // 書いた SVG を読み込ませる（見えない所に置く）ための描き直しは、書き終えたときと、書く間はときどきにする（大きな整形表示の
+          // 描き直しは重い）。
+          const written = task && (!md.writeTask() || Date.now() - notified > 250);
+          if (md.shown !== shown || md.failure !== failure || written) {
+            notified = Date.now();
+            cx.notify();
+          }
         }
       } finally {
         if (this.preparing === run) this.preparing = null;
       }
     });
+  }
+
+  // 書いたがまだ読み込んでいない図の SVG を、見えない所で読み込ませる要素。無ければ null。
+  preloadsOf(md) {
+    const files = md.preloads();
+    if (!files.length) return null;
+    return preloadImages({ id: "fv-preload", files, onLoaded: (name, cx) => { if (md.loadedImage(name, Date.now())) cx.notify(); } });
+  }
+
+  // 図の SVG を書く（もうあれば書かない）。書く間の時間も、準備を動かしている時間に数える。
+  async writeSvg(md, task) {
+    const colors = md.look.colors;
+    try {
+      if (!(await cacheExists(task.name))) {
+        await writeCacheText(task.name, diagramSvg(task.part.layout, colors, { width: task.exportWidth, height: task.exportHeight }));
+      }
+      md.wrote(task.name, Date.now());
+    } catch (e) {
+      md.writeFailed(task.name, message(e), Date.now());
+    }
   }
 
   // 描画の外の準備の区間が戻らないまま止まっていないかを見張る（lib/markdown-state.js の watch）。止まると描き直しも
@@ -882,7 +961,7 @@ export default class FileViewer extends View {
   body(rec, t) {
     const file = this.file;
     if (!file) return div().p(16).text_color(t.dim).child(this.token ? "" : "開くファイルが指定されていない");
-    if (file.loading) return div().p(16).text_color(t.dim).child("読み込み中…");
+    if (file.loading) return markdownWaiting({ id: "fv-loading", loading: true, box: this.mdBox, t });
     const view = file.view;
     if (view.type === "unopenable") return this.unopenable(file, view, t);
     if (view.type === "image" && !(this.showsSource(rec) && file.editor)) {
@@ -890,11 +969,12 @@ export default class FileViewer extends View {
     }
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
       const md = this.md.display();
-      if (md.kind === "preparing") return markdownPreparing({ id: "fv-markdown-preparing", t });
+      const preload = this.preloadsOf(this.md);
+      if (md.kind === "preparing" || md.kind === "loading") return markdownWaiting({ id: "fv-markdown-waiting", loading: md.kind === "loading", box: this.mdBox, preload, t });
       return markdownBody({
-        id: "fv-markdown", parts: md.parts, box: this.mdBox, t,
+        id: "fv-markdown", parts: md.parts, box: this.mdBox, preload, t,
         onLink: (url, cx) => this.followLink(url, cx),
-        onDiagram: (source, firstLine) => this.openDiagram(source, firstLine),
+        onDiagram: (part) => this.openDiagram(part.source, part.firstLine),
       });
     }
     if (view.type === "mermaid" && file.editor && !this.showsSource(rec)) return this.mermaidFile(file, t);
