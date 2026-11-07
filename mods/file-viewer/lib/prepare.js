@@ -83,3 +83,9 @@ export function prepareAll(text) {
   prep.advance(Infinity, () => 0);
   return prep;
 }
+
+// 整形の準備に失敗したときの代わりの整形表示の部分。整形の準備を何もせず、今の内容をそのまま 1 つの文章の部分にする
+// （画像は押せる名前にせず、```mermaid も図にせずコードのまま出る。図の配置が重さの原因でも止まらないように）。
+export function fallbackParts(text) {
+  return [{ type: "markdown", text }];
+}
