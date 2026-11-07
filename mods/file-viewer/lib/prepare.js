@@ -59,7 +59,7 @@ export function startPreparation(text, { rewriter = blockRewriter } = {}) {
   }
 
   const prep = {
-    text, parts, done: false, failed: false,
+    parts, done: false, failed: false,
     advance(budget, now) {
       if (prep.done || prep.failed) return prep.done;
       const start = now();
