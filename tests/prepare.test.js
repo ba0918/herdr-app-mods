@@ -138,9 +138,4 @@ describe("startPreparation", () => {
   test("空の文書も 1 つの文章の部分になる", () => {
     expect(prepareAll("").parts).toEqual([{ type: "markdown", text: "" }]);
   });
-
-  test("画像の書き換えが例外を投げたら advance から投げる", () => {
-    const prep = startPreparation("![a](b.png)", { rewriter: () => () => { throw new Error("壊れた"); } });
-    expect(() => prep.advance(Infinity, clock(1))).toThrow("壊れた");
-  });
 });

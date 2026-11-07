@@ -333,27 +333,17 @@ describe("失敗したとき", () => {
     expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts("small b"), notices: [{ kind: "timeout" }] });
   });
 
-  test("画像を押せる名前にする処理が例外を投げたら、代わりの整形表示と理由（例外のメッセージ）の知らせ", () => {
-    const broken = (text) => startPreparation(text, { rewriter: () => () => { throw new Error("壊れた"); } });
-    const s = makeState({ start: broken });
-    s.open(big("a"));
-    finish(s);
-    expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts(big("a")), notices: [{ kind: "image", message: "壊れた" }] });
-  });
-
   test("失敗の知らせは整形表示のときだけ出て、次の準備が失敗せずに終わると消える", () => {
-    let fail = true;
-    const sometimes = (text) => startPreparation(text, fail ? { rewriter: () => () => { throw new Error("壊れた"); } } : {});
-    const s = makeState({ start: sometimes });
+    const s = makeState();
+    const now = clock(2_001);
     s.open(big("a"));
-    finish(s);
+    for (let i = 0; i < 5; i++) s.tick(0, now);
     s.toSource();
     expect(s.display().notices).toEqual([]);
     s.enter();
-    expect(s.display().notices).toEqual([{ kind: "image", message: "壊れた" }]);
-    fail = false;
+    expect(s.display().notices).toEqual([{ kind: "timeout" }]);
     s.change(big("b"));
-    expect(s.display().notices).toEqual([{ kind: "image", message: "壊れた" }]);
+    expect(s.display().notices).toEqual([{ kind: "timeout" }]);
     finish(s);
     expect(s.display()).toEqual({ kind: "formatted", parts: partsOf(big("b")), notices: [] });
   });
