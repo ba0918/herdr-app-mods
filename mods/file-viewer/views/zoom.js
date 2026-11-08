@@ -7,8 +7,10 @@ const MIN = 0.05, MAX = 32, STEP = 1.25;
 
 export class Zoom {
   // fitMax: 枠に収めるときの最大の倍率（画像は 1 = 等倍まで、図の拡大表示は大きくしてよい）。
-  constructor({ fitMax = 1 } = {}) {
+  // maxScale(width, height): 拡大の倍率の上限（図は、書き出す絵の面積の上限に収まる倍率。無ければ MAX まで）。
+  constructor({ fitMax = 1, maxScale = null } = {}) {
     this.fitMax = fitMax;
+    this.maxScale = maxScale;
     this.fit = true;   // 枠に収まる大きさに追従している
     this.scale = 1;
     this.x = 0;        // 中心からのずれ（px）
@@ -19,7 +21,11 @@ export class Zoom {
 
   fitScale(width, height) {
     if (!this.view || !width || !height) return 1;
-    return Math.min(this.fitMax, this.view.width / width, this.view.height / height);
+    return Math.min(this.fitMax, this.limit(width, height), this.view.width / width, this.view.height / height);
+  }
+
+  limit(width, height) {
+    return Math.min(MAX, this.maxScale?.(width, height) ?? MAX);
   }
 
   current(width, height) {
@@ -28,12 +34,12 @@ export class Zoom {
 
   reset() { this.fit = true; this.x = 0; this.y = 0; }
 
-  actual() { this.fit = false; this.scale = 1; this.x = 0; this.y = 0; }
+  actual(width, height) { this.fit = false; this.scale = Math.min(1, this.limit(width, height)); this.x = 0; this.y = 0; }
 
   // at: 枠の中の点（その点が動かないように拡大する）。無ければ中心。
   zoomBy(factor, width, height, at) {
     const before = this.current(width, height);
-    const after = Math.max(MIN, Math.min(MAX, before * factor));
+    const after = Math.max(MIN, Math.min(this.limit(width, height), before * factor));
     if (at && this.view) {
       const cx = at.x - this.view.width / 2, cy = at.y - this.view.height / 2;
       this.x = cx - (cx - this.x) * (after / before);
@@ -59,7 +65,7 @@ export function zoomTools({ id, zoom, width, height, t }) {
     .child(tool(`${id}-out`, "−", t, () => zoom.zoomBy(1 / STEP, width, height)))
     .child(div().w(44).flex_none().text_center().text_size(12).text_color(t.muted).child(zoom.label(width, height)))
     .child(tool(`${id}-in`, "+", t, () => zoom.zoomBy(STEP, width, height)))
-    .child(tool(`${id}-actual`, "等倍", t, () => zoom.actual()))
+    .child(tool(`${id}-actual`, "等倍", t, () => zoom.actual(width, height)))
     .child(tool(`${id}-fit`, "収まる", t, () => zoom.reset()));
 }
 

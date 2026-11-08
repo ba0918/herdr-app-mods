@@ -14,6 +14,14 @@ export function bodyWidth(box) {
 // 整形表示の場所の大きさを覚える（本文の幅が変わったら描き直す）。
 const measure = (box) => (size, cx) => { if (size.width !== box.width) { box.width = size.width; cx.notify(); } };
 
+// 書き出した図の絵。大きな絵はタイル（同じ絵の切れ端）を隙間なく並べる（lib/diagram-files.js）。どれも書き出しの大きさのまま出す。
+export function diagramImage(file) {
+  const tiles = file.tiles ?? [file];
+  if (tiles.length === 1) return image(tiles[0].path).w(file.width).h(file.height);
+  return div().relative().flex_none().w(file.width).h(file.height)
+    .children(tiles.map((t) => image(t.path).absolute().left(t.x).top(t.y).w(t.width).h(t.height)));
+}
+
 // 描けない図: コードのまま出し、その上に理由を添える。
 export function diagramError({ id, message, fence, t }) {
   return v_flex().id(id).gap(4).flex_none()
@@ -36,7 +44,7 @@ export function markdownBody({ id, parts, onLink, onDiagram, box, t }) {
       const file = part.file;
       return div().id(`${id}-${i}`).flex_none().cursor_pointer().rounded(6).py(6).hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => onDiagram(part, cx))
-        .child(file ? image(file.path).w(file.width).h(file.height) : div());
+        .child(file ? diagramImage(file) : div());
     }))
     .child(div().h(24).flex_none());
 }

@@ -16,14 +16,14 @@ import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
-import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, svgOwner } from "./lib/diagram-files.js";
+import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, svgOwner, maxDiagramScale, tileView } from "./lib/diagram-files.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
 import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, writeCacheText, cacheExists, CACHE_DIR, pauseForApp } from "./io.js";
-import { markdownBody, markdownWaiting, preloadImages, bodyWidth, diagramError } from "./views/markdown.js";
+import { markdownBody, markdownWaiting, preloadImages, diagramImage, bodyWidth, diagramError } from "./views/markdown.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
 
@@ -33,6 +33,10 @@ const DRAFT_MS = 3000;
 const PREPARE_SLICE_MS = 100;
 // 図の拡大の窓の大きさ（タブの窓に対する割合）。
 const OVERLAY_WIDTH = 0.92, OVERLAY_HEIGHT = 0.9;
+// 図の絵の SVG の名前（大きな絵はタイルごと）。
+const tileNames = (f) => (f.tiles ?? [f]).map((t) => t.name);
+// 図の拡大（拡大の窓・.mmd）の倍率の上限: 書き出す絵の面積の上限に収まる倍率（lib/diagram-files.js）。
+const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: (width, height) => maxDiagramScale({ width, height }) });
 // 図の拡大の窓で、配置が止まっていないかを見る間隔。
 const OVERLAY_WATCH_MS = 1000;
 
@@ -45,6 +49,15 @@ const fileKey = (machine, path) => `${machine ?? null}\n${path}`;
 const message = (e) => String(e?.message ?? e);
 // 拡大の窓が書く SVG の名前に付ける、窓ごとの印。
 const windowMark = () => `z${Math.random().toString(36).slice(2, 8)}`;
+
+// 配置の大きさの SVG の文字列 text から、図の絵を書く（大きな絵はタイルごとに、同じ絵の viewBox の切れ端）。
+// skipExisting: もうあるタイルは書かない。
+async function writeTiles(text, file, layout, { skipExisting = false } = {}) {
+  for (const t of file.tiles) {
+    if (skipExisting && (await cacheExists(t.name))) continue;
+    await writeCacheText(t.name, resizeSvg(text, { width: t.width, height: t.height, view: tileView(file, t, layout) }));
+  }
+}
 const pad = (n) => String(n).padStart(2, "0");
 function when(ms) {
   const d = new Date(ms);
@@ -83,7 +96,7 @@ export default class FileViewer extends View {
       this.overlay = {
         source: p.mermaid, firstLine: p.firstLine ?? 1, token: p.token ?? "fv-overlay", mark: p.mark ?? "z0",
         size: { width: p.layoutWidth ?? 1, height: p.layoutHeight ?? 1 },
-        zoom: new Zoom({ fitMax: 3 }), layout: null, running: false,
+        zoom: diagramZoom({ fitMax: 3 }), layout: null, running: false,
         colors: { [colorsKey(colors)]: colors }, svgs: { [colorsKey(colors)]: p.svg ?? null },
         zs: p.shown ? new ZoomSvg({ shown: p.shown, colorsKey: colorsKey(colors) }) : null,
       };
@@ -280,7 +293,7 @@ export default class FileViewer extends View {
     for (const name of await listCache()) {
       const path = `${CACHE_DIR}/${name}`;
       const owner = svgOwner(name);
-      if (path !== keep && owner?.token === this.token && !owner.mark && name !== this.lent) await removeCache(path);
+      if (path !== keep && owner?.token === this.token && !owner.mark && !this.lent?.has(name)) await removeCache(path);
     }
   }
 
@@ -290,7 +303,7 @@ export default class FileViewer extends View {
     for (const name of await listCache()) {
       const owner = svgOwner(name);
       if (owner?.token !== this.token || owner.mark || !name.endsWith(".svg")) continue;
-      if (this.md !== md || md.keep().has(name) || name === this.lent) continue;
+      if (this.md !== md || md.keep().has(name) || this.lent?.has(name)) continue;
       await removeCache(`${CACHE_DIR}/${name}`);
       md.lost([name]);
     }
@@ -303,7 +316,7 @@ export default class FileViewer extends View {
     if (!files.length) return;
     cx.spawn(async (cx) => {
       const missing = [];
-      for (const f of files) if (!(await cacheExists(f.name))) missing.push(f.name);
+      for (const name of files.flatMap(tileNames)) if (!(await cacheExists(name))) missing.push(name);
       if (!missing.length || this.md !== md) return;
       md.lost(missing);
       cx.notify();
@@ -857,7 +870,7 @@ export default class FileViewer extends View {
 
   // .mmd の図の見た目（テーマの色と、今の倍率。枠に収める倍率なら枠の大きさ）。枠の大きさがまだ分からなければ、窓の描ける大きさで見積もる。
   mmdLook(t) {
-    const zoom = this.file.zoom ??= new Zoom();
+    const zoom = this.file.zoom ??= diagramZoom();
     const colors = diagramColors(t);
     if (!zoom.fit) return scaleLook(colors, zoom.scale);
     const view = zoom.view ?? { width: window.viewport_size().width, height: window.viewport_size().height };
@@ -925,12 +938,12 @@ export default class FileViewer extends View {
     return preloadImages({ id: "fv-preload", files, onLoaded: (name, cx) => { if (md.loadedImage(name, Date.now())) cx.notify(); } });
   }
 
-  // 図の SVG を書く（もうあれば書かない）。書く間の時間も、準備を動かしている時間に数える。
+  // 図の SVG（タイル 1 枚）を書く（もうあれば書かない）。書く間の時間も、準備を動かしている時間に数える。
   async writeSvg(md, task) {
-    const colors = md.look.colors;
+    const colors = md.look.colors, l = task.part.layout;
     try {
       if (!(await cacheExists(task.name))) {
-        await writeCacheText(task.name, diagramSvg(task.part.layout, colors, { width: task.exportWidth, height: task.exportHeight }));
+        await writeCacheText(task.name, diagramSvg(l, colors, { width: task.width, height: task.height, view: tileView(task.file, task, l) }));
       }
       md.wrote(task.name, Date.now());
     } catch (e) {
@@ -986,7 +999,7 @@ export default class FileViewer extends View {
     const text = diagramSvg(l, colors, { width: l.width, height: l.height });
     const opening = this.opening = { state: new DiagramOpening(Date.now()), file, written: false };
     cx.spawn(async (cx) => {
-      const writing = writeCacheText(file.name, resizeSvg(text, { width: file.exportWidth, height: file.exportHeight })).then(
+      const writing = writeTiles(text, file, l).then(
         () => { opening.state.wrote(); opening.written = true; },
         () => { opening.state.failed(); },
       );
@@ -999,10 +1012,8 @@ export default class FileViewer extends View {
       if (this.opening !== opening) return;
       this.opening = null;
       const natural = opening.state.decide(Date.now()) !== "fit";
-      this.lent = natural ? part.file.name : null;
-      const shown = !natural
-        ? { name: file.name, path: file.path, width: file.width, height: file.height, scale: fit }
-        : { name: part.file.name, path: part.file.path, width: part.file.width, height: part.file.height, scale: part.file.width / l.width };
+      this.lent = natural ? new Set(tileNames(part.file)) : null;
+      const shown = !natural ? { ...file, scale: fit } : { ...part.file, scale: part.file.width / l.width };
       // 書き終えずに本文の絵で開くときは、窓に別の印を渡す（窓が収まる大きさの絵を同じ名前で書こうとして、書きかけや書き損じの
       // ファイルを読まないように）。書いていた絵は誰も使わないので、書き込みが終わったら消す。
       const late = !opening.written;
@@ -1013,7 +1024,7 @@ export default class FileViewer extends View {
       cx.notify();
       if (!late) return;
       await writing;
-      await removeCache(file.path);
+      for (const t of file.tiles) await removeCache(t.path);
     });
   }
 
@@ -1021,7 +1032,11 @@ export default class FileViewer extends View {
   openingPreload() {
     const opening = this.opening;
     if (!opening?.written) return null;
-    return preloadImages({ id: "fv-open-preload", files: [opening.file], onLoaded: () => opening.state.loaded() });
+    opening.loaded ??= new Set();
+    return preloadImages({ id: "fv-open-preload", files: opening.file.tiles, onLoaded: (name) => {
+      opening.loaded.add(name);
+      if (opening.loaded.size === opening.file.tiles.length) opening.state.loaded();
+    } });
   }
 
   // 図の拡大の窓。受け取った SVG を画像で出し、倍率やテーマが変わったら書き直す（書き終えて読み込むまで前の絵のまま）。
@@ -1047,7 +1062,7 @@ export default class FileViewer extends View {
       .when(Boolean(notice), (el) => el.child(this.banner("fv-overlay-notice", `図を書き出せなかった（${notice.kind === "timeout" ? "10 秒たっても終わらなかった" : notice.message}）`, t, t.blocked)))
       .child(zoomArea({
         id: "fv-overlay-area", zoom: o.zoom, width: o.size.width, height: o.size.height, shownScale: file.scale, t,
-        content: () => image(file.path).w(file.width).h(file.height),
+        content: () => diagramImage(file),
       }))
       .when(preloads.length > 0, (el) => el.child(preloadImages({ id: "fv-overlay-preload", files: preloads, onLoaded: (name, cx) => {
         if (!o.zs.loadedImage(name)) return;
@@ -1070,7 +1085,7 @@ export default class FileViewer extends View {
           try {
             const text = await this.overlaySvgText(task.colorsKey);
             const file = diagramFile(o.token, { source: o.source, layout: o.size }, scaleLook(o.colors[task.colorsKey], task.scale), o.mark);
-            if (!(await cacheExists(file.name))) await writeCacheText(file.name, resizeSvg(text, { width: file.exportWidth, height: file.exportHeight }));
+            await writeTiles(text, file, o.size, { skipExisting: true });
             o.zs.wrote(task, file);
           } catch (e) {
             o.zs.failed(task, message(e));
@@ -1129,7 +1144,7 @@ export default class FileViewer extends View {
   // .mmd / .mermaid: 図で開き、枠に収めて拡大・移動できるようにする。図は書き出した SVG の画像で出し、準備の間は「整形中…」。
   // 描けなければ理由とソース。
   mermaidFile(file, t) {
-    const zoom = file.zoom ??= new Zoom();
+    const zoom = file.zoom ??= diagramZoom();
     const v = diagramFileView(this.md.display());
     if (v.kind === "preparing") {
       return div().id("fv-mmd-waiting").relative().flex_1().min_h(0).size_full().px(16).py(16).text_color(t.dim)
@@ -1144,7 +1159,7 @@ export default class FileViewer extends View {
     return v_flex().id("fv-mmd-box").relative().flex_1().min_h(0).size_full()
       .child(zoomArea({
         id: "fv-mmd-area", zoom, width: l.width, height: l.height, shownScale: svg.width / l.width, t,
-        content: () => image(svg.path).w(svg.width).h(svg.height),
+        content: () => diagramImage(svg),
       }));
   }
 
