@@ -551,6 +551,18 @@ describe("図の SVG の書き出し", () => {
     expect(s.busy).toBe(false);
   });
 
+  test("捨てた準備の図の書き出しが、中身が変わったあとで失敗しても、今の中身の準備は失敗にしない", () => {
+    const s = svgState();
+    s.open(smallD("a"));
+    const task = s.writeTask();
+    s.change(smallD("b"));
+    s.writeFailed(task.name, "書けない", clock()());
+    writeAll(s);
+    expect(s.display().kind).toBe("formatted");
+    expect(s.display().notices).toEqual([]);
+    expect(shownFiles(s)).toEqual(["flowchart LR; b1-->b2@c1|w800"]);
+  });
+
   test("出している SVG が無くなっていたら、書き直すまで書いていない図と同じに待つ", () => {
     const s = svgState();
     s.open(smallD("a"));

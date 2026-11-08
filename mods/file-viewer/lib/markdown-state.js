@@ -184,10 +184,11 @@ export class MarkdownState {
   }
 
   // 図の SVG を書けなかったとき。最初の書き出しなら代わりの整形表示と知らせにし、出している結果の書き直し（テーマや本文の幅が
-  // 変わった）なら、前の見た目の絵のまま知らせる（仕様の「色」）。
+  // 変わった）なら、前の見た目の絵のまま知らせる（仕様の「色」）。今の準備が使わない図（中身や見た目が変わって捨てた準備の図）
+  // なら、何もしない。
   writeFailed(name, message, t) {
     const job = this.job;
-    if (!job?.parts) return;
+    if (!job?.parts || !this.filesFor(job.parts).some((f) => f?.name === name)) return;
     this.count(job, t);
     if (job.restyle) {
       this.job = null;
