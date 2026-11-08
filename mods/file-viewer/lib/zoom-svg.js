@@ -5,6 +5,8 @@
 
 const TIME_LIMIT = 10_000;
 const keyOf = (w) => `${w.scale}|${w.colorsKey}`;
+// 絵の SVG の並び（大きな絵はタイルに分かれる。lib/diagram-files.js）。
+const tilesOf = (f) => f.tiles ?? [f];
 
 export class ZoomSvg {
   // shown: 今出している絵 { name, path, scale, width, height }（width / height は出す大きさ）。colorsKey: その絵の色の鍵。
@@ -14,7 +16,7 @@ export class ZoomSvg {
     this.want = { scale: shown.scale, colorsKey };
     this.writing = null;   // 書いている書き出し { scale, colorsKey }
     this.ready = null;     // 書き終えて、読み込みを待っている { task, file }
-    this.loaded = new Set([shown.name]);
+    this.loaded = new Set(tilesOf(shown).map((t) => t.name));
     this.notice = null;    // { kind: "write", message } | { kind: "timeout" }
     this.gaveUp = null;    // 失敗・時間切れであきらめた望み（同じ倍率と色のまま書き直し続けない）
     this.since = null;     // 今の望みを待ち始めた時刻
@@ -47,12 +49,16 @@ export class ZoomSvg {
     return this.writing;
   }
 
-  // 書き終えたとき。file: { name, path, width, height }。もう望まれていない倍率なら出さない。
+  // 書き終えたとき（タイルに分けた絵は全部のタイル）。file: { name, path, width, height, tiles? }。もう望まれていない倍率なら出さない。
   wrote(task, file) {
     if (this.writing === task) this.writing = null;
     if (keyOf(task) !== keyOf(this.want)) return;
     this.ready = { task, file };
-    if (this.loaded.has(file.name)) this.swap();
+    if (this.allLoaded(file)) this.swap();
+  }
+
+  allLoaded(file) {
+    return tilesOf(file).every((t) => this.loaded.has(t.name));
   }
 
   failed(task, message) {
@@ -65,7 +71,8 @@ export class ZoomSvg {
   // app が画像を読み込み終えたとき。出す絵が替わったら true。
   loadedImage(name) {
     this.loaded.add(name);
-    if (this.ready?.file.name !== name || keyOf(this.ready.task) !== keyOf(this.want)) return false;
+    const r = this.ready;
+    if (!r || keyOf(r.task) !== keyOf(this.want) || !tilesOf(r.file).some((t) => t.name === name) || !this.allLoaded(r.file)) return false;
     this.swap();
     return true;
   }
@@ -83,7 +90,7 @@ export class ZoomSvg {
   // 書いたが、まだ読み込んでいない絵（見えない所に置いて読み込ませる）。
   preloads() {
     const r = this.ready;
-    return r && keyOf(r.task) === keyOf(this.want) && !this.loaded.has(r.file.name) ? [r.file] : [];
+    return r && keyOf(r.task) === keyOf(this.want) ? tilesOf(r.file).filter((t) => !this.loaded.has(t.name)) : [];
   }
 
   // 時々呼ぶ見張り（t: 今の時刻）。望みを 10 秒たっても満たせなければ、前の絵のまま知らせる。知らせが出たら true。
@@ -104,8 +111,8 @@ export class ZoomSvg {
 
   // 使っている絵の名前（出している絵と、読み込ませている絵）。これ以外の窓の絵は消してよい。
   keep() {
-    const names = new Set([this.shown.name]);
-    if (this.ready) names.add(this.ready.file.name);
+    const names = new Set(tilesOf(this.shown).map((t) => t.name));
+    if (this.ready) for (const t of tilesOf(this.ready.file)) names.add(t.name);
     return names;
   }
 

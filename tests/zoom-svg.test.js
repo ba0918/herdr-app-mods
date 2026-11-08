@@ -131,3 +131,26 @@ describe("resizeSvg のタイル", () => {
     expect(resizeSvg(svg, { width: 300, height: 75, view: { x: 0, y: 25, width: 100, height: 25 } })).toBe('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="75" viewBox="0 25 100 25"><rect width="10" height="10"/></svg>');
   });
 });
+
+describe("拡大の窓のタイルに分けた絵", () => {
+  const tiledAt = (task) => {
+    const base = `s${task.scale}-${task.colorsKey}`;
+    const tiles = [0, 1].map((i) => ({ name: `${base}#${i}`, path: `cache/${base}#${i}`, x: 0, y: i * 50 * task.scale, width: 100 * task.scale, height: 50 * task.scale }));
+    return { name: tiles[0].name, path: tiles[0].path, width: 100 * task.scale, height: 100 * task.scale, tiles };
+  };
+
+  test("どのタイルも読み込み終えるまで前の絵を出し、終えたら替える。使っている名前はタイルごと", () => {
+    const z = new ZoomSvg({ shown: FIRST, colorsKey: "c1" });
+    z.request(3);
+    const task = z.task();
+    const file = tiledAt(task);
+    z.wrote(task, file);
+    expect(z.preloads().map((t) => t.name)).toEqual(["s3-c1#0", "s3-c1#1"]);
+    expect(z.loadedImage("s3-c1#0")).toBe(false);
+    expect(z.display().file).toEqual(FIRST);
+    expect([...z.keep()].sort()).toEqual(["s1-c1", "s3-c1#0", "s3-c1#1"]);
+    expect(z.loadedImage("s3-c1#1")).toBe(true);
+    expect(z.display().file).toEqual({ ...file, scale: 3 });
+    expect([...z.keep()].sort()).toEqual(["s3-c1#0", "s3-c1#1"]);
+  });
+});
