@@ -1153,7 +1153,7 @@ export default class FileViewer extends View {
     }
     if (v.kind === "error") {
       return v_flex().id("fv-mmd").flex_1().min_h(0).overflow_y_scrollbar().p(16)
-        .child(diagramError({ id: "fv-mmd-error", message: v.message, fence: "```\n" + file.editor.value() + "\n```", t }));
+        .child(diagramError({ id: "fv-mmd-error", message: v.message, fence: v.fence, t }));
     }
     const { layout: l, file: svg } = v.part;
     return v_flex().id("fv-mmd-box").relative().flex_1().min_h(0).size_full()

@@ -32,12 +32,13 @@ function reason(failure) {
   return failure?.message ?? "図を表示できない";
 }
 
-// MarkdownState の display() を、.mmd の出し方にする。{ kind: "preparing" | "diagram" | "error", part?, message?, notices }。
+// MarkdownState の display() を、.mmd の出し方にする。{ kind: "preparing" | "diagram" | "error", part?, message?, fence?, notices }。
+// fence は描けない図のコード（理由を出した結果の中身。読み直しの準備の間に、今の中身と組み合わせない）。
 // notices は知らせるだけのもの（書き直しの失敗）。
 export function diagramFileView(display) {
   if (display.kind === "preparing" || display.kind === "loading") return { kind: "preparing", notices: display.notices };
-  if (display.kind === "fallback") return { kind: "error", message: reason(display.notices[0]), notices: [] };
+  if (display.kind === "fallback") return { kind: "error", message: reason(display.notices[0]), fence: "```\n" + display.parts[0].text + "\n```", notices: [] };
   const part = display.parts[0];
-  if (part.error) return { kind: "error", message: part.error.message, notices: display.notices };
+  if (part.error) return { kind: "error", message: part.error.message, fence: part.fence, notices: display.notices };
   return { kind: "diagram", part, notices: display.notices };
 }

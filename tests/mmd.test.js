@@ -65,7 +65,7 @@ describe(".mmd の図の準備", () => {
     s.tick(0, now);
     now.skip(10_500);
     s.tick(0, now);
-    expect(view(s, FLOW)).toEqual({ kind: "error", message: "図の準備が終わらなかった", notices: [] });
+    expect(view(s, FLOW)).toEqual({ kind: "error", message: "図の準備が終わらなかった", fence: "```\n" + FLOW + "\n```", notices: [] });
     s.change(FLOW2);
     finish(s);
     expect(view(s, FLOW2).kind).toBe("diagram");
@@ -76,14 +76,25 @@ describe(".mmd の図の準備", () => {
     s.open(FLOW);
     s.tick(100, () => 1);
     s.writeFailed(s.writeTask().name, "書けない", 2);
-    expect(view(s, FLOW)).toEqual({ kind: "error", message: "図を書き出せなかった（書けない）", notices: [] });
+    expect(view(s, FLOW)).toEqual({ kind: "error", message: "図を書き出せなかった（書けない）", fence: "```\n" + FLOW + "\n```", notices: [] });
   });
 
   test("文法の誤りは、今までどおり描けない図の理由になる", () => {
     const s = state();
     s.open("flowchart LR\n  A-->\n");
     finish(s);
-    expect(view(s, "x")).toEqual({ kind: "error", message: "2 行目の文法エラー", notices: [] });
+    expect(view(s, "x")).toEqual({ kind: "error", message: "2 行目の文法エラー", fence: "```\nflowchart LR\n  A-->\n\n```", notices: [] });
+  });
+
+  test("描けない図を出したまま中身が変わったら、済むまで、理由と同じ中身のコードを出し続ける", () => {
+    const s = state();
+    const bad = "flowchart LR\n  A-->\n";
+    s.open(bad);
+    finish(s);
+    s.change(FLOW);
+    const v = view(s);
+    expect(v.message).toBe("2 行目の文法エラー");
+    expect(v.fence).toBe("```\n" + bad + "\n```");
   });
 
   test("テーマの書き出し直しの失敗と時間切れは、前の色の図のまま知らせる", () => {
