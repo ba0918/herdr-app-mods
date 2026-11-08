@@ -2,7 +2,7 @@
 // タブは tab.new {mod: "file-viewer", props: {token, path, machine, preview, index}} で開かれる。
 import { View, div, image } from "gpui-kit";
 import { randomUUID } from "crypto";
-import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
+import { v_flex, h_flex, Editor, EditorState, SliderState } from "gpui-base";
 import { spaces, props, theme, settings, run, notify, openOverlay, closeOverlay } from "herdr";
 import { kind, languageFor } from "./lib/kind.js";
 import { formatSize, formatSizes, limitMessage } from "./lib/size.js";
@@ -23,7 +23,8 @@ import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, writeCacheText, cacheExists, CACHE_DIR, pauseForApp } from "./io.js";
-import { markdownBody, markdownWaiting, preloadImages, diagramImage, bodyWidth, diagramError } from "./views/markdown.js";
+import { markdownBody, markdownWaiting, preloadImages, diagramImage, bodyWidth, diagramError, BAR_MAX } from "./views/markdown.js";
+import { BodyScroll, measuredParts } from "./lib/body-scroll.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
 
@@ -114,6 +115,10 @@ export default class FileViewer extends View {
     this.wrap = false;
     this.pendingTitle = null;
     this.mdBox = {};
+    // 整形表示の本文のスクロールの位置（lib/body-scroll.js）と、スクロールバーのつまみ。開いた中身ごとに位置を始めから数える。
+    this.mdScroll = new BodyScroll();
+    this.bar = SliderState.new({ min: 0, max: BAR_MAX, step: 1, value: BAR_MAX });
+    this.bar.on("change", (v, cx) => { if (this.mdScroll.moveToFraction(1 - v / BAR_MAX)) cx.notify(); });
     // Markdown の整形表示の見え方（lib/markdown-state.js）。開いた中身ごとに作り、外部変更の読み直しや下書きの復元では残す
     // （this.file は読み直しで入れ替わるので、そこには置かない）。
     this.md = null;
@@ -204,6 +209,7 @@ export default class FileViewer extends View {
     const gen = this.loads = (this.loads ?? 0) + 1;
     this.md = null;
     this.preparing = null;
+    this.mdScroll = new BodyScroll();
     this.file?.editor?.release();
     const old = this.file?.cache;
     this.file = { path: target.path, machine: target.machine ?? null, loading: true };
@@ -1181,8 +1187,10 @@ export default class FileViewer extends View {
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
       const md = this.md.display();
       if (md.kind === "preparing" || md.kind === "loading") return markdownWaiting({ id: "fv-markdown-waiting", loading: md.kind === "loading", box: this.mdBox, t });
+      this.mdScroll.expect(measuredParts(md.parts));
       return markdownBody({
-        id: "fv-markdown", parts: md.parts, box: this.mdBox, t,
+        id: "fv-markdown", parts: md.parts, box: this.mdBox, scroll: this.mdScroll, bar: this.bar, t,
+        onScroll: (changed, cx) => this.syncBar(changed, cx),
         onLink: (url, cx) => this.followLink(url, cx),
         onDiagram: (part, cx) => this.openDiagram(part, cx),
       });
@@ -1190,6 +1198,13 @@ export default class FileViewer extends View {
     if (view.type === "mermaid" && file.editor && !this.showsSource(rec)) return this.mermaidFile(file, t);
     if (file.editor) return Editor.new(file.editor).flex_1().min_h(0);
     return div().p(16).text_color(t.dim).child("表示できない");
+  }
+
+  // スクロールの位置が変わった（changed）か、本文の長さが変わったとき。スクロールバーのつまみを位置に合わせる。
+  syncBar(changed, cx) {
+    const v = Math.round((1 - this.mdScroll.fraction()) * BAR_MAX);
+    if (Math.abs(Number(this.bar.value()) - v) > 1) { this.bar.set_value(v); changed = true; }
+    if (changed) cx.notify();
   }
 
   unopenable(file, view, t) {
