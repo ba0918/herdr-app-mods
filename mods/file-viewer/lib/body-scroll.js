@@ -4,6 +4,7 @@
 // 作り直された整形表示の部品（TextView）は、中身を描くまでの数フレームのあいだ高さが 0 になり、本文が短く見える（タブの表示に
 // 戻ったときも、ソース表示や待つ間から入ったときも）。その間（縮んでいる間）は位置を本文の長さに収めずに出し、部品が中身を
 // 描いたフレームで、もとの位置に描かれるようにする。縮んでいるかは、文章の部分（中身のある Markdown）の高さで見る。
+// 何も描かない部分（参照形式の定義だけなど）は高さ 0 のままなので、待つのをやめたら（expire）その部分は数えない。
 export class BodyScroll {
   constructor() {
     // 覚えている位置（px）。
@@ -14,16 +15,24 @@ export class BodyScroll {
     // 高さを見る文章の部分の番号と、分かった高さ。
     this.parts = [];
     this.heights = new Map();
+    // 待つのをやめたときに高さ 0 だった部分（高さが来るまで数えない）。
+    this.ignored = new Set();
+    this.since = 0;
   }
 
-  // 本文の部分の並び。indexes: 高さを見る文章の部分の番号。
-  expect(indexes) {
+  // 本文の部分の並び。indexes: 高さを見る文章の部分の番号。fresh: 部品を作り直した（高さを分からないことにする）。
+  expect(indexes, now, { fresh = false } = {}) {
     this.parts = indexes;
+    if (fresh) {
+      this.heights = new Map();
+      this.ignored = new Set();
+      this.since = now;
+    }
   }
 
   // 部品が中身を描くのを待っている（文章の部分のどれかの高さが 0 か、まだ分からない）。
   get collapsed() {
-    return this.parts.some((i) => !(this.heights.get(i) > 0));
+    return this.parts.some((i) => !this.ignored.has(i) && !(this.heights.get(i) > 0));
   }
 
   // 位置の上限。
@@ -44,7 +53,18 @@ export class BodyScroll {
 
   // 部分 i の高さが分かった。出す位置か、待っているかが変わったら true。
   partSized(i, height) {
-    return this.changes(() => this.heights.set(i, height));
+    return this.changes(() => {
+      this.heights.set(i, height);
+      if (height > 0) this.ignored.delete(i);
+    });
+  }
+
+  // limit ms 待っても高さの来ない部分があれば、その部分を数えるのをやめる。やめたら true。
+  expire(now, limit) {
+    if (!this.collapsed || now - this.since < limit) return false;
+    return this.changes(() => {
+      for (const i of this.parts) if (!(this.heights.get(i) > 0)) this.ignored.add(i);
+    });
   }
 
   // 本文の場所か本文の高さが変わった。出す位置が変わったら true。

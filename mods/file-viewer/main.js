@@ -23,7 +23,7 @@ import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, writeCacheText, cacheExists, CACHE_DIR, pauseForApp } from "./io.js";
-import { markdownBody, markdownWaiting, preloadImages, diagramImage, bodyWidth, diagramError, BAR_MAX } from "./views/markdown.js";
+import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, BAR_MAX } from "./views/markdown.js";
 import { BodyScroll, measuredParts } from "./lib/body-scroll.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
@@ -40,6 +40,8 @@ const tileNames = (f) => (f.tiles ?? [f]).map((t) => t.name);
 const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: (width, height) => maxDiagramScale({ width, height }) });
 // 図の拡大の窓で、配置が止まっていないかを見る間隔。
 const OVERLAY_WATCH_MS = 1000;
+// 作り直した整形表示の部品が中身を描くのを待つ上限（何も描かない部分は高さが来ないので）。
+const BODY_WAIT_MS = 1500;
 
 function syntaxColors(t) {
   return { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 };
@@ -119,6 +121,10 @@ export default class FileViewer extends View {
     this.mdScroll = new BodyScroll();
     this.bar = SliderState.new({ min: 0, max: BAR_MAX, step: 1, value: BAR_MAX });
     this.bar.on("change", (v, cx) => { if (this.mdScroll.moveToFraction(1 - v / BAR_MAX)) cx.notify(); });
+    // 前の描画で本文の場所に出したもの（"formatted" | "source" | "preparing" | "loading" | null）と、本文の部品が中身を描くまで
+    // 上に重ねる前の表示（同じ値の 1 つか null）。
+    this.bodyShown = null;
+    this.mdCover = null;
     // Markdown の整形表示の見え方（lib/markdown-state.js）。開いた中身ごとに作り、外部変更の読み直しや下書きの復元では残す
     // （this.file は読み直しで入れ替わるので、そこには置かない）。
     this.md = null;
@@ -753,7 +759,7 @@ export default class FileViewer extends View {
       .track_focus(this.focus).on_key_down((e, cx) => this.onKey(e, cx))
       .child(this.toolbar(rec, t))
       .children(this.notices(t))
-      .child(this.body(rec, t))
+      .child(this.body(rec, t, cx))
       .children(this.preloads());
   }
 
@@ -1175,10 +1181,15 @@ export default class FileViewer extends View {
       }));
   }
 
-  body(rec, t) {
+  body(rec, t, cx) {
     const file = this.file;
+    const was = this.bodyShown;
+    this.bodyShown = null;
     if (!file) return div().p(16).text_color(t.dim).child(this.token ? "" : "開くファイルが指定されていない");
-    if (file.loading) return markdownWaiting({ id: "fv-loading", loading: true, box: this.mdBox, t });
+    if (file.loading) {
+      this.bodyShown = "loading";
+      return markdownWaiting({ id: "fv-loading", loading: true, box: this.mdBox, t });
+    }
     const view = file.view;
     if (view.type === "unopenable") return this.unopenable(file, view, t);
     if (view.type === "image" && !(this.showsSource(rec) && file.editor)) {
@@ -1186,18 +1197,44 @@ export default class FileViewer extends View {
     }
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
       const md = this.md.display();
-      if (md.kind === "preparing" || md.kind === "loading") return markdownWaiting({ id: "fv-markdown-waiting", loading: md.kind === "loading", box: this.mdBox, t });
-      this.mdScroll.expect(measuredParts(md.parts));
+      if (md.kind === "preparing" || md.kind === "loading") {
+        this.bodyShown = md.kind;
+        return markdownWaiting({ id: "fv-markdown-waiting", loading: md.kind === "loading", box: this.mdBox, t });
+      }
+      this.bodyShown = "formatted";
+      const entering = was !== "formatted";
+      this.mdScroll.expect(measuredParts(md.parts), Date.now(), { fresh: entering });
+      if (entering) this.awaitBody(was, cx);
+      if (!this.mdScroll.collapsed) this.mdCover = null;
+      const cover = this.mdCover === "source" ? Editor.new(file.editor).flex_1().min_h(0)
+        : this.mdCover ? waitingLabel(div().size_full(), { loading: this.mdCover === "loading", t }) : null;
       return markdownBody({
-        id: "fv-markdown", parts: md.parts, box: this.mdBox, scroll: this.mdScroll, bar: this.bar, t,
+        id: "fv-markdown", parts: md.parts, box: this.mdBox, scroll: this.mdScroll, bar: this.bar, cover, t,
         onScroll: (changed, cx) => this.syncBar(changed, cx),
         onLink: (url, cx) => this.followLink(url, cx),
         onDiagram: (part, cx) => this.openDiagram(part, cx),
       });
     }
     if (view.type === "mermaid" && file.editor && !this.showsSource(rec)) return this.mermaidFile(file, t);
-    if (file.editor) return Editor.new(file.editor).flex_1().min_h(0);
+    if (file.editor) {
+      if (view.type === "markdown") this.bodyShown = "source";
+      return Editor.new(file.editor).flex_1().min_h(0);
+    }
     return div().p(16).text_color(t.dim).child("表示できない");
+  }
+
+  // ソース表示や待つ間から整形表示に入った。整形表示の部品は中身を描くまでの数フレーム空になる（ガイドの「制約」）ので、
+  // 入る前の表示（was）が本文の場所にあったなら、部品が中身を描くまで、それを本文の上に重ねて出し続ける。
+  awaitBody(was, cx) {
+    this.mdCover = was === "source" || was === "preparing" || was === "loading" ? was : null;
+    const scroll = this.mdScroll, since = scroll.since;
+    if (!this.mdCover || !scroll.collapsed) return;
+    cx.spawn(async (cx) => {
+      while (this.mdScroll === scroll && scroll.since === since && scroll.collapsed) {
+        await pauseForApp();
+        if (this.mdScroll === scroll && scroll.since === since && scroll.expire(Date.now(), BODY_WAIT_MS)) { cx.notify(); break; }
+      }
+    });
   }
 
   // スクロールの位置が変わった（changed）か、本文の長さが変わったとき。スクロールバーのつまみを位置に合わせる。

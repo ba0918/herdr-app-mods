@@ -36,8 +36,9 @@ export function diagramError({ id, message, fence, t }) {
 // scroll: スクロールの位置（lib/body-scroll.js）。本文は app の部品でスクロールさせず、位置の分だけ上にずらして出す。
 // bar: スクロールバーのつまみの状態（SliderState。0〜BAR_MAX、下が 0）。onScroll(changed, cx): 位置（changed が true のとき）か
 // 本文や本文の場所の大きさが変わりうるとき（つまみを合わせ、要れば描き直す）。
+// cover: 本文の部品が中身を描くまで、本文の上に重ねて出す前の表示。無ければ null。
 export const BAR_MAX = 1000;
-export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, onScroll, t }) {
+export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, onScroll, cover, t }) {
   const moved = (changed, cx) => onScroll(changed, cx);
   const content = v_flex().id(`${id}-content`).absolute().left(0).right(0).top(-scroll.shown()).px(PAD_X).py(16).gap(12)
     .on_size_change((size, cx) => moved(scroll.sized({ content: size.height }), cx))
@@ -58,7 +59,8 @@ export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, o
     .on_size_change((size, cx) => { measure(box)(size, cx); moved(scroll.sized({ view: size.height }), cx); })
     .on_scroll_wheel((e, cx) => moved(scroll.wheel(e.delta.y), cx))
     .child(content)
-    .when(scroll.max() > 0, (el) => el.child(scrollBar({ id: `${id}-bar`, bar, t })));
+    .when(scroll.max() > 0, (el) => el.child(scrollBar({ id: `${id}-bar`, bar, t })))
+    .when(Boolean(cover), (el) => el.child(v_flex().id(`${id}-cover`).absolute().inset_0().bg(t.background).child(cover)));
 }
 
 // 本文の右端のスクロールバー。つまみを動かすと bar の "change" が来る。
@@ -74,7 +76,12 @@ function scrollBar({ id, bar, t }) {
 // 整形表示を出す前に待つ間に、整形表示の場所に出すもの（進み具合は出さない）。loading: 開くときの待ち（ファイルの読み込み中と
 // 同じ「読み込み中…」）か、「整形中…」か。待つ間も本文の幅を測る（図を書き出す大きさを決めるため）。
 export function markdownWaiting({ id, loading, box, t }) {
-  const el = div().id(id).relative().flex_1().min_h(0).w_full().text_color(t.dim).on_size_change(measure(box));
+  return waitingLabel(div().id(id).relative().flex_1().min_h(0).w_full().on_size_change(measure(box)), { loading, t });
+}
+
+// 待つ間の文字（markdownWaiting と同じ見た目）。整形表示の部品が中身を描くまで、本文の上に重ねても出す。
+export function waitingLabel(el, { loading, t }) {
+  el = el.text_color(t.dim);
   return loading ? el.p(16).child("読み込み中…") : el.px(PAD_X).py(16).child("整形中…");
 }
 
