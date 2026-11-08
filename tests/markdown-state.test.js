@@ -721,3 +721,45 @@ describe("テーマが変わったとき（図の色の書き直し）", () => {
     expect(s.display().kind).toBe("formatted");
   });
 });
+
+describe("タイルに分けて書き出す大きな図", () => {
+  // 縦に長い図（タイル 2 枚）を書き出すファイルの代わり。
+  const tiled = (part, look) => {
+    const base = `${part.source.trim()}@${look.key}`;
+    const tiles = [0, 1].map((i) => ({ name: `${base}#${i}`, path: `cache/${base}#${i}`, x: 0, y: i * 10, width: 10, height: 10 }));
+    return { name: tiles[0].name, path: tiles[0].path, width: 10, height: 20, tiles };
+  };
+  const tallDoc = `small 縦に長い図\n\n\`\`\`mermaid\nflowchart TD; A-->B\n\`\`\`\n`;
+
+  test("どのタイルも書いて読み込み終えるまで、その結果を出さず、書くのも読み込ませるのもタイルごと", () => {
+    const s = makeState({ fileOf: tiled });
+    s.setLook({ key: "k" });
+    s.open(tallDoc);
+    const first = s.writeTask();
+    expect(first.name).toBe("flowchart TD; A-->B@k#0");
+    expect(first.file.tiles.length).toBe(2);
+    expect(first.part.type).toBe("mermaid");
+    s.wrote(first.name, 1);
+    const second = s.writeTask();
+    expect(second.name).toBe("flowchart TD; A-->B@k#1");
+    s.wrote(second.name, 2);
+    expect(s.writeTask()).toBe(null);
+    expect(s.preloads().map((t) => t.name)).toEqual(["flowchart TD; A-->B@k#0", "flowchart TD; A-->B@k#1"]);
+    s.loadedImage("flowchart TD; A-->B@k#0", 3);
+    expect(s.display().kind).toBe("loading");
+    s.loadedImage("flowchart TD; A-->B@k#1", 4);
+    expect(s.display().kind).toBe("formatted");
+    expect([...s.keep()].sort()).toEqual(["flowchart TD; A-->B@k#0", "flowchart TD; A-->B@k#1"]);
+  });
+
+  test("出しているタイルの 1 枚が無くなっていたら、書き直すまで待つ", () => {
+    const s = makeState({ fileOf: tiled });
+    s.setLook({ key: "k" });
+    s.open(tallDoc);
+    for (let task; (task = s.writeTask());) s.wrote(task.name, 1);
+    for (const t of s.preloads()) s.loadedImage(t.name, 1);
+    s.lost(["flowchart TD; A-->B@k#1"]);
+    expect(s.display().kind).toBe("loading");
+    expect(s.writeTask().name).toBe("flowchart TD; A-->B@k#1");
+  });
+});

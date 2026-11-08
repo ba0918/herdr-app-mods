@@ -7,6 +7,9 @@
 import { startPreparation, fallbackParts } from "./prepare.js";
 import { judgeSize } from "./render-size.js";
 
+// 図のファイルの SVG の並び（大きな絵はタイルに分かれる。lib/diagram-files.js）。
+const tilesOf = (f) => f.tiles ?? [f];
+
 // 描画の外の準備が終わらなかったと見なす、準備を動かしている間の時間（ms）。
 const TIME_LIMIT = 10_000;
 
@@ -140,13 +143,18 @@ export class MarkdownState {
     return this.busy;
   }
 
-  // 次に書く図の SVG（{ name, path, width, height, part }）。書く段でなければ、または書き終えていれば null。
+  // 次に書く図の SVG（タイル 1 枚。{ name, path, x, y, width, height, file, part }。file は図のファイル全体）。
+  // 書く段でなければ、または書き終えていれば null。
   writeTask() {
     const job = this.job;
     if (!job?.parts) return null;
     const files = this.filesFor(job.parts);
-    const i = files.findIndex((f) => f && !this.written.has(f.name));
-    return i < 0 ? null : { ...files[i], part: job.parts[i] };
+    for (const [i, f] of files.entries()) {
+      if (!f) continue;
+      const tile = tilesOf(f).find((t) => !this.written.has(t.name));
+      if (tile) return { ...tile, file: f, part: job.parts[i] };
+    }
+    return null;
   }
 
   // 描画の外で進める処理（準備の区間か、SVG の書き込み）があるか。画像の読み込みだけを待っているときは false。
@@ -159,7 +167,7 @@ export class MarkdownState {
   preloads() {
     const job = this.job;
     if (!job?.parts) return [];
-    return this.filesFor(job.parts).filter((f) => f && this.written.has(f.name) && !this.loaded.has(f.name));
+    return this.filesFor(job.parts).flatMap((f) => (f ? tilesOf(f) : [])).filter((t) => this.written.has(t.name) && !this.loaded.has(t.name));
   }
 
   // app が SVG を画像として読み込み終えたとき。t: 今の時刻。出すものが変わったら true。
@@ -202,7 +210,7 @@ export class MarkdownState {
   lost(names) {
     for (const name of names) this.written.delete(name);
     const shown = this.shown;
-    if (!shown || shown.fallback || !shown.files?.some((f) => f && names.includes(f.name))) return;
+    if (!shown || shown.fallback || !shown.files?.some((f) => f && tilesOf(f).some((t) => names.includes(t.name)))) return;
     this.shown = null;
     if (this.job && !this.job.restyle) return;
     this.job = { text: shown.text, prep: null, parts: shown.parts, inRender: true, restyle: false, elapsed: 0, last: null };
@@ -233,8 +241,8 @@ export class MarkdownState {
   // 使っている SVG の名前（出している結果と、書いている途中の結果の今の見た目のもの）。これ以外の自分の SVG は消してよい。
   keep() {
     const names = new Set();
-    for (const f of this.shown?.files ?? []) if (f) names.add(f.name);
-    if (this.job?.parts) for (const f of this.filesFor(this.job.parts)) if (f) names.add(f.name);
+    for (const f of this.shown?.files ?? []) if (f) for (const t of tilesOf(f)) names.add(t.name);
+    if (this.job?.parts) for (const f of this.filesFor(this.job.parts)) if (f) for (const t of tilesOf(f)) names.add(t.name);
     return names;
   }
 
@@ -367,7 +375,7 @@ export class MarkdownState {
   }
 
   allWritten(files) {
-    return files.every((f) => !f || (this.written.has(f.name) && this.loaded.has(f.name)));
+    return files.every((f) => !f || tilesOf(f).every((t) => this.written.has(t.name) && this.loaded.has(t.name)));
   }
 
   // 準備の結果の部分ごとの、今の見た目で書く SVG（図でない部分と描けない図は null）。同じ結果と見た目なら覚えておいたものを返す。
