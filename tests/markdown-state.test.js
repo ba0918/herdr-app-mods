@@ -248,16 +248,32 @@ describe("失敗したとき", () => {
     expect(s.display().kind).toBe("preparing");
   });
 
-  test("区間から戻らないまま、表示している間の時間で 10 秒を超えたら、代わりの整形表示と「終わらなかった」知らせにし、次の準備を始められる", () => {
+  test("区間から戻らなかったら、10 秒たつ前でも見張りが手放し、準備をやり直して整形表示まで進む", () => {
+    const { start, stall } = stallable();
+    const s = makeState({ start });
+    const now = clock(1);
+    s.open(big("a"));
+    s.tick(0, now);
+    stall(s, now);
+    now.skip(2_000);
+    expect(s.watch(now, true)).toBe(true);
+    expect(s.display()).toEqual({ kind: "preparing", notices: [] });
+    expect(s.busy).toBe(true);
+    finish(s, now);
+    expect(s.display()).toEqual({ kind: "formatted", parts: partsOf(big("a")), notices: [] });
+  });
+
+  test("区間から戻らないことが続き、表示している間の時間で 10 秒を超えたら、代わりの整形表示と「終わらなかった」知らせにする", () => {
     const { start, stall } = stallable();
     const s = makeState({ start });
     const now = clock(1);
     s.open(big("a"));
     stall(s, now);
-    now.skip(9_000);
-    expect(s.watch(now, true)).toBe(false);
+    now.skip(6_000);
+    expect(s.watch(now, true)).toBe(true);
     expect(s.display().kind).toBe("preparing");
-    now.skip(1_000);
+    stall(s, now);
+    now.skip(4_000);
     expect(s.watch(now, true)).toBe(true);
     expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts(big("a")), notices: [{ kind: "timeout" }] });
     s.change(big("b"));
@@ -270,14 +286,14 @@ describe("失敗したとき", () => {
     const s = makeState({ start });
     const now = clock(1);
     s.open(big("a"));
+    s.tick(0, now);
+    now.skip(9_000);
     stall(s, now);
     now.skip(60_000);
-    expect(s.watch(now, false)).toBe(false);
-    expect(s.watch(now, true)).toBe(false);
+    expect(s.watch(now, false)).toBe(true);
     expect(s.display().kind).toBe("preparing");
-    now.skip(10_001);
-    expect(s.watch(now, true)).toBe(true);
-    expect(s.display().notices).toEqual([{ kind: "timeout" }]);
+    finish(s, now);
+    expect(s.display()).toEqual({ kind: "formatted", parts: partsOf(big("a")), notices: [] });
   });
 
   test("区間から戻らなかった準備を、中身が変わって捨てていたら、待たずに次の準備を始められ、今の中身の結果を出す", () => {

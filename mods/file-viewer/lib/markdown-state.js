@@ -255,28 +255,24 @@ export class MarkdownState {
     return names;
   }
 
-  // 区間から戻らない準備の見張り（tick の外から、時々呼ぶ。visible: タブを表示しているか）。区間を動かしていた非同期処理が
-  // 黙って止まると（ガイドの「長い同期処理」）、tick の 10 秒の判定に戻らないので、ここで数える。止まった準備が今の準備なら、
-  // 表示している間の時間で上限を超えたところで終わらなかったことにする。中身が変わって捨てた準備なら待たない。
+  // 区間から戻らない準備の見張り（tick の外から、時々呼ぶ。visible: タブを表示しているか）。見張りは区間の外でしか動かないので、
+  // 区間がまだ残っていれば、区間を動かしていた非同期処理は黙って止まっている（ガイドの「長い同期処理」）。止まった準備が今の準備なら、
+  // 止まってから気づくまでの間も表示している間の時間に数え、上限を超えていれば終わらなかったことにし、超えていなければ準備を始めからやり直す
+  // （止まった単位の途中までの変化が残っていても、結果が一度に準備したときと同じになるように）。中身が変わって捨てた準備なら待たない。
   // 区間を動かしていたものを手放して、次の準備を始めてよくなったら true。
   watch(now, visible) {
     if (!this.slice && this.job?.parts) return this.watchLoads(now, visible);
     const job = this.slice;
     if (!job) return false;
-    if (job !== this.job) {
-      this.slice = null;
+    this.slice = null;
+    if (job !== this.job) return true;
+    if (visible) this.count(job, now());
+    else job.last = null;
+    if (job.elapsed > this.timeLimit) {
+      this.fail(job.text, { kind: "timeout" });
       return true;
     }
-    if (!visible) {
-      job.last = null;
-      return false;
-    }
-    const t = now();
-    if (job.last !== null) job.elapsed += t - job.last;
-    job.last = t;
-    if (job.elapsed <= this.timeLimit) return false;
-    this.slice = null;
-    this.fail(job.text, { kind: "timeout" });
+    job.prep = this.start(job.text);
     return true;
   }
 

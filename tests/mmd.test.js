@@ -71,6 +71,19 @@ describe(".mmd の図の準備", () => {
     expect(view(s, FLOW2).kind).toBe("diagram");
   });
 
+  test("図の準備の区間から戻らなかったら（非同期処理が止まった）、10 秒を待たずに手放してやり直し、図を出す", () => {
+    const s = state();
+    let t = 0, stalled = false;
+    const stalling = () => { if (stalled) throw new Error("止まった"); stalled = true; return (t += 1); };
+    s.open(FLOW);
+    expect(() => s.tick(100, stalling)).toThrow("止まった");
+    t += 2_000;
+    expect(s.watch(() => t, true)).toBe(true);
+    expect(view(s, FLOW)).toEqual({ kind: "preparing", notices: [] });
+    finish(s, t);
+    expect(view(s, FLOW).kind).toBe("diagram");
+  });
+
   test("最初の書き出しが失敗したら、描けない図の「図を書き出せなかった（理由）」になる", () => {
     const s = state();
     s.open(FLOW);
