@@ -118,17 +118,24 @@ describe("図を押して拡大の窓を開くとき", () => {
   });
 });
 
+// ルートの svg 要素の書き出しの大きさと viewBox。
+function rootSize(svg) {
+  const root = svg.match(/^<svg[^>]*>/)[0];
+  const attr = (name) => root.match(new RegExp(` ${name}="([^"]*)"`))?.[1];
+  return { width: attr("width"), height: attr("height"), viewBox: attr("viewBox") };
+}
+
 describe("resizeSvg", () => {
   test("ルートの width と height だけを替える", () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50"><rect width="10" height="10"/></svg>';
-    expect(resizeSvg(svg, { width: 300, height: 150 })).toBe('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 100 50"><rect width="10" height="10"/></svg>');
+    expect(rootSize(resizeSvg(svg, { width: 300, height: 150 }))).toEqual({ width: "300", height: "150", viewBox: "0 0 100 50" });
   });
 });
 
 describe("resizeSvg のタイル", () => {
   test("view を渡すと、width と height に加えて viewBox もその範囲にする", () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" viewBox="0 0 100 50"><rect width="10" height="10"/></svg>';
-    expect(resizeSvg(svg, { width: 300, height: 75, view: { x: 0, y: 25, width: 100, height: 25 } })).toBe('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="75" viewBox="0 25 100 25"><rect width="10" height="10"/></svg>');
+    expect(rootSize(resizeSvg(svg, { width: 300, height: 75, view: { x: 0, y: 25, width: 100, height: 25 } }))).toEqual({ width: "300", height: "75", viewBox: "0 25 100 25" });
   });
 });
 

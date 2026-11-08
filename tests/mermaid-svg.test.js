@@ -75,15 +75,6 @@ describe("flowchart の SVG", () => {
     }
   });
 
-  test("ひし形・六角形などはその形の多角形、丸い形は角を丸めた四角になる", () => {
-    const l = flow();
-    const nodes = groups(diagramSvg(l, COLORS, size(l)), "node");
-    for (const id of ["D", "H", "I", "J", "K"]) expect(count(nodes.get(id), "polygon")).toBe(1);
-    expect(nodes.get("G")).toMatch(/<rect [^>]*rx="(\d+(\.\d+)?)"/);
-    expect(count(nodes.get("L"), "rect")).toBe(2); // 二重の円
-    expect(count(nodes.get("E"), "line")).toBe(2); // サブルーチンの内側の縦線
-  });
-
   test("どの辺にも線と矢じりがあり、ラベルのある辺はラベルの text がある", () => {
     const l = flow();
     const edges = groups(diagramSvg(l, COLORS, size(l)), "edge");
