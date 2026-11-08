@@ -6,7 +6,7 @@ import { fenceOpen, closesFence } from "./markdown.js";
 // これ以下なら描画の中で整形の準備をする。chars: 文字数（JavaScript の文字列の長さ）、diagrams: ```mermaid の図の数。
 export const PREPARE_IN_RENDER = { chars: 14109, diagrams: 2 };
 // これを超えたら整形表示をしない。bytes: UTF-8 にした大きさ、diagrams: ```mermaid の図の数。
-export const RENDER_LIMIT = { bytes: 229153, diagrams: 100 };
+export const RENDER_LIMIT = { bytes: 229153, diagrams: 500 };
 
 // UTF-8 にした大きさ（TextEncoder が無いので）。対になっていないサロゲートは、置き換え文字（3 バイト）として数える。
 export function utf8Length(text) {
