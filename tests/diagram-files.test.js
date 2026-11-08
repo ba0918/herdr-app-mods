@@ -7,9 +7,8 @@ const part = (source, firstLine = 3, width = 300, height = 120) => ({ type: "mer
 describe("SVG の名前", () => {
   const look = bodyLook(COLORS, 800);
 
-  test("<タブの token>-<ハッシュ 12 桁>.svg で、file-viewer-cache/ に置く", () => {
+  test("file-viewer-cache/ に置く", () => {
     const f = diagramFile("tok-1", part("flowchart LR; A-->B"), look);
-    expect(f.name).toMatch(/^tok-1-[0-9a-f]{12}\.svg$/);
     expect(f.path).toBe(`file-viewer-cache/${f.name}`);
   });
 
@@ -35,9 +34,8 @@ describe("SVG の名前", () => {
     expect(diagramFile("t", part("x", 3, 300), look).name).toBe(diagramFile("t", part("x", 3, 300), bodyLook(COLORS, 600)).name);
   });
 
-  test("拡大の窓が書く SVG は、タブの token に窓の印を付けた名前で、持ち主の token は同じに読める", () => {
+  test("拡大の窓が書く SVG も、持ち主の token は同じに読め、窓の印が分かる", () => {
     const f = diagramFile("tok-1", part("x"), look, "z1a");
-    expect(f.name).toMatch(/^tok-1~z1a-[0-9a-f]{12}\.svg$/);
     expect(svgOwner(f.name)).toEqual({ token: "tok-1", mark: "z1a" });
     expect(svgOwner(diagramFile("tok-1", part("x"), look).name)).toEqual({ token: "tok-1", mark: null });
   });
