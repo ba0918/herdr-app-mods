@@ -96,7 +96,7 @@ export default class FileViewer extends View {
       this.overlay = {
         source: p.mermaid, firstLine: p.firstLine ?? 1, token: p.token ?? "fv-overlay", mark: p.mark ?? "z0",
         size: { width: p.layoutWidth ?? 1, height: p.layoutHeight ?? 1 },
-        zoom: diagramZoom({ fitMax: 3 }), layout: null, running: false,
+        zoom: diagramZoom({ fitMax: 3 }), layout: null, running: null,
         colors: { [colorsKey(colors)]: colors }, svgs: { [colorsKey(colors)]: p.svg ?? null },
         zs: p.shown ? new ZoomSvg({ shown: p.shown, colorsKey: colorsKey(colors) }) : null,
       };
@@ -1071,17 +1071,18 @@ export default class FileViewer extends View {
       } })));
   }
 
-  // 拡大の窓の書き出し直しを、描画の外で 1 つずつ進める。
+  // 拡大の窓の書き出し直しを、描画の外で 1 つずつ進める。o.running は動かしている非同期処理の印で、見張りが手放したら
+  // （戻らない書き出しを待ち続けないように）、遅れて戻った非同期処理は次の書き出しを取らずに抜ける。
   runOverlayWrites(cx) {
     const o = this.overlay;
     if (o.running) return;
     const first = o.zs.task();
     if (!first) return;
-    o.running = true;
+    const run = (o.running = {});
     cx.spawn(async (cx) => {
       try {
         await pauseForApp();
-        for (let task = first; task; task = o.zs.task()) {
+        for (let task = first; task; task = o.running === run ? o.zs.task() : null) {
           try {
             const text = await this.overlaySvgText(task.colorsKey);
             const file = diagramFile(o.token, { source: o.source, layout: o.size }, scaleLook(o.colors[task.colorsKey], task.scale), o.mark);
@@ -1093,7 +1094,7 @@ export default class FileViewer extends View {
           cx.notify();
         }
       } finally {
-        o.running = false;
+        if (o.running === run) o.running = null;
       }
     });
   }
@@ -1127,11 +1128,16 @@ export default class FileViewer extends View {
   watchOverlay(cx) {
     const o = this.overlay;
     if (!o?.zs) return;
-    let changed = o.zs.watch(Date.now());
+    let changed = false;
+    if (o.zs.watch(Date.now())) {
+      // 時間切れの書き出しは手放したので（lib/zoom-svg.js）、次の倍率・色の要求で書き出しを始め直せるようにする。
+      o.running = null;
+      changed = true;
+    }
     if (o.layout?.watch()) {
       // 配置の途中で止まった非同期処理は戻らないので、書いていた書き出しを失敗にして、次の書き出しを始められるようにする。
       if (o.zs.writing) o.zs.failed(o.zs.writing, o.layout.shown.error.message);
-      o.running = false;
+      o.running = null;
       changed = true;
     }
     if (!changed) return;

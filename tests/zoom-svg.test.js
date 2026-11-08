@@ -76,6 +76,22 @@ describe("拡大の窓の倍率", () => {
     expect(z.display()).toEqual({ file: FIRST, notice: { kind: "timeout" } });
   });
 
+  test("10 秒たっても書き終えなかった書き出しは手放し、次の倍率の要求で書き出しを始め直し、書けたら知らせを消す", () => {
+    const z = zoomed();
+    z.request(2);
+    const stuck = z.task();
+    z.watch(0);
+    expect(z.watch(10_001)).toBe(true);
+    z.request(3);
+    const next = z.task();
+    expect(next).toEqual({ scale: 3, colorsKey: "c1" });
+    z.wrote(stuck, fileAt(stuck));
+    const file = fileAt(next);
+    z.wrote(next, file);
+    z.loadedImage(file.name);
+    expect(z.display()).toEqual({ file: { ...file, scale: 3 }, notice: null });
+  });
+
   test("テーマが変わったら、新しい色で書き終えるまで前の色の絵を出す", () => {
     const z = zoomed();
     z.recolor("c2");

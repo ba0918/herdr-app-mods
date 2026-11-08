@@ -50,8 +50,10 @@ export class ZoomSvg {
   }
 
   // 書き終えたとき（タイルに分けた絵は全部のタイル）。file: { name, path, width, height, tiles? }。もう望まれていない倍率なら出さない。
+  // 時間切れで手放した書き出しが遅れて戻ったときも出さない。
   wrote(task, file) {
-    if (this.writing === task) this.writing = null;
+    if (this.writing !== task) return;
+    this.writing = null;
     if (keyOf(task) !== keyOf(this.want)) return;
     this.ready = { task, file };
     if (this.allLoaded(file)) this.swap();
@@ -62,7 +64,8 @@ export class ZoomSvg {
   }
 
   failed(task, message) {
-    if (this.writing === task) this.writing = null;
+    if (this.writing !== task) return;
+    this.writing = null;
     if (keyOf(task) !== keyOf(this.want)) return;
     this.notice = { kind: "write", message };
     this.gaveUp = keyOf(this.want);
@@ -93,7 +96,8 @@ export class ZoomSvg {
     return r && keyOf(r.task) === keyOf(this.want) ? tilesOf(r.file).filter((t) => !this.loaded.has(t.name)) : [];
   }
 
-  // 時々呼ぶ見張り（t: 今の時刻）。望みを 10 秒たっても満たせなければ、前の絵のまま知らせる。知らせが出たら true。
+  // 時々呼ぶ見張り（t: 今の時刻）。望みを 10 秒たっても満たせなければ、前の絵のまま知らせ、書いている書き出しを手放す
+  // （戻らない書き出しを待ち続けず、次の倍率・色の要求で書き出しを始め直す）。知らせが出たら true。
   watch(t) {
     if (this.satisfied() || this.gaveUp === keyOf(this.want)) {
       this.since = null;
@@ -106,6 +110,7 @@ export class ZoomSvg {
     if (t - this.since <= this.timeLimit) return false;
     this.notice = { kind: "timeout" };
     this.gaveUp = keyOf(this.want);
+    this.writing = null;
     return true;
   }
 
