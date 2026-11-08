@@ -683,6 +683,24 @@ describe("テーマが変わったとき（図の色の書き直し）", () => {
     expect(s.display().notices).toEqual([{ kind: "restyle-timeout" }]);
   });
 
+  test("書き直しの途中で見た目が続けて変わったら、10 秒は最後の見た目から数え、最後の見た目の結果を出す", () => {
+    const s = themed();
+    const now = clock(1);
+    const NEWER = { key: "newer|w800" };
+    s.setLook(NEW);
+    s.tick(0, now);
+    now.skip(6_000);
+    s.setLook(NEWER);
+    s.watch(now, true);
+    now.skip(6_000);
+    s.watch(now, true);
+    expect(s.display().notices).toEqual([]);
+    for (let task; (task = s.writeTask());) s.wrote(task.name, now());
+    for (const f of s.preloads()) s.loadedImage(f.name, now());
+    expect(shownFiles(s)).toEqual(["flowchart LR; A-->B@newer|w800", "flowchart LR; C-->D@newer|w800"]);
+    expect(s.display().notices).toEqual([]);
+  });
+
   test("知らせは、次に書き出せたら消える", () => {
     const s = themed();
     s.setLook(NEW);
