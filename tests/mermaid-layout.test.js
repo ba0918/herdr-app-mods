@@ -193,3 +193,35 @@ describe("layoutSequence", () => {
     }
   });
 });
+
+// app の mod の実行環境はスタックが浅く、縦に 40 ノードつながった flowchart の配置で、再帰がスタックを使い切って app ごと落ちた
+// （ガイドの「図の配置の再帰の深さ」）。配置の再帰の深さが、図の長さによらないことを確かめる。
+describe("長い図の配置の深さ", () => {
+  // スタックを狭くした bun（200 KB。今の作りでは、つながりが 121 ノードの図でスタックを使い切る）で配置する。
+  function layoutWithSmallStack(source) {
+    const layout = new URL("../mods/file-viewer/lib/mermaid/layout.js", import.meta.url).pathname;
+    const parse = new URL("../mods/file-viewer/lib/mermaid/parse.js", import.meta.url).pathname;
+    const code = `
+      const { parseMermaid } = await import(${JSON.stringify(parse)});
+      const { layoutFlowchart } = await import(${JSON.stringify(layout)});
+      const l = layoutFlowchart(parseMermaid(${JSON.stringify(source)}).diagram);
+      console.log(JSON.stringify({ nodes: l.nodes.length, height: l.height }));`;
+    const r = Bun.spawnSync([process.execPath, "-e", code], { env: { ...process.env, BUN_JSC_maxPerThreadStackUsage: "200000" } });
+    return { ok: r.exitCode === 0, out: r.stdout.toString(), err: r.stderr.toString() };
+  }
+
+  test("縦に 1,000 ノードつながった flowchart も、浅いスタックで配置できる", () => {
+    const src = "flowchart TD\n" + Array.from({ length: 1000 }, (_, i) => `  N${i}[段 ${i}] --> N${i + 1}[段 ${i + 1}]`).join("\n");
+    const r = layoutWithSmallStack(src);
+    expect(r.err).not.toContain("Maximum call stack size exceeded");
+    expect(r.ok).toBe(true);
+    expect(JSON.parse(r.out).nodes).toBe(1001);
+  }, 60_000);
+
+  test("つながりが輪になっている図も、浅いスタックで配置できる", () => {
+    const src = "flowchart LR\n" + Array.from({ length: 500 }, (_, i) => `  N${i} --> N${(i + 1) % 500}`).join("\n");
+    const r = layoutWithSmallStack(src);
+    expect(r.err).not.toContain("Maximum call stack size exceeded");
+    expect(r.ok).toBe(true);
+  }, 60_000);
+});

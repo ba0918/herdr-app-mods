@@ -2,7 +2,9 @@
 // 元: npm の dagre-d3-es 7.0.14（src/dagre と src/graphlib、MIT）と lodash-es 4.18.1（MIT）を bun build で束ねた。
 //   entry: export { layout } from "dagre-d3-es/src/dagre/index.js"; export { Graph } from "dagre-d3-es/src/graphlib/index.js";
 //   bun build entry.js --format esm --target browser
-// 変更点は 1 か所: lodash の Function("return this")() を globalThis にした（mod の実行環境は Function コンストラクタを禁じている）。
+// 変更点: lodash の Function("return this")() を globalThis にした（mod の実行環境は Function コンストラクタを禁じている）。
+// グラフの辺をたどる再帰（dfsFAS・longestPath・tightTree・graphlib の doDfs・dfsAssignLowLim・initOrder の dfs）を、たどる順を変えずに
+// 自前のスタックで回す形にした（mod の実行環境はスタックが浅く、縦に 40 ノードつながった図で app ごと落ちた）。印は「[file-viewer]」。
 // ライセンス表記は ../THIRD-PARTY-NOTICES にある。
 var __defProp = Object.defineProperty;
 var __returnValue = (v) => v;
@@ -3410,22 +3412,36 @@ function dfsFAS(g) {
   var fas = [];
   var stack = {};
   var visited = {};
-  function dfs(v) {
-    if (Object.prototype.hasOwnProperty.call(visited, v)) {
+  // [file-viewer] iterative (the recursive version overflows the mod runtime's stack on long chains).
+  function dfs(start) {
+    if (Object.prototype.hasOwnProperty.call(visited, start)) {
       return;
     }
-    visited[v] = true;
-    stack[v] = true;
-    forEach_default(g.outEdges(v), function(e) {
-      if (Object.prototype.hasOwnProperty.call(stack, e.w)) {
-        fas.push(e);
+    var frames = [];
+    function enter(v) {
+      visited[v] = true;
+      stack[v] = true;
+      frames.push({ v, edges: g.outEdges(v) || [], i: 0 });
+    }
+    enter(start);
+    while (frames.length) {
+      var f = frames[frames.length - 1];
+      if (f.i < f.edges.length) {
+        var e = f.edges[f.i++];
+        if (Object.prototype.hasOwnProperty.call(stack, e.w)) {
+          fas.push(e);
+        } else if (!Object.prototype.hasOwnProperty.call(visited, e.w)) {
+          enter(e.w);
+        }
       } else {
-        dfs(e.w);
+        delete stack[f.v];
+        frames.pop();
       }
-    });
-    delete stack[v];
+    }
   }
-  forEach_default(g.nodes(), dfs);
+  forEach_default(g.nodes(), function(v) {
+    dfs(v);
+  });
   return fas;
 }
 function undo(g) {
@@ -3756,21 +3772,44 @@ function undo3(g) {
 // node_modules/dagre-d3-es/src/dagre/rank/util.js
 function longestPath(g) {
   var visited = {};
-  function dfs(v) {
-    var label = g.node(v);
-    if (Object.prototype.hasOwnProperty.call(visited, v)) {
-      return label.rank;
+  // [file-viewer] iterative (the recursive version overflows the mod runtime's stack on long chains).
+  function dfs(start) {
+    if (Object.prototype.hasOwnProperty.call(visited, start)) {
+      return;
     }
-    visited[v] = true;
-    var rank = min_default(map_default(g.outEdges(v), function(e) {
-      return dfs(e.w) - g.edge(e).minlen;
-    }));
-    if (rank === Number.POSITIVE_INFINITY || rank === undefined || rank === null) {
-      rank = 0;
+    var frames = [];
+    function enter(v) {
+      visited[v] = true;
+      frames.push({ v, edges: g.outEdges(v) || [], i: 0, values: [], pending: null });
     }
-    return label.rank = rank;
+    enter(start);
+    while (frames.length) {
+      var f = frames[frames.length - 1];
+      if (f.i < f.edges.length) {
+        var e = f.edges[f.i++];
+        if (Object.prototype.hasOwnProperty.call(visited, e.w)) {
+          f.values.push(g.node(e.w).rank - g.edge(e).minlen);
+        } else {
+          f.pending = e;
+          enter(e.w);
+        }
+        continue;
+      }
+      var rank = min_default(f.values);
+      if (rank === Number.POSITIVE_INFINITY || rank === undefined || rank === null) {
+        rank = 0;
+      }
+      g.node(f.v).rank = rank;
+      frames.pop();
+      if (frames.length) {
+        var parent = frames[frames.length - 1];
+        parent.values.push(rank - g.edge(parent.pending).minlen);
+      }
+    }
   }
-  forEach_default(g.sources(), dfs);
+  forEach_default(g.sources(), function(v) {
+    dfs(v);
+  });
 }
 function slack(g, e) {
   return g.node(e.w).rank - g.node(e.v).rank - g.edge(e).minlen;
@@ -3791,17 +3830,27 @@ function feasibleTree(g) {
   return t;
 }
 function tightTree(t, g) {
-  function dfs(v) {
-    forEach_default(g.nodeEdges(v), function(e) {
-      var edgeV = e.v, w = v === edgeV ? e.w : edgeV;
+  // [file-viewer] iterative (the recursive version overflows the mod runtime's stack on long chains).
+  function dfs(start) {
+    var frames = [{ v: start, edges: g.nodeEdges(start) || [], i: 0 }];
+    while (frames.length) {
+      var f = frames[frames.length - 1];
+      if (f.i >= f.edges.length) {
+        frames.pop();
+        continue;
+      }
+      var e = f.edges[f.i++];
+      var v = f.v, edgeV = e.v, w = v === edgeV ? e.w : edgeV;
       if (!t.hasNode(w) && !slack(g, e)) {
         t.setNode(w, {});
         t.setEdge(v, w, {});
-        dfs(w);
+        frames.push({ v: w, edges: g.nodeEdges(w) || [], i: 0 });
       }
-    });
+    }
   }
-  forEach_default(t.nodes(), dfs);
+  forEach_default(t.nodes(), function(v) {
+    dfs(v);
+  });
   return t.nodeCount();
 }
 function findMinSlackEdge(t, g) {
@@ -3866,18 +3915,33 @@ function dfs(g, vs, order) {
   });
   return acc;
 }
-function doDfs(g, v, postorder, visited, navigation, acc) {
-  if (!Object.prototype.hasOwnProperty.call(visited, v)) {
+// [file-viewer] iterative (the recursive version overflows the mod runtime's stack on long chains).
+function doDfs(g, start, postorder, visited, navigation, acc) {
+  if (Object.prototype.hasOwnProperty.call(visited, start)) {
+    return;
+  }
+  var frames = [];
+  function enter(v) {
     visited[v] = true;
     if (!postorder) {
       acc.push(v);
     }
-    forEach_default(navigation(v), function(w) {
-      doDfs(g, w, postorder, visited, navigation, acc);
-    });
-    if (postorder) {
-      acc.push(v);
+    frames.push({ v, next: navigation(v) || [], i: 0 });
+  }
+  enter(start);
+  while (frames.length) {
+    var f = frames[frames.length - 1];
+    if (f.i < f.next.length) {
+      var w = f.next[f.i++];
+      if (!Object.prototype.hasOwnProperty.call(visited, w)) {
+        enter(w);
+      }
+      continue;
     }
+    if (postorder) {
+      acc.push(f.v);
+    }
+    frames.pop();
   }
 }
 
@@ -3952,21 +4016,32 @@ function initLowLimValues(tree, root) {
   }
   dfsAssignLowLim(tree, {}, 1, root);
 }
-function dfsAssignLowLim(tree, visited, nextLim, v, parent) {
-  var low = nextLim;
-  var label = tree.node(v);
-  visited[v] = true;
-  forEach_default(tree.neighbors(v), function(w) {
-    if (!Object.prototype.hasOwnProperty.call(visited, w)) {
-      nextLim = dfsAssignLowLim(tree, visited, nextLim, w, v);
+// [file-viewer] iterative (the recursive version overflows the mod runtime's stack on long chains).
+function dfsAssignLowLim(tree, visited, nextLim, start, startParent) {
+  var frames = [];
+  function enter(v, parent) {
+    visited[v] = true;
+    frames.push({ v, parent, low: nextLim, next: tree.neighbors(v) || [], i: 0 });
+  }
+  enter(start, startParent);
+  while (frames.length) {
+    var f = frames[frames.length - 1];
+    if (f.i < f.next.length) {
+      var w = f.next[f.i++];
+      if (!Object.prototype.hasOwnProperty.call(visited, w)) {
+        enter(w, f.v);
+      }
+      continue;
     }
-  });
-  label.low = low;
-  label.lim = nextLim++;
-  if (parent) {
-    label.parent = parent;
-  } else {
-    delete label.parent;
+    var label = tree.node(f.v);
+    label.low = f.low;
+    label.lim = nextLim++;
+    if (f.parent) {
+      label.parent = f.parent;
+    } else {
+      delete label.parent;
+    }
+    frames.pop();
   }
   return nextLim;
 }
@@ -4247,13 +4322,28 @@ function initOrder(g) {
   var layers = map_default(range_default(maxRank + 1), function() {
     return [];
   });
-  function dfs(v) {
-    if (has_default(visited, v))
+  // [file-viewer] iterative (the recursive version overflows the mod runtime's stack on long chains).
+  function dfs(start) {
+    if (has_default(visited, start))
       return;
-    visited[v] = true;
-    var node = g.node(v);
-    layers[node.rank].push(v);
-    forEach_default(g.successors(v), dfs);
+    var frames = [];
+    function enter(v) {
+      visited[v] = true;
+      layers[g.node(v).rank].push(v);
+      frames.push({ next: g.successors(v) || [], i: 0 });
+    }
+    enter(start);
+    while (frames.length) {
+      var f = frames[frames.length - 1];
+      if (f.i < f.next.length) {
+        var w = f.next[f.i++];
+        if (!has_default(visited, w)) {
+          enter(w);
+        }
+        continue;
+      }
+      frames.pop();
+    }
   }
   var orderedVs = sortBy_default(simpleNodes, function(v) {
     return g.node(v).rank;
