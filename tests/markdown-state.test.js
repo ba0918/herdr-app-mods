@@ -762,4 +762,13 @@ describe("タイルに分けて書き出す大きな図", () => {
     expect(s.display().kind).toBe("loading");
     expect(s.writeTask().name).toBe("flowchart TD; A-->B@k#1");
   });
+
+  test("2 枚目のタイルの最初の書き出しが失敗しても、代わりの整形表示と「図を書き出せなかった」の知らせになる", () => {
+    const s = makeState({ fileOf: tiled });
+    s.setLook({ key: "k" });
+    s.open(tallDoc);
+    s.wrote(s.writeTask().name, 1);
+    s.writeFailed(s.writeTask().name, "書けない", 2);
+    expect(s.display()).toEqual({ kind: "fallback", parts: fallbackParts(tallDoc), notices: [{ kind: "write", message: "書けない" }] });
+  });
 });

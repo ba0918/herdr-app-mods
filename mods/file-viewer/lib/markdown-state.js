@@ -196,7 +196,7 @@ export class MarkdownState {
   // なら、何もしない。
   writeFailed(name, message, t) {
     const job = this.job;
-    if (!job?.parts || !this.filesFor(job.parts).some((f) => f?.name === name)) return;
+    if (!job?.parts || !this.filesFor(job.parts).some((f) => f && tilesOf(f).some((t) => t.name === name))) return;
     this.count(job, t);
     if (job.restyle) {
       this.job = null;
