@@ -43,6 +43,8 @@ function syntaxColors(t) {
 const themeKey = (t) => `${t.background}|${t.foreground}|${t.ansi5}`;
 const fileKey = (machine, path) => `${machine ?? null}\n${path}`;
 const message = (e) => String(e?.message ?? e);
+// 拡大の窓が書く SVG の名前に付ける、窓ごとの印。
+const windowMark = () => `z${Math.random().toString(36).slice(2, 8)}`;
 const pad = (n) => String(n).padStart(2, "0");
 function when(ms) {
   const d = new Date(ms);
@@ -970,6 +972,7 @@ export default class FileViewer extends View {
 
   // 図を押したら、タブの上に重ねる窓で拡大して見せる（タブは増やさない）。窓に収まる大きさの SVG を書いて、見えない所で
   // 読み込ませてから開く。1 秒たっても終わらなければ、本文の SVG を本来の大きさで出して開く（lib/zoom-svg.js の DiagramOpening）。
+  // 書き込みを待つ間も 1 秒を数える（書き込みが遅くても 1 秒で開く）。
   openDiagram(part, cx) {
     const md = this.md;
     if (!part.file || !md?.look || this.opening) return;
@@ -977,21 +980,22 @@ export default class FileViewer extends View {
     const view = window.viewport_size();
     // 窓の描ける大きさ（openOverlay の割合から、見出しの高さを引く）に収める倍率の見積もり。ずれたら窓が書き直す。
     const fit = Math.round(Math.min(3, (view.width * OVERLAY_WIDTH) / l.width, (view.height * OVERLAY_HEIGHT - 36) / l.height) * 1000) / 1000;
-    const mark = `z${Math.random().toString(36).slice(2, 8)}`;
+    const mark = windowMark();
     const look = scaleLook(colors, fit);
     const file = diagramFile(this.token, part, look, mark);
     const text = diagramSvg(l, colors, { width: l.width, height: l.height });
     const opening = this.opening = { state: new DiagramOpening(Date.now()), file, written: false };
     cx.spawn(async (cx) => {
-      try {
-        await writeCacheText(file.name, resizeSvg(text, { width: file.exportWidth, height: file.exportHeight }));
-        opening.state.wrote();
-        opening.written = true;
-      } catch {
-        opening.state.failed();
+      const writing = writeCacheText(file.name, resizeSvg(text, { width: file.exportWidth, height: file.exportHeight })).then(
+        () => { opening.state.wrote(); opening.written = true; },
+        () => { opening.state.failed(); },
+      );
+      // 書けたら、見えない所で読み込ませるために描き直す。
+      let written = false;
+      while (this.opening === opening && opening.state.decide(Date.now()) === "wait") {
+        await pauseForApp();
+        if (opening.written !== written) { written = opening.written; cx.notify(); }
       }
-      cx.notify();
-      while (this.opening === opening && opening.state.decide(Date.now()) === "wait") await pauseForApp();
       if (this.opening !== opening) return;
       this.opening = null;
       const natural = opening.state.decide(Date.now()) !== "fit";
@@ -999,11 +1003,17 @@ export default class FileViewer extends View {
       const shown = !natural
         ? { name: file.name, path: file.path, width: file.width, height: file.height, scale: fit }
         : { name: part.file.name, path: part.file.path, width: part.file.width, height: part.file.height, scale: part.file.width / l.width };
+      // 書き終えずに本文の絵で開くときは、窓に別の印を渡す（窓が収まる大きさの絵を同じ名前で書こうとして、書きかけや書き損じの
+      // ファイルを読まないように）。書いていた絵は誰も使わないので、書き込みが終わったら消す。
+      const late = !opening.written;
       openOverlay({
         mod: "file-viewer", kind: "dialog", width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT,
-        props: { mermaid: part.source, firstLine: part.firstLine, token: this.token, mark, colors, layoutWidth: l.width, layoutHeight: l.height, svg: text, shown },
+        props: { mermaid: part.source, firstLine: part.firstLine, token: this.token, mark: late ? windowMark() : mark, colors, layoutWidth: l.width, layoutHeight: l.height, svg: text, shown },
       });
       cx.notify();
+      if (!late) return;
+      await writing;
+      await removeCache(file.path);
     });
   }
 
