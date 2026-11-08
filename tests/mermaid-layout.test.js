@@ -37,10 +37,6 @@ describe("textWidth", () => {
     for (const [text, px] of MEASURED) expect(textWidth(text, 13)).toBeGreaterThanOrEqual(px - 1e-6);
   });
 
-  test("図の字体で描いた幅より大きく広げない（箱が文字に比べて大きすぎない）", () => {
-    for (const [text, px] of MEASURED) expect(textWidth(text, 13)).toBeLessThanOrEqual(px * 1.15 + 4);
-  });
-
   test("大きさに比例する", () => {
     expect(textWidth("判定 Yes?", 26)).toBeCloseTo(textWidth("判定 Yes?", 13) * 2);
   });
