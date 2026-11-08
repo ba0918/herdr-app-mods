@@ -31,6 +31,9 @@ export class MarkdownState {
     this.userSource = false; // 利用者がソース表示を選んだか（上限で移したソース表示は含めない）
     this.over = null;        // 整形表示の上限を超えていれば judgeSize の over
     this.shown = null;       // 出している整形表示 { text, parts, fallback, files }（files は図の部分ごとのファイルか null）
+    // 整形表示に入るときに捨てた、前に出していた結果の files。次の結果を出すまで、その SVG を使っている名前に残す
+    // （準備の結果が出るまで、中身の変わらない図の SVG を消して書き直さないように）。
+    this.held = null;
     // 進めている準備 { text, prep, parts, inRender, restyle, elapsed, last }。prep を最後まで進めると parts が入り、図の SVG を書く段になる。
     // inRender: 描画の中で準備した結果の書き出しを待っている。restyle: 出している結果を、新しい見た目で書き直している。
     this.job = null;
@@ -243,10 +246,11 @@ export class MarkdownState {
     this.job = { text: shown.text, prep: null, parts: shown.parts, inRender: false, restyle: true, elapsed: 0, last: null };
   }
 
-  // 使っている SVG の名前（出している結果と、書いている途中の結果の今の見た目のもの）。これ以外の自分の SVG は消してよい。
+  // 使っている SVG の名前（出している結果か、整形表示に入るときに捨てた前の結果と、書いている途中の結果の今の見た目のもの）。
+  // これ以外の自分の SVG は消してよい。
   keep() {
     const names = new Set();
-    for (const f of this.shown?.files ?? []) if (f) for (const t of tilesOf(f)) names.add(t.name);
+    for (const f of [...(this.shown?.files ?? []), ...(this.held ?? [])]) if (f) for (const t of tilesOf(f)) names.add(t.name);
     if (this.job?.parts) for (const f of this.filesFor(this.job.parts)) if (f) for (const t of tilesOf(f)) names.add(t.name);
     return names;
   }
@@ -324,7 +328,10 @@ export class MarkdownState {
     }
     this.mode = "formatted";
     this.pending = null;
-    if (this.shown?.text !== this.text) this.shown = null;
+    if (this.shown && this.shown.text !== this.text) {
+      this.held = this.shown.files;
+      this.shown = null;
+    }
     if (this.job && this.job.text !== this.text) this.job = null;
     if (!this.shown && !this.job) this.begin(this.text, inRender);
   }
@@ -401,6 +408,7 @@ export class MarkdownState {
   // その場で一度に進めると、止まったときに見張りも 10 秒の上限も効かないので、次の描画（sync）に任せる。
   show(shown) {
     this.shown = shown;
+    this.held = null;
     this.job = null;
     const next = this.pending;
     this.pending = null;

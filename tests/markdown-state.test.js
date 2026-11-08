@@ -594,6 +594,24 @@ describe("図の SVG の書き出し", () => {
     expect([...s.keep()]).toEqual(["flowchart LR; b1-->b2@c1|w800"]);
   });
 
+  test("描画の外で準備する文書をソース表示で直して戻ると、準備が終わるまで、前に出していた図の SVG も使っている名前に残す", () => {
+    const s = svgState();
+    const now = clock();
+    const prepare = () => { for (let i = 0; i < 1000 && !s.writeTask() && s.busy; i++) s.tick(0, now); };
+    s.open(bigD("a"));
+    prepare();
+    writeAll(s, now);
+    const [name] = shownFiles(s);
+    s.toSource();
+    s.change(withDiagram(big("b"), "a")); // 図は同じで、文章だけ変える
+    s.enter();
+    expect(s.display().kind).toBe("preparing");
+    expect(s.keep().has(name)).toBe(true);
+    prepare();
+    expect(writeAll(s, now)).toEqual([]); // 中身・色・大きさの変わらない図は書き直さない
+    expect(shownFiles(s)).toEqual([name]);
+  });
+
   test("書いた図の画像を app が読み込み終えるまで、その結果を出さず、読み込む間は前の見え方のまま", () => {
     const s = svgState();
     s.open(smallD("a"));
