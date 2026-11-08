@@ -17,7 +17,10 @@ export function diagramColors(t) {
   return Object.fromEntries(COLOR_NAMES.map((name) => [name, t[name]]));
 }
 
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+// XML 1.0 で使えない文字（制御文字、U+FFFE・U+FFFF、対になっていないサロゲート）。u フラグなので、対のサロゲートは 1 文字として当たらない。
+// 残すと SVG が XML として不正になり、app が読めないので U+FFFD に替える。
+const NOT_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF\uD800-\uDFFF]/gu;
+const esc = (s) => String(s).replace(NOT_XML, "\uFFFD").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const num = (v) => String(Math.round(v * 100) / 100);
 
 // 色を fill / stroke の属性にする。#rrggbbaa・#rgba は色と不透明度に分ける（SVG 1.1 の色は不透明度を持たない）。
