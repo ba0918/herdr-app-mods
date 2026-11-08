@@ -104,6 +104,9 @@ export default class FileViewer extends View {
     this.md = null;
     // 描画の外の準備を動かしている非同期処理の印（runPreparation が作る。動かしていなければ null）。
     this.preparing = null;
+    // 拡大の窓を本文の絵で開いたときに、窓に貸した本文の SVG の名前（窓が出している間は消さない）。タブは窓が閉じたことを
+    // 知れないので、次に窓を開くまで（窓は 1 つずつなので、そのときには前の窓は閉じている）か、タブを閉じるまで覚える。
+    this.lent = null;
     this.focus = cx.focus_handle();
     cx.timer.every(POLL_MS, (cx) => {
       this.watchPreparation(cx);
@@ -270,20 +273,22 @@ export default class FileViewer extends View {
 
   // 同じタブの古い画像のコピー（内容が変わる前のもの）を消す。読み込んだ file を採った後に呼ぶ
   // （捨てるかもしれない読み込みの途中で呼ぶと、表示中のコピーを消してしまう）。拡大の窓が書いたものは、窓が消す。
+  // 拡大の窓に貸している本文の絵も消さない。
   async dropOtherCaches(keep) {
     for (const name of await listCache()) {
       const path = `${CACHE_DIR}/${name}`;
       const owner = svgOwner(name);
-      if (path !== keep && owner?.token === this.token && !owner.mark) await removeCache(path);
+      if (path !== keep && owner?.token === this.token && !owner.mark && name !== this.lent) await removeCache(path);
     }
   }
 
-  // 整形表示の中で使わなくなった図の SVG（差し替えの前の絵、前の色や大きさの絵）を消す。拡大の窓が書いたものは消さない。
+  // 整形表示の中で使わなくなった図の SVG（差し替えの前の絵、前の色や大きさの絵）を消す。拡大の窓が書いたものと、拡大の窓に
+  // 貸している本文の絵は消さない。
   async dropUnusedSvgs(md) {
     for (const name of await listCache()) {
       const owner = svgOwner(name);
       if (owner?.token !== this.token || owner.mark || !name.endsWith(".svg")) continue;
-      if (this.md !== md || md.keep().has(name)) continue;
+      if (this.md !== md || md.keep().has(name) || name === this.lent) continue;
       await removeCache(`${CACHE_DIR}/${name}`);
       md.lost([name]);
     }
@@ -989,7 +994,9 @@ export default class FileViewer extends View {
       while (this.opening === opening && opening.state.decide(Date.now()) === "wait") await pauseForApp();
       if (this.opening !== opening) return;
       this.opening = null;
-      const shown = opening.state.decide(Date.now()) === "fit"
+      const natural = opening.state.decide(Date.now()) !== "fit";
+      this.lent = natural ? part.file.name : null;
+      const shown = !natural
         ? { name: file.name, path: file.path, width: file.width, height: file.height, scale: fit }
         : { name: part.file.name, path: part.file.path, width: part.file.width, height: part.file.height, scale: part.file.width / l.width };
       openOverlay({
