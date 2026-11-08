@@ -136,3 +136,19 @@ describe("タイルの範囲", () => {
     }
   });
 });
+
+describe("縦に長い図のある文書", () => {
+  test("文書の中の縦に長い図（配置の高さが 1 枚の上限を超える）は、本文の大きさのまま、隙間のないタイルで書き出す", async () => {
+    const { prepareAll } = await import("../mods/file-viewer/lib/prepare.js");
+    const chain = Array.from({ length: 120 }, (_, i) => `  N${i}[段 ${i}] --> N${i + 1}[段 ${i + 1}]`).join("\n");
+    const doc = `# 長い図\n\n\`\`\`mermaid\nflowchart TD\n${chain}\n\`\`\`\n`;
+    const part = prepareAll(doc).parts.find((p) => p.type === "mermaid");
+    expect(part.layout.height).toBeGreaterThan(TILE_SIDE);
+    const f = diagramFile("t", part, bodyLook(COLORS, 900));
+    expect(f.height).toBe(Math.round(part.layout.height * Math.min(1, 900 / part.layout.width)));
+    expect([f.exportWidth, f.exportHeight]).toEqual([f.width, f.height]);
+    expect(f.tiles.length).toBeGreaterThan(1);
+    expect(f.tiles.reduce((sum, t) => sum + t.width * t.height, 0)).toBe(f.width * f.height);
+    for (const t of f.tiles) expect(Math.max(t.width, t.height)).toBeLessThanOrEqual(TILE_SIDE);
+  });
+});
