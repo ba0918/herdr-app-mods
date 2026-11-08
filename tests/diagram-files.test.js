@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { diagramFile, exportSize, bodyLook, fitLook, svgOwner } from "../mods/file-viewer/lib/diagram-files.js";
+import { diagramFile, exportSize, bodyLook, scaleLook, fitLook, svgOwner, maxDiagramScale, TILE_SIDE } from "../mods/file-viewer/lib/diagram-files.js";
 
 const COLORS = { background: "#101112", foreground: "#e1e2e3", muted: "#909192", raised: "#2a2b2c", surface: "#1a1b1c", border: "#3a3b3c" };
 const part = (source, firstLine = 3, width = 300, height = 120) => ({ type: "mermaid", source, firstLine, layout: { width, height } });
@@ -65,3 +65,61 @@ describe("書き出しの大きさ", () => {
     expect(f.height).toBe(167);
   });
 });
+
+// 仕様の「描き方」: 画像を引き伸ばした・縮めた絵は一瞬も見せない。大きな絵は、app が 1 枚の画像としてくっきり描ける大きさ
+// （ガイドの「image(path) の SVG の大きさ」）のタイルに分けて書き出す。
+describe("大きな絵（引き伸ばさない）", () => {
+  const tilesCover = (f) => {
+    // タイルは隙間も重なりも無く、出す大きさの全体を覆う
+    let area = 0;
+    for (const t of f.tiles) {
+      expect(t.x).toBeGreaterThanOrEqual(0);
+      expect(t.y).toBeGreaterThanOrEqual(0);
+      expect(t.x + t.width).toBeLessThanOrEqual(f.width);
+      expect(t.y + t.height).toBeLessThanOrEqual(f.height);
+      area += t.width * t.height;
+      for (const u of f.tiles) if (u !== t) expect(t.x < u.x + u.width && u.x < t.x + t.width && t.y < u.y + u.height && u.y < t.y + t.height).toBe(false);
+    }
+    expect(area).toBe(f.width * f.height);
+  };
+
+  test("本文の縦に長い図（400 × 6000）は、配置の大きさのまま書き出して出す（縮めた絵を引き伸ばさない）", () => {
+    const f = diagramFile("t", part("tall", 1, 400, 6000), bodyLook(COLORS, 800));
+    expect([f.width, f.height, f.exportWidth, f.exportHeight]).toEqual([400, 6000, 400, 6000]);
+    tilesCover(f);
+  });
+
+  test("長い辺が 1 枚の上限を超える絵は、上限以下のタイルに分ける。どのタイルも書き出しの大きさと出す大きさが同じ", () => {
+    const f = diagramFile("t", part("big", 1, 1500, 9000), scaleLook(COLORS, 1));
+    expect(f.tiles.length).toBeGreaterThan(1);
+    for (const t of f.tiles) {
+      expect(t.width).toBeLessThanOrEqual(TILE_SIDE);
+      expect(t.height).toBeLessThanOrEqual(TILE_SIDE);
+    }
+    tilesCover(f);
+  });
+
+  test("上限以下の絵は 1 枚", () => {
+    const f = diagramFile("t", part("small"), bodyLook(COLORS, 800));
+    expect(f.tiles).toEqual([{ name: f.name, path: f.path, x: 0, y: 0, width: 300, height: 120 }]);
+  });
+
+  test("タイルの名前は別々で、どれもタブの token（と窓の印）で持ち主が読める", () => {
+    const f = diagramFile("tok-1", part("big", 1, 1500, 9000), scaleLook(COLORS, 1), "z9");
+    expect(new Set(f.tiles.map((t) => t.name)).size).toBe(f.tiles.length);
+    for (const t of f.tiles) {
+      expect(svgOwner(t.name)).toEqual({ token: "tok-1", mark: "z9" });
+      expect(t.path).toBe(`file-viewer-cache/${t.name}`);
+    }
+  });
+
+  test("倍率で書き出す絵の面積には上限があり、拡大の上限の倍率はその面積に収まる倍率", () => {
+    const layout = { width: 1000, height: 800 };
+    const max = maxDiagramScale(layout);
+    const at = exportSize(layout, { colors: COLORS, scale: max });
+    expect(at.width * at.height).toBeLessThanOrEqual(16_777_216 * 1.01);
+    // 上限を超える倍率を頼まれても、書き出す絵は上限の倍率まで（出す大きさも同じなので、引き伸ばさない）
+    expect(exportSize(layout, { colors: COLORS, scale: max * 4 })).toEqual(at);
+  });
+});
+

@@ -5,9 +5,13 @@
 // 拡大の窓が書くものは、token に窓の印を付けた <token>~<印>-<ハッシュ>.svg にし、持ち主の token は同じに読む。
 
 export const CACHE_DIR = "file-viewer-cache";
-// 書き出す SVG の長いほうの辺の上限（px）。app は SVG を画像にして持つので、拡大の窓で大きな倍率にしたときに、大きすぎる画像で
-// メモリを使い切らないようにする。超える倍率では、この大きさの絵を引き伸ばして出す。
-const MAX_SIDE = 4096;
+// 1 枚の SVG の辺の上限（px）。app は 1 辺 8,192 px までの SVG をくっきり描き、それより大きいと縮めた画像を引き伸ばしてぼやける
+// （ガイドの「image(path) の SVG の大きさ」）。これより大きな絵は、この大きさ以下のタイル（同じ絵の viewBox の切れ端）に分けて
+// 書き出し、隙間なく並べて出す。引き伸ばした・縮めた絵は出さない（仕様の「描き方」）。
+export const TILE_SIDE = 4096;
+// 倍率で書き出す絵（拡大の窓・.mmd）の面積の上限（px）。1 枚でくっきり描けた最大の 4,096 × 4,096 と同じにし、拡大の倍率の上限を
+// これに収まる倍率にする（大きすぎる画像でメモリを使い切らないように）。
+const MAX_AREA = TILE_SIDE * TILE_SIDE;
 
 const COLOR_NAMES = ["background", "foreground", "muted", "raised", "surface", "border"];
 
@@ -31,10 +35,21 @@ export function fitLook(colors, frame) {
   return { colors, fit: frame, key: `${colorsKey(colors)}|f${Math.round(frame.width)}x${Math.round(frame.height)}x${frame.max}` };
 }
 
-// 配置の大きさ { width, height } を、見た目で書き出す大きさ（整数の px）。
+// 倍率で書き出す絵の、拡大の倍率の上限（面積が MAX_AREA に収まる倍率）。
+export function maxDiagramScale(layout) {
+  return Math.sqrt(MAX_AREA / (layout.width * layout.height));
+}
+
+// 配置の大きさ { width, height } を、見た目で書き出す大きさ（整数の px）。倍率で書き出す絵（拡大の窓・.mmd）は拡大の上限まで。
+// 本文の図は本文の幅より大きくしないので、上限を当てない。
 export function exportSize(layout, look) {
   const f = look.fit;
-  const scale = look.scale ?? (f ? Math.min(f.max, f.width / layout.width, f.height / layout.height) : Math.min(1, look.maxWidth / layout.width));
+  if (look.maxWidth !== undefined) return scaled(layout, Math.min(1, look.maxWidth / layout.width));
+  const asked = look.scale ?? Math.min(f.max, f.width / layout.width, f.height / layout.height);
+  return scaled(layout, Math.min(asked, maxDiagramScale(layout)));
+}
+
+function scaled(layout, scale) {
   return { width: Math.max(1, Math.round(layout.width * scale)), height: Math.max(1, Math.round(layout.height * scale)) };
 }
 
@@ -51,13 +66,23 @@ function hash12(text) {
 }
 
 // part: 整形の準備の図の部分（source と layout を持つ）。mark: 拡大の窓の印（無ければタブのもの）。
-// { name, path, width, height, exportWidth, exportHeight }。width / height は出す大きさ（論理 px）。
+// { name, path, width, height, exportWidth, exportHeight, tiles }。width / height は出す大きさ（論理 px）で、書き出しの大きさと同じ。
+// tiles: 書き出す SVG の並び { name, path, x, y, width, height }（出す絵の中の位置と大きさ）。上限以下の絵は 1 枚で、name と path は
+// その 1 枚のもの。名前は図のソース・色・書き出しの大きさ（とタイルの位置）から作る。
 export function diagramFile(token, part, look, mark = null) {
   const size = exportSize(part.layout, look);
-  const shrink = Math.min(1, MAX_SIDE / Math.max(size.width, size.height));
-  const exportWidth = Math.max(1, Math.round(size.width * shrink)), exportHeight = Math.max(1, Math.round(size.height * shrink));
-  const name = `${token}${mark ? `~${mark}` : ""}-${hash12(`${part.source}\n${colorsKey(look.colors)}\n${exportWidth}x${exportHeight}`)}.svg`;
-  return { name, path: `${CACHE_DIR}/${name}`, width: size.width, height: size.height, exportWidth, exportHeight };
+  const prefix = `${token}${mark ? `~${mark}` : ""}`;
+  const base = `${part.source}\n${colorsKey(look.colors)}\n${size.width}x${size.height}`;
+  const tiles = [];
+  for (let y = 0; y < size.height; y += TILE_SIDE) {
+    for (let x = 0; x < size.width; x += TILE_SIDE) {
+      const width = Math.min(TILE_SIDE, size.width - x), height = Math.min(TILE_SIDE, size.height - y);
+      const whole = width === size.width && height === size.height;
+      const name = `${prefix}-${hash12(whole ? base : `${base}\n${x},${y}`)}.svg`;
+      tiles.push({ name, path: `${CACHE_DIR}/${name}`, x, y, width, height });
+    }
+  }
+  return { name: tiles[0].name, path: tiles[0].path, width: size.width, height: size.height, exportWidth: size.width, exportHeight: size.height, tiles };
 }
 
 // file-viewer-cache/ のファイルの名前（画像のコピーと図の SVG）から、持ち主の token と窓の印を読む。読めなければ null。
