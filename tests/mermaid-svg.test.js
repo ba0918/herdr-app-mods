@@ -216,3 +216,14 @@ describe("diagramColors", () => {
     });
   });
 });
+
+describe("タイルの書き出し", () => {
+  test("view を渡すと、同じ絵のその範囲だけを viewBox にした SVG になる（中身は同じ）", () => {
+    const l = flow();
+    const whole = diagramSvg(l, COLORS, { width: l.width, height: l.height });
+    const tile = diagramSvg(l, COLORS, { width: 100, height: 50, view: { x: 10, y: 20, width: 100, height: 50 } });
+    expect(tile).toMatch(/^<svg [^>]*width="100" height="50" viewBox="10 20 100 50"/);
+    const body = (s) => s.slice(s.indexOf(">") + 1);
+    expect(body(tile)).toBe(body(whole));
+  });
+});
