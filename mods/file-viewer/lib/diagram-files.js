@@ -91,3 +91,9 @@ export function svgOwner(name) {
   const m = CACHE_NAME.exec(name);
   return m ? { token: m[1], mark: m[2] ?? null } : null;
 }
+
+// タイルの位置と大きさ（出す絵の px）を、配置の座標の範囲（SVG の viewBox）にする。
+export function tileView(file, tile, layout) {
+  const sx = layout.width / file.width, sy = layout.height / file.height;
+  return { x: tile.x * sx, y: tile.y * sy, width: tile.width * sx, height: tile.height * sy };
+}

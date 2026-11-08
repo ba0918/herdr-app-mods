@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { diagramFile, exportSize, bodyLook, scaleLook, fitLook, svgOwner, maxDiagramScale, TILE_SIDE } from "../mods/file-viewer/lib/diagram-files.js";
+import { diagramFile, exportSize, bodyLook, scaleLook, fitLook, svgOwner, maxDiagramScale, tileView, TILE_SIDE } from "../mods/file-viewer/lib/diagram-files.js";
 
 const COLORS = { background: "#101112", foreground: "#e1e2e3", muted: "#909192", raised: "#2a2b2c", surface: "#1a1b1c", border: "#3a3b3c" };
 const part = (source, firstLine = 3, width = 300, height = 120) => ({ type: "mermaid", source, firstLine, layout: { width, height } });
@@ -123,3 +123,16 @@ describe("大きな絵（引き伸ばさない）", () => {
   });
 });
 
+
+describe("タイルの範囲", () => {
+  test("タイルの位置と大きさを、配置の座標の範囲にする（隣のタイルと切れ目なくつながる）", () => {
+    const layout = { width: 1500, height: 9000 };
+    const f = diagramFile("t", { source: "big", layout }, scaleLook(COLORS, 1));
+    const views = f.tiles.map((t) => tileView(f, t, layout));
+    expect(views[0]).toEqual({ x: 0, y: 0, width: 1500 * (f.tiles[0].width / f.width), height: f.tiles[0].height * (9000 / f.height) });
+    for (const [i, t] of f.tiles.entries()) {
+      expect(views[i].x).toBeCloseTo(t.x * (1500 / f.width));
+      expect(views[i].y).toBeCloseTo(t.y * (9000 / f.height));
+    }
+  });
+});
