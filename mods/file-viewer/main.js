@@ -723,11 +723,12 @@ export default class FileViewer extends View {
     this.wasVisible = shownNow;
     this.syncMarkdown(rec, t, cx);
 
-    return v_flex().id("fv-root").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
+    return v_flex().id("fv-root").relative().size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .track_focus(this.focus).on_key_down((e, cx) => this.onKey(e, cx))
       .child(this.toolbar(rec, t))
       .children(this.notices(t))
-      .child(this.body(rec, t));
+      .child(this.body(rec, t))
+      .children(this.preloads());
   }
 
   toolbar(rec, t) {
@@ -901,6 +902,13 @@ export default class FileViewer extends View {
         if (this.preparing === run) this.preparing = null;
       }
     });
+  }
+
+  // 書いた図の SVG を見えない所で読み込ませる要素の並び。整形表示だけでなく、ソース表示や .mmd の描けない図の表示の間も
+  // 描画の木に置く（準備や書き直しは表示を切り替えても続き、読み込みの知らせが来ないと 10 秒で終わらなかったことになる）。
+  // 位置を取らない 1 px の枠なので、どの表示にも見える物を足さない。
+  preloads() {
+    return [this.md && this.preloadsOf(this.md), this.openingPreload()].filter(Boolean);
   }
 
   // 書いたがまだ読み込んでいない図の SVG を、見えない所で読み込ませる要素。無ければ null。
@@ -1106,18 +1114,17 @@ export default class FileViewer extends View {
   mermaidFile(file, t) {
     const zoom = file.zoom ??= new Zoom();
     const v = diagramFileView(this.md.display());
-    const preload = [this.preloadsOf(this.md)].filter(Boolean);
     if (v.kind === "preparing") {
       return div().id("fv-mmd-waiting").relative().flex_1().min_h(0).size_full().px(16).py(16).text_color(t.dim)
         .on_size_change((size, cx) => { if (size.width !== zoom.view?.width || size.height !== zoom.view?.height) { zoom.view = size; cx.notify(); } })
-        .children(preload).child("整形中…");
+        .child("整形中…");
     }
     if (v.kind === "error") {
       return v_flex().id("fv-mmd").flex_1().min_h(0).overflow_y_scrollbar().p(16)
         .child(diagramError({ id: "fv-mmd-error", message: v.message, fence: "```\n" + file.editor.value() + "\n```", t }));
     }
     const { layout: l, file: svg } = v.part;
-    return v_flex().id("fv-mmd-box").relative().flex_1().min_h(0).size_full().children(preload)
+    return v_flex().id("fv-mmd-box").relative().flex_1().min_h(0).size_full()
       .child(zoomArea({
         id: "fv-mmd-area", zoom, width: l.width, height: l.height, shownScale: svg.width / l.width, t,
         content: () => image(svg.path).w(svg.width).h(svg.height),
@@ -1135,10 +1142,9 @@ export default class FileViewer extends View {
     }
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
       const md = this.md.display();
-      const preload = [this.preloadsOf(this.md), this.openingPreload()].filter(Boolean);
-      if (md.kind === "preparing" || md.kind === "loading") return markdownWaiting({ id: "fv-markdown-waiting", loading: md.kind === "loading", box: this.mdBox, preload, t });
+      if (md.kind === "preparing" || md.kind === "loading") return markdownWaiting({ id: "fv-markdown-waiting", loading: md.kind === "loading", box: this.mdBox, t });
       return markdownBody({
-        id: "fv-markdown", parts: md.parts, box: this.mdBox, preload, t,
+        id: "fv-markdown", parts: md.parts, box: this.mdBox, t,
         onLink: (url, cx) => this.followLink(url, cx),
         onDiagram: (part, cx) => this.openDiagram(part, cx),
       });

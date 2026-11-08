@@ -23,9 +23,9 @@ export function diagramError({ id, message, fence, t }) {
 
 // parts: 整形の準備の結果（lib/prepare.js の parts。文章の部分は画像を押せる名前に書き換えた Markdown、図の部分は配置か失敗で、
 // 書き出した SVG を file { path, width, height } に持つ）。
-// onLink(url, cx): リンクを押したとき。onDiagram(part, cx): 図を押したとき。preload: 見えない所で画像を読み込ませる要素の並び。
+// onLink(url, cx): リンクを押したとき。onDiagram(part, cx): 図を押したとき。
 // box: 本文の幅を覚える入れ物。前の整形表示から差し替えるときも要素の id を変えない（スクロールの位置が保たれる。ガイドの「制約」）。
-export function markdownBody({ id, parts, onLink, onDiagram, box, preload = [], t }) {
+export function markdownBody({ id, parts, onLink, onDiagram, box, t }) {
   return v_flex().id(`${id}-scroll`).flex_1().min_h(0).overflow_y_scrollbar().px(PAD_X).py(16).gap(12).text_color(t.foreground)
     .on_size_change(measure(box))
     .children(parts.map((part, i) => {
@@ -38,14 +38,13 @@ export function markdownBody({ id, parts, onLink, onDiagram, box, preload = [], 
         .on_click((_e, cx) => onDiagram(part, cx))
         .child(file ? image(file.path).w(file.width).h(file.height) : div());
     }))
-    .child(div().h(24).flex_none())
-    .children(preload);
+    .child(div().h(24).flex_none());
 }
 
 // 整形表示を出す前に待つ間に、整形表示の場所に出すもの（進み具合は出さない）。loading: 開くときの待ち（ファイルの読み込み中と
 // 同じ「読み込み中…」）か、「整形中…」か。待つ間も本文の幅を測る（図を書き出す大きさを決めるため）。
-export function markdownWaiting({ id, loading, box, preload = [], t }) {
-  const el = div().id(id).relative().flex_1().min_h(0).w_full().text_color(t.dim).on_size_change(measure(box)).children(preload);
+export function markdownWaiting({ id, loading, box, t }) {
+  const el = div().id(id).relative().flex_1().min_h(0).w_full().text_color(t.dim).on_size_change(measure(box));
   return loading ? el.p(16).child("読み込み中…") : el.px(PAD_X).py(16).child("整形中…");
 }
 
