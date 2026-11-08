@@ -683,6 +683,20 @@ describe("テーマが変わったとき（図の色の書き直し）", () => {
     expect(shownFiles(s)).toEqual(["flowchart LR; A-->B@new|w800", "flowchart LR; C-->D@new|w800"]);
   });
 
+  test("書き直しの途中で前の色に戻したら、書き直しを終えて前の色の結果のまま出し、あとで「終わらなかった」と知らせない", () => {
+    const s = themed();
+    const now = clock(1);
+    s.setLook(NEW);
+    const first = s.writeTask();
+    s.wrote(first.name, now());
+    s.setLook(OLD);
+    expect(s.busy).toBe(false);
+    now.skip(10_500);
+    s.watch(now, true);
+    expect(s.display().notices).toEqual([]);
+    expect(shownFiles(s)).toEqual(["flowchart LR; A-->B@old|w800", "flowchart LR; C-->D@old|w800"]);
+  });
+
   test("書き直しの途中で中身が変わったら、新しい中身と新しい色で準備し、それまで前の整形表示を出す", () => {
     const s = themed();
     s.setLook(NEW);

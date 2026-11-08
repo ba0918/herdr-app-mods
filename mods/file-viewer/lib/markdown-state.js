@@ -210,9 +210,15 @@ export class MarkdownState {
 
   // 図の見た目（色と書き出しの大きさ）を渡す（描画のたびに）。変わったら、出している結果を新しい見た目で書き直す
   // （書き終えるまで前の見た目の絵を出す）。名前が変わらない図だけなら、そのまま替える。準備の途中なら、新しい見た目で書く。
+  // 書く段の途中なら、新しい見た目の図がもう書けて読み込めていればその場で出す（出している見た目に戻ったときは書き直しを終える。
+  // 書く・読み込む知らせはもう来ないので、待つと 10 秒で終わらなかったことになる）。
   setLook(look) {
     if (this.look?.key === look.key) return;
     this.look = look;
+    if (this.job?.parts) {
+      this.settle(this.job);
+      return;
+    }
     const shown = this.shown;
     if (!shown || shown.fallback || this.job) return;
     const files = this.filesFor(shown.parts);
