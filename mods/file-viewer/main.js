@@ -1290,12 +1290,16 @@ export default class FileViewer extends View {
       }))
       .when(preloads.length > 0, (el) => el.child(preloadImages({ id: "fv-overlay-preload", files: preloads, onLoaded: (name, cx) => {
         if (!o.zs.loadedImage(name)) return;
-        // 借りた本文の絵から自分の絵に替えたら、開いたタブに記録で知らせる（タブは貸した本文の絵を外す）。
+        cx.notify();
+        // 借りた本文の絵から自分の絵に替えたら、替えた描画が済んでから開いたタブに記録で知らせる（タブは貸した本文の絵を外して
+        // 手放すので、窓が自分の絵を描く前に知らせると、窓に小さい絵が出うる）。
         if (o.borrowing) {
           o.borrowing = false;
-          if (record(o.token)?.window?.mark === o.mark) putRecord(o.token, { window: { mark: o.mark, borrowing: false } });
+          cx.spawn(async () => {
+            await pauseForApp();
+            if (record(o.token)?.window?.mark === o.mark) putRecord(o.token, { window: { mark: o.mark, borrowing: false } });
+          });
         }
-        cx.notify();
       } })));
   }
 
