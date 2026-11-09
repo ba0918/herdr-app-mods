@@ -4,8 +4,8 @@ import { View, div, image } from "gpui-kit";
 import { randomUUID } from "crypto";
 import { v_flex, h_flex, Editor, EditorState, SliderState } from "gpui-base";
 import { spaces, props, theme, settings, run, notify, openOverlay, closeOverlay } from "herdr";
-import { kind, languageFor } from "./lib/kind.js";
-import { formatSize, formatSizes, limitMessage } from "./lib/size.js";
+import { kind, languageFor, extension, unopenableReason } from "./lib/kind.js";
+import { formatSize, formatSizes } from "./lib/size.js";
 import { tabTitles } from "./lib/tabs.js";
 import { splitBom, contentToSave, looksNonUtf8 } from "./lib/save.js";
 import { draftsFor, expiredDrafts, restoredDraft, offersDrafts } from "./lib/drafts.js";
@@ -31,6 +31,8 @@ import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
 
 const POLL_MS = 2000;
+// 画像の中身が変わって新しいコピーに替えるとき、新しいコピーを app が読み込み終えるのを待つ上限（読み込めない画像でも替える）。
+const IMAGE_SWAP_WAIT_MS = 5000;
 const DRAFT_MS = 3000;
 // 描画の外の整形の準備の 1 区間（仕様の「整形の準備」。ガイドの「長い同期処理」の 0.5 秒より十分短く）。
 const PREPARE_SLICE_MS = 100;
@@ -124,6 +126,8 @@ export default class FileViewer extends View {
     this.pictures = this.token ? new PictureTable(new PictureNames({ token: this.token })) : null;
     this.releases = new ReleaseQueue();
     this.companion = true;
+    // コピーしている途中の画像の名前（読み込んだ file を採るか捨てるまで、使っている絵に入れる）。
+    this.copying = new Set();
     // init の時点の spaces() はまだ開く前の状態で、各 space で選ばれていたタブを指す。
     // props に位置が無いとき（CLI から開いたときなど）は、そのタブの右に置く。
     this.activeBefore = Object.fromEntries(spaces().map((s) => [s.id, s.tabs.find((t) => t.active)?.id ?? null]));
@@ -193,8 +197,6 @@ export default class FileViewer extends View {
     const file = this.file;
     if (file?.dirty && file.editor) await writeDraft(this.draftOf(file)).catch(() => {});
     file?.editor?.release();
-    // 閉じたタブの画像のコピーは消す。
-    await removeCache(file?.cache);
     if (!this.token || !(await companionPresent())) return;
     const mine = (await listPictures()).filter((name) => parsePictureName(name)?.token === this.token);
     const svgFirst = [...mine.filter((n) => n.endsWith(".svg")), ...mine.filter((n) => !n.endsWith(".svg"))];
@@ -225,6 +227,8 @@ export default class FileViewer extends View {
     tb.use("md", this.md?.keep() ?? []);
     // 拡大の窓に貸した本文の絵（窓が出している間は、本文が使わなくなっても手放さない）。
     tb.use("lent", this.lent ?? []);
+    // image viewer の今のコピーと、差し替え待ちのコピーと、コピーしている途中のコピー。
+    tb.use("image", [this.file?.picture, this.file?.incoming?.picture, ...this.copying].filter(Boolean));
     const frame = tb.commit();
     if (!tb.pending) return;
     cx.spawn(async () => {
@@ -324,21 +328,18 @@ export default class FileViewer extends View {
     this.preparing = null;
     this.mdScroll = new BodyScroll();
     this.file?.editor?.release();
-    const old = this.file?.cache;
+    // 前のファイルの画像のコピーと図の絵は、読み込み中の表示に替えた描画のあとに手放す（trackPictures）。
     this.file = { path: target.path, machine: target.machine ?? null, loading: true };
-    if (old) cx.spawn(async () => removeCache(old));
     cx.spawn(async (cx) => {
       const file = await this.read(target.path, target.machine ?? null);
       // 付き添いの mod が無いと分かっていれば、整形の準備で図を配置しない（仕様の「描けない図」）。
       const companion = await companionPresent();
+      this.copying.delete(file.picture);
       if (this.loads !== gen) { file.editor?.release(); return; }
       this.companion = companion;
       this.file = file;
       this.setDirty(false);
       cx.notify();
-      // 前に開いていたファイルの画像のコピーと図の SVG を消す（Markdown の図は、整形表示の差し替えのあとに消す）。
-      if (file.cache) await this.dropOtherCaches(file.cache);
-      else if (file.view?.type !== "markdown") await this.dropOtherCaches(null);
       await this.offerDrafts(file);
       cx.notify();
     });
@@ -371,9 +372,17 @@ export default class FileViewer extends View {
     file.sig = await statOf(file.path, file.machine).catch(() => null);
   }
 
-  // 画像は app home にコピーして表示する。SVG はソースも読んで Editor に入れる（1 MiB まで）。
+  // 画像は付き添いの mod のフォルダにコピーして表示する（新しい名前で。コピーしている間は使っている絵に入れ、読み込んだ file を
+  // 採るか捨てるときに外す）。付き添いの mod が無ければ、コピーせずに開けないファイルにする（大きさと更新時刻で変化を見る）。
+  // SVG はソースも読んで Editor に入れる（1 MiB まで）。
   async readImage(file) {
-    const r = await copyImage(file.path, file.machine, this.token);
+    if (!(await companionPresent())) {
+      file.view = { type: "unopenable", reason: "companion" };
+      await this.sign(file);
+      if (file.sig) file.size = Number(file.sig.split("|")[0]);
+      return file;
+    }
+    const r = await this.copyPicture(file);
     if (!r.exists) {
       file.missing = true;
       file.view = { type: "unopenable", reason: "missing" };
@@ -398,6 +407,31 @@ export default class FileViewer extends View {
     return file;
   }
 
+  // 画像を新しい名前でコピーする。名前は file.picture に置き、コピーしている間は使っている絵に入れる（this.copying）。
+  async copyPicture(file) {
+    const name = this.pictures.name(null, extension(file.path));
+    file.picture = name;
+    this.copying.add(name);
+    this.pictures.writing(name);
+    try {
+      this.ensureRecord();
+      return await copyImage(file.path, file.machine, name);
+    } finally {
+      this.pictures.wrote(name);
+    }
+  }
+
+  // 新しい画像のコピー（incoming: { picture, cache }）を見えない所で読み込ませ、読み込み終えるまで（読み込めなくても上限まで）待つ。
+  // そのあと呼ぶ側が出すコピーを替える（読み込む間に絵が空かないように）。
+  async whenImageLoaded(file, incoming, cx) {
+    let done;
+    const loaded = new Promise((resolve) => { done = resolve; });
+    file.incoming = { ...incoming, done };
+    cx.notify();
+    await Promise.race([loaded, cx.sleep(IMAGE_SWAP_WAIT_MS)]);
+    if (file.incoming?.done === done) file.incoming = null;
+  }
+
   // どの viewer のタブも使っていない画像のコピーを消す。表示していないタブを閉じたときは close() が
   // 呼ばれないので、動き出したときに加えて、ときどきこれで消す。
   async sweepCaches() {
@@ -405,17 +439,6 @@ export default class FileViewer extends View {
     for (const name of await listCache()) {
       const owner = svgOwner(name)?.token;
       if (!owner || !open.has(owner)) await removeCache(`${CACHE_DIR}/${name}`);
-    }
-  }
-
-  // 同じタブの古い画像のコピー（内容が変わる前のもの）を消す。読み込んだ file を採った後に呼ぶ
-  // （捨てるかもしれない読み込みの途中で呼ぶと、表示中のコピーを消してしまう）。拡大の窓が書いたものは、窓が消す。
-  // 拡大の窓に貸している本文の絵も消さない。
-  async dropOtherCaches(keep) {
-    for (const name of await listCache()) {
-      const path = `${CACHE_DIR}/${name}`;
-      const owner = svgOwner(name);
-      if (path !== keep && owner?.token === this.token && !owner.mark && !this.lent?.has(name)) await removeCache(path);
     }
   }
 
@@ -499,6 +522,8 @@ export default class FileViewer extends View {
     const before = file.editor?.value();
     cx.spawn(async (cx) => {
       const next = await this.read(file.path, file.machine);
+      // 読み直したコピーは、採らなければ使っている絵から外れて手放される。
+      this.copying.delete(next.picture);
       if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); return; }
       const outcome = reloadOutcome({
         editor: Boolean(file.editor), image: Boolean(file.cache), edited: Boolean(file.editor) && file.editor.value() !== before, missing: Boolean(next.missing),
@@ -516,9 +541,14 @@ export default class FileViewer extends View {
         next.editor?.release();
         if (next.base) this.considerExternal(file, { changed: next.base.hash !== file.base?.hash, diskHash: next.base.hash, dirty: true });
         cx.notify();
-        // 表示中の画像は今の file のコピーを使い続けるので、捨てる読み直しのコピーだけを消す。
-        if (next.cache && next.cache !== file.cache) await removeCache(next.cache);
         return;
+      }
+      // 画像の中身が変わったら、新しいコピーを読み込み終えてから替える（前のコピーは、替えた描画のあとに手放す）。
+      if (next.cache && file.cache) {
+        this.copying.add(next.picture);
+        await this.whenImageLoaded(file, { picture: next.picture, cache: next.cache }, cx);
+        this.copying.delete(next.picture);
+        if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); return; }
       }
       file.editor?.release();
       carryOver(file, next);
@@ -529,7 +559,6 @@ export default class FileViewer extends View {
       if (file.dirty || file.drafted !== undefined) await deleteDraft(this.draftNameOf(file));
       // 無くなっていたファイルが戻ってきたら、そのファイルの下書きをもう一度聞く。
       if (missing && !next.missing) { await this.offerDrafts(next); cx.notify(); }
-      if (next.cache) await this.dropOtherCaches(next.cache);
     });
   }
 
@@ -698,7 +727,7 @@ export default class FileViewer extends View {
         const r = await checkChanged(file.path, file.machine, file.base);
         if (r.missing) { file.missing = true; this.openChoice(file, { kind: "recreate" }); return; }
         if (r.changed) { this.openChoice(file, { kind: "conflict", base: r.base }); return; }
-        await this.write(file, file.base);
+        await this.write(file, file.base, cx);
       } catch (e) {
         file.notice = { kind: "error", text: `保存できなかった: ${message(e)}` };
       } finally {
@@ -710,8 +739,8 @@ export default class FileViewer extends View {
 
   // base を基準に書く（null ならファイルを作る）。食い違えば確認に戻す。
   // 書いている間（他 machine では exec を何度も往復する）にも編集できるので、書いた内容を基準にし、
-  // それより新しい編集は未保存のまま残す。
-  async write(file, base) {
+  // それより新しい編集は未保存のまま残す。cx: SVG の画像を取り直すときの描き直しに使う。
+  async write(file, base, cx) {
     const value = file.editor.value();
     const content = contentToSave({ original: file.text ?? "", edited: value, bom: Boolean(file.bom) });
     try {
@@ -739,13 +768,16 @@ export default class FileViewer extends View {
       file.drafted = undefined;
       await deleteDraft(this.draftNameOf(file));
     }
-    // SVG のソースを保存したら、画像表示もコピーし直す。
-    if (file.cache) {
-      const r = await copyImage(file.path, file.machine, this.token).catch(() => null);
+    // SVG のソースを保存したら、画像表示も新しい名前でコピーし直し、読み込み終えてから替える（前のコピーは手放す）。
+    if (file.cache && (await companionPresent())) {
+      const incoming = { path: file.path, machine: file.machine };
+      const r = await this.copyPicture(incoming).catch(() => null);
+      if (r?.cache && this.file === file) await this.whenImageLoaded(file, { picture: incoming.picture, cache: r.cache }, cx);
+      this.copying.delete(incoming.picture);
       if (r?.cache && this.file === file) {
         file.cache = r.cache;
+        file.picture = incoming.picture;
         file.dims = imageSize({ svg: file.text }) ?? file.dims;
-        await this.dropOtherCaches(r.cache);
       }
     }
   }
@@ -801,7 +833,7 @@ export default class FileViewer extends View {
             base = r.base;
           }
         }
-        await this.write(file, base);
+        await this.write(file, base, cx);
       } catch (e) {
         file.notice = { kind: "error", text: `保存できなかった: ${message(e)}` };
       } finally {
@@ -1041,7 +1073,14 @@ export default class FileViewer extends View {
   // 描画の木に置く（準備や書き直しは表示を切り替えても続き、読み込みの知らせが来ないと 10 秒で終わらなかったことになる）。
   // 位置を取らない 1 px の枠なので、どの表示にも見える物を足さない。
   preloads() {
-    return [this.md && this.preloadsOf(this.md), this.openingPreload()].filter(Boolean);
+    return [this.md && this.preloadsOf(this.md), this.openingPreload(), this.imagePreload()].filter(Boolean);
+  }
+
+  // 画像の中身が変わって新しいコピーに替える前に、新しいコピーを見えない所で読み込ませる要素。無ければ null。
+  imagePreload() {
+    const incoming = this.file?.incoming;
+    if (!incoming) return null;
+    return preloadImages({ id: "fv-image-preload", files: [{ name: incoming.picture, path: incoming.cache }], onLoaded: () => incoming.done() });
   }
 
   // 書いたがまだ読み込んでいない図の SVG を、見えない所で読み込ませる要素。無ければ null。
@@ -1461,10 +1500,7 @@ export default class FileViewer extends View {
   }
 
   unopenable(file, view, t) {
-    const reason = view.reason === "binary" ? "バイナリのため表示できない"
-      : view.reason === "too-large" ? limitMessage({ limit: view.limit, size: file.size })
-      : view.reason === "missing" ? "ファイルが無くなった"
-      : `読み込めなかった: ${view.message ?? ""}`;
+    const reason = unopenableReason(view, file.size);
     return v_flex().id("fv-unopenable").p(20).gap(8)
       .child(div().text_size(14).font_semibold().child(reason))
       .child(div().text_size(12).text_color(t.muted).child(file.path))

@@ -1,5 +1,6 @@
 // どの viewer で開くか（開けないならその理由）を、パス・大きさ・内容から決める。
 import { basename } from "./path.js";
+import { limitMessage } from "./size.js";
 
 export const TEXT_LIMIT = 1024 * 1024;
 export const IMAGE_LIMIT = 6_000_000;
@@ -13,9 +14,11 @@ export function extension(path) {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
 
-export function kind({ path, size, text }) {
+// companion: 付き添いの mod が入っているか（画像のコピーの置き場所。入っていなければ画像は開けないファイル）。
+export function kind({ path, size, text, companion = true }) {
   const ext = extension(path);
   if (IMAGE.has(ext)) {
+    if (!companion) return { type: "unopenable", reason: "companion" };
     if (size > IMAGE_LIMIT) return { type: "unopenable", reason: "too-large", limit: IMAGE_LIMIT };
     return { type: "image", source: ext === "svg" && size <= TEXT_LIMIT };
   }
@@ -23,6 +26,15 @@ export function kind({ path, size, text }) {
   if (text === undefined) return { type: "needs-text" };
   if (text.includes("\0")) return { type: "unopenable", reason: "binary" };
   return { type: BY_EXTENSION[ext] ?? "code", source: true };
+}
+
+// 開けないファイルの、内容の代わりに出す理由（size: ファイルの大きさ）。
+export function unopenableReason(view, size) {
+  if (view.reason === "binary") return "バイナリのため表示できない";
+  if (view.reason === "too-large") return limitMessage({ limit: view.limit, size });
+  if (view.reason === "missing") return "ファイルが無くなった";
+  if (view.reason === "companion") return "付き添いの mod が入っていない";
+  return `読み込めなかった: ${view.message ?? ""}`;
 }
 
 // Editor（code viewer）に渡す言語名。読み替えは同梱 Files と同じ。

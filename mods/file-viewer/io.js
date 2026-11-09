@@ -202,23 +202,17 @@ printf '%s\\n' "$h"; ${STAT.replace('"$1"', '"$real"')}`;
   return { hash, stat };
 }
 
-function cachePath(name) {
-  return `${appHome()}/${CACHE_DIR}/${name}`;
-}
-
-// 画像を app home の file-viewer-cache/ にコピーする（image() は app home の相対パスしか出せない）。
-// { exists, size, base, cache: "file-viewer-cache/<name>", header: Uint8Array }。上限超えは cache なし。
-export async function copyImage(path, on, prefix) {
-  await fs.mkdir(`${appHome()}/${CACHE_DIR}`, { recursive: true }).catch(() => {});
-  const ext = extension(path);
+// 画像を付き添いの mod のフォルダに name の名前でコピーする（image() は app home の相対パスしか出せない。フォルダは作らない）。
+// { exists, size, base, cache: "mods/file-viewer-images/<name>", header: Uint8Array }。上限超えは cache なし。
+export async function copyImage(path, on, name) {
   if (!on) {
     const r = await exec("powershell", ["-NoProfile", "-Command",
-      `$ErrorActionPreference='Stop'; $p=${psQuote(path)}; if (-not (Test-Path -LiteralPath $p)) { exit 4 }; $b=[IO.File]::ReadAllBytes($p); $h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower(); "$($b.Length)"; $h; if ($b.Length -le ${IMAGE_LIMIT}) { $n=${psQuote(`${prefix}-`)}+$h.Substring(0,12)+${psQuote(`.${ext}`)}; [IO.File]::WriteAllBytes((Join-Path ${psQuote(`${appHome()}/${CACHE_DIR}`)} $n), $b); $n; [Convert]::ToBase64String($b, 0, [Math]::Min($b.Length, ${HEADER_BYTES})) }`]);
+      `$ErrorActionPreference='Stop'; $p=${psQuote(path)}; if (-not (Test-Path -LiteralPath $p)) { exit 4 }; $b=[IO.File]::ReadAllBytes($p); $h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower(); "$($b.Length)"; $h; if ($b.Length -le ${IMAGE_LIMIT}) { [IO.File]::WriteAllBytes(${psQuote(picturePath(name))}, $b); [Convert]::ToBase64String($b, 0, [Math]::Min($b.Length, ${HEADER_BYTES})) }`]);
     if (r.code === 4) return { exists: false };
     if (r.code !== 0) throw new Error(r.stderr.trim() || "画像を読めなかった");
-    const [[size, hash, name, header]] = splitHead(r.stdout.replace(/\r/g, ""), 4);
+    const [[size, hash, header]] = splitHead(r.stdout.replace(/\r/g, ""), 3);
     if (Number(size) > IMAGE_LIMIT) return { exists: true, size: Number(size) };
-    return { exists: true, size: Number(size), base: { hash, stat: null, bytes: true }, cache: `${CACHE_DIR}/${name}`, header: base64ToBytes(header) };
+    return { exists: true, size: Number(size), base: { hash, stat: null, bytes: true }, cache: `${IMAGES_DIR}/${name}`, header: base64ToBytes(header) };
   }
   const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; base64 -w0 -- "$1"`;
   const r = await sh(on, script, [path, String(IMAGE_LIMIT)]);
@@ -227,14 +221,13 @@ export async function copyImage(path, on, prefix) {
   const [[stat, hash], data] = splitHead(r.stdout, 2);
   const size = sizeOf(stat);
   if (size > IMAGE_LIMIT) return { exists: true, size };
-  const name = `${prefix}-${hash.slice(0, 12)}.${ext}`;
-  // mod からはバイナリを書けない（Uint8Array は 0 バイトになる）ので、base64 の文字列を書いて PowerShell で戻す。
-  const b64 = cachePath(`${name}.b64`);
+  // mod からはバイナリを書けない（Uint8Array は 0 バイトになる）ので、base64 の文字列を <name>.b64 に書いて PowerShell で戻す。
+  const b64 = picturePath(`${name}.b64`);
   await fs.writeFile(b64, data);
   const d = await exec("powershell", ["-NoProfile", "-Command",
-    `$ErrorActionPreference='Stop'; [IO.File]::WriteAllBytes(${psQuote(cachePath(name))}, [Convert]::FromBase64String([IO.File]::ReadAllText(${psQuote(b64)}))); Remove-Item -LiteralPath ${psQuote(b64)}`]);
+    `$ErrorActionPreference='Stop'; [IO.File]::WriteAllBytes(${psQuote(picturePath(name))}, [Convert]::FromBase64String([IO.File]::ReadAllText(${psQuote(b64)}))); Remove-Item -LiteralPath ${psQuote(b64)}`]);
   if (d.code !== 0) throw new Error(d.stderr.trim() || "画像のコピーに失敗した");
-  return { exists: true, size, base: { hash, stat }, cache: `${CACHE_DIR}/${name}`, header: base64ToBytes(data, HEADER_BYTES) };
+  return { exists: true, size, base: { hash, stat }, cache: `${IMAGES_DIR}/${name}`, header: base64ToBytes(data, HEADER_BYTES) };
 }
 
 export async function removeCache(cache) {
