@@ -105,13 +105,14 @@ export function measuredParts(parts) {
   return parts.flatMap((p, i) => (p.type === "markdown" && drawsSomething(p.text) ? [i] : []));
 }
 
-const SILENT_LINE = /^\s*(?:\[[^\]]+\]:\s*\S.*|<!--.*-->)?\s*$/;
+// 前後の空白は先に除いて見る（正規表現の前後に \s* を置くと、空白の長い行で時間が行の長さの 2 乗になる）。
+const SILENT_LINE = /^(?:\[[^\]]+\]:\s*\S.*|<!--.*-->)?$/;
 
 function drawsSomething(text) {
   for (let at = 0; at <= text.length;) {
     const end = text.indexOf("\n", at);
     const stop = end < 0 ? text.length : end;
-    if (!SILENT_LINE.test(text.slice(at, stop))) return true;
+    if (!SILENT_LINE.test(text.slice(at, stop).trim())) return true;
     at = stop + 1;
   }
   return false;
