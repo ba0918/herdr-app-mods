@@ -36,12 +36,13 @@ export function diagramError({ id, message, fence, t }) {
 // scroll: スクロールの位置（lib/body-scroll.js）。本文は app の部品でスクロールさせず、位置の分だけ上にずらして出す。
 // bar: スクロールバーのつまみの状態（SliderState。0〜BAR_MAX、下が 0）。onScroll(changed, cx): 位置（changed が true のとき）か
 // 本文や本文の場所の大きさが変わりうるとき（つまみを合わせ、要れば描き直す）。onWheel(changed, cx): ホイールで動かしたとき。
-// barShown: スクロールバーを出すか。onBarHover(hovered, cx): スクロールバーにマウスが載った・離れたとき。
+// barShown: スクロールバーを出すか（出すのはスクロールできるときだけ）。onBarPointer(y, cx): スクロールバーの帯の上でマウスが
+// 動いたとき（y は帯の中の位置）と、離れたとき（y は null）。
 // drag: 本文の中のドラッグ（文字の選択）を知らせる先 { press(e), release(), move(e, cx) }。リンクや図を押したときは、離したことが
 // 本文の枠に届かない（開いたタブに移る）ので、そこでも離したことにする。
 // cover: 本文の部品が中身を描くまで、本文の上に重ねて出す前の表示。無ければ null。
 export const BAR_MAX = 1000;
-export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, onScroll, onWheel, barShown, onBarHover, drag, cover, t }) {
+export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, onScroll, onWheel, barShown, onBarPointer, drag, cover, t }) {
   const moved = (changed, cx) => onScroll(changed, cx);
   const content = v_flex().id(`${id}-content`).absolute().left(0).right(0).top(-scroll.shown()).px(PAD_X).py(16).gap(12)
     .on_size_change((size, cx) => moved(scroll.sized({ content: size.height }), cx))
@@ -66,7 +67,7 @@ export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, o
     .on_mouse_move((e, cx) => drag.move(e, cx))
     .on_hover((hovered) => { if (!hovered) drag.release(); })
     .child(content)
-    .when(scroll.max() > 0 && barShown, (el) => el.child(scrollBar({ id: `${id}-bar`, bar, scroll, onHover: onBarHover, t })))
+    .when(barShown, (el) => el.child(scrollBar({ id: `${id}-bar`, bar, scroll, onPointer: onBarPointer, t })))
     .when(Boolean(cover), (el) => el.child(v_flex().id(`${id}-cover`).absolute().inset_0().bg(t.background).child(cover)));
 }
 
@@ -78,12 +79,13 @@ export const BAR_INSET = 4;
 export const BAR_WIDTH = 6;
 const BAR_HOVER_WIDTH = 8;
 const BAR_MIN_THUMB = 40;
-function scrollBar({ id, bar, scroll, onHover, t }) {
-  const thumb = scroll.thumb(Math.max(0, scroll.view - BAR_INSET * 2), BAR_MIN_THUMB);
+function scrollBar({ id, bar, scroll, onPointer, t }) {
+  const thumb = thumbSpan(scroll).length;
   const ink = (alpha) => `${t.foreground.slice(0, 7)}${alpha}`;
   const grow = BAR_HOVER_WIDTH - BAR_WIDTH;
   return div().id(`${id}-strip`).absolute().top(BAR_INSET).bottom(BAR_INSET).right(BAR_INSET).w(BAR_WIDTH)
-    .on_hover((hovered, cx) => onHover(hovered, cx))
+    .on_mouse_move((e, cx) => onPointer(e.local_position.y, cx))
+    .on_hover((hovered, cx) => { if (!hovered) onPointer(null, cx); })
     .child(Slider.new(bar).id(id).axis("vertical").size_full()
       // つまみの中心が動く範囲（Indicator）を、つまみの半分ずつ内側にする（端でもつまみが欠けない）。
       .child(SliderTrack.new(bar).axis("vertical").size_full().py(thumb / 2)
@@ -96,6 +98,15 @@ function scrollBar({ id, bar, scroll, onHover, t }) {
 // 同じ「読み込み中…」）か、「整形中…」か。待つ間も本文の幅を測る（図を書き出す大きさを決めるため）。
 export function markdownWaiting({ id, loading, box, t }) {
   return waitingLabel(div().id(id).relative().flex_1().min_h(0).w_full().on_size_change(measure(box)), { loading, t });
+}
+
+// スクロールバーのつまみの、帯の中の位置 { top, length }（px）。スクロールできなければ null。つまみの中心は、帯の上下から
+// つまみの半分ずつ内側の範囲を、位置の割合で動く（scrollBar の Slider）。
+export function thumbSpan(scroll) {
+  if (scroll.max() <= 0) return null;
+  const track = Math.max(0, scroll.view - BAR_INSET * 2);
+  const length = scroll.thumb(track, BAR_MIN_THUMB);
+  return { top: scroll.fraction() * Math.max(0, track - length), length };
 }
 
 // 待つ間の文字（markdownWaiting と同じ見た目）。整形表示の部品が中身を描くまで、本文の上に重ねても出す。

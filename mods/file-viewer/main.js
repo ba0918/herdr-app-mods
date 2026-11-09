@@ -23,8 +23,8 @@ import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, writeCacheText, cacheExists, CACHE_DIR, pauseForApp } from "./io.js";
-import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, BAR_MAX, BAR_INSET, BAR_WIDTH } from "./views/markdown.js";
-import { BodyScroll, BarShow, measuredParts } from "./lib/body-scroll.js";
+import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, thumbSpan, BAR_MAX, BAR_INSET, BAR_WIDTH } from "./views/markdown.js";
+import { BodyScroll, BodyInput, measuredParts } from "./lib/body-scroll.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
 
@@ -46,6 +46,9 @@ const BODY_WAIT_MS = 1500;
 const BAR_KEEP_MS = 2000;
 // 文字を選びながら本文の上下の端の帯（この高さ）に来たら、本文をスクロールし続ける。速さは帯の外側ほど速い（px / 秒）。
 const DRAG_EDGE = 32, DRAG_SPEED_MIN = 200, DRAG_SPEED_MAX = 1500;
+// 本文の非同期の繰り返し（端でのスクロールと、部品が中身を描くのを見る処理）が、この時間進まなければ止まったと見なす
+// （ガイドの「長い同期処理」。lib/body-scroll.js の Lease）。スクロールバーを消す描き直しの予定も、この時間過ぎても来なければ入れ直す。
+const BODY_STALE_MS = 1000;
 
 function syntaxColors(t) {
   return { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 };
@@ -129,20 +132,17 @@ export default class FileViewer extends View {
       const echo = this.barSet !== null && Math.abs(Number(v) - this.barSet) <= 1;
       if (this.mdScroll.moveToFraction(1 - v / BAR_MAX)) { if (!echo) this.showBar(cx); cx.notify(); }
     });
-    // スクロールバーを出しているか（BarShow）と、出す時間が過ぎたら描き直すタイマー（無ければ null）。
-    this.barShow = new BarShow(BAR_KEEP_MS);
+    // 本文で覚えている操作の印（スクロールバーの出し入れ、帯の上のマウス、押しているボタン、非同期の繰り返し）。
+    // 描画のたびに body() で今の描画に合わせて解く（lib/body-scroll.js の BodyInput）。
+    this.input = new BodyInput({ keepMs: BAR_KEEP_MS, staleMs: BODY_STALE_MS });
     // syncBar がつまみに最後に合わせた値（まだなら null）。
     this.barSet = null;
-    this.barTimer = null;
-    // 本文の中のドラッグ（文字の選択）。pressed: 左ボタンを本文の中で押している。dir: 上下の端の帯にいれば -1（上）/ 1（下）。
-    // depth: 帯の中の深さ（0〜1）。running: スクロールし続ける非同期処理が動いている。
-    this.selDrag = { pressed: false, dir: 0, depth: 0, running: false };
+    // スクロールバーを消すために描き直す予定の時刻（予定が無ければ null）。
+    this.barDue = null;
     // 前の描画で本文の場所に出したもの（"formatted" | "source" | "preparing" | "loading" | null）と、本文の部品が中身を描くまで
     // 上に重ねる前の表示（同じ値の 1 つか null）。
     this.bodyShown = null;
     this.mdCover = null;
-    // 本文の部品が中身を描くのを見ている mdScroll（見ていなければ null。watchBody）。
-    this.bodyWatch = null;
     // Markdown の整形表示の見え方（lib/markdown-state.js）。開いた中身ごとに作り、外部変更の読み直しや下書きの復元では残す
     // （this.file は読み直しで入れ替わるので、そこには置かない）。
     this.md = null;
@@ -769,7 +769,8 @@ export default class FileViewer extends View {
     }
     // 表示に戻ったら、出している図の SVG があるかを確かめる（表示していない間に掃除で消えていれば書き直す）。
     const shownNow = this.visible();
-    if (shownNow && !this.wasVisible) this.checkSvgs(cx);
+    const returned = shownNow && !this.wasVisible;
+    if (returned) this.checkSvgs(cx);
     this.wasVisible = shownNow;
     this.syncMarkdown(rec, t, cx);
 
@@ -777,7 +778,7 @@ export default class FileViewer extends View {
       .track_focus(this.focus).on_key_down((e, cx) => this.onKey(e, cx))
       .child(this.toolbar(rec, t))
       .children(this.notices(t))
-      .child(this.body(rec, t, cx))
+      .child(this.body(rec, t, cx, returned))
       .children(this.preloads());
   }
 
@@ -1199,15 +1200,15 @@ export default class FileViewer extends View {
       }));
   }
 
-  body(rec, t, cx) {
+  // returned: タブの表示に戻った最初の描画。
+  body(rec, t, cx, returned) {
     const file = this.file;
     const was = this.bodyShown;
-    this.bodyShown = null;
+    this.bodyShown = this.bodyKind(rec);
+    // 本文の操作の印を解くのはここだけ（タブに戻ったとき、整形表示を出さないとき。lib/body-scroll.js の BodyInput）。
+    this.input.frame({ returned, formatted: this.bodyShown === "formatted" });
     if (!file) return div().p(16).text_color(t.dim).child(this.token ? "" : "開くファイルが指定されていない");
-    if (file.loading) {
-      this.bodyShown = "loading";
-      return markdownWaiting({ id: "fv-loading", loading: true, box: this.mdBox, t });
-    }
+    if (file.loading) return markdownWaiting({ id: "fv-loading", loading: true, box: this.mdBox, t });
     const view = file.view;
     if (view.type === "unopenable") return this.unopenable(file, view, t);
     if (view.type === "image" && !(this.showsSource(rec) && file.editor)) {
@@ -1216,10 +1217,8 @@ export default class FileViewer extends View {
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
       const md = this.md.display();
       if (md.kind === "preparing" || md.kind === "loading") {
-        this.bodyShown = md.kind;
         return markdownWaiting({ id: "fv-markdown-waiting", loading: md.kind === "loading", box: this.mdBox, t });
       }
-      this.bodyShown = "formatted";
       const entering = was !== "formatted";
       this.mdScroll.expect(measuredParts(md.parts), Date.now(), { fresh: entering });
       if (entering) this.awaitBody(was);
@@ -1231,19 +1230,27 @@ export default class FileViewer extends View {
         id: "fv-markdown", parts: md.parts, box: this.mdBox, scroll: this.mdScroll, bar: this.bar, cover, t,
         onScroll: (changed, cx) => this.syncBar(changed, cx),
         onWheel: (changed, cx) => { if (changed) this.showBar(cx); this.syncBar(changed, cx); },
-        barShown: this.barShow.shown(Date.now()),
-        onBarHover: (hovered, cx) => { this.barShow.hover(hovered); cx.notify(); },
-        drag: { press: (e) => this.dragPress(e), release: () => this.dragRelease(), move: (e, cx) => this.dragMove(e, cx) },
+        barShown: this.input.showBar(Date.now(), thumbSpan(this.mdScroll)),
+        onBarPointer: (y, cx) => this.barPointer(y, cx),
+        drag: { press: (e) => this.dragPress(e), release: () => this.input.release(), move: (e, cx) => this.dragMove(e, cx) },
         onLink: (url, cx) => this.followLink(url, cx),
         onDiagram: (part, cx) => this.openDiagram(part, cx),
       });
     }
     if (view.type === "mermaid" && file.editor && !this.showsSource(rec)) return this.mermaidFile(file, t);
-    if (file.editor) {
-      if (view.type === "markdown") this.bodyShown = "source";
-      return Editor.new(file.editor).flex_1().min_h(0);
-    }
+    if (file.editor) return Editor.new(file.editor).flex_1().min_h(0);
     return div().p(16).text_color(t.dim).child("表示できない");
+  }
+
+  // 本文の場所に出すもの（"formatted" | "source" | "preparing" | "loading" | null。Markdown のときだけ見分ける）。
+  bodyKind(rec) {
+    const file = this.file;
+    if (!file) return null;
+    if (file.loading) return "loading";
+    if (file.view.type !== "markdown" || !file.editor) return null;
+    if (this.showsSource(rec)) return "source";
+    const kind = this.md.display().kind;
+    return kind === "preparing" || kind === "loading" ? kind : "formatted";
   }
 
   // ソース表示や待つ間から整形表示に入った。整形表示の部品は中身を描くまでの数フレーム空になる（ガイドの「制約」）ので、
@@ -1254,33 +1261,45 @@ export default class FileViewer extends View {
 
   // 本文の部品が中身を描くのを待っている（縮んでいる）。入ったときに限らず、中身の差し替えやタブの表示に戻ったときにも縮むので、
   // 縮むたびに見て、BODY_WAIT_MS を過ぎても高さの来ない部分は数えるのをやめる（縮んだままだと位置が本文の長さに収まらない）。
-  // 見るのは mdScroll ごとに 1 つ。
+  // 見るのは mdScroll ごとに 1 つ（黙って止まったら、次の描画で見直す。BodyInput の watch）。
   watchBody(cx) {
-    const scroll = this.mdScroll;
-    if (this.bodyWatch === scroll) return;
-    this.bodyWatch = scroll;
+    const scroll = this.mdScroll, lease = this.input.watch;
+    const owner = lease.take(scroll, Date.now());
+    if (!owner) return;
     cx.spawn(async (cx) => {
       try {
-        while (this.mdScroll === scroll && scroll.collapsed) {
+        while (this.mdScroll === scroll && scroll.collapsed && lease.step(owner, Date.now())) {
           await pauseForApp();
           if (this.mdScroll === scroll && scroll.expire(Date.now(), BODY_WAIT_MS)) cx.notify();
         }
       } finally {
-        if (this.bodyWatch === scroll) this.bodyWatch = null;
+        lease.end(owner);
       }
     });
   }
 
   // 本文をスクロールした。スクロールバーを出し、出す時間が過ぎたら描き直して消す。
   showBar(cx) {
-    this.barShow.scrolled(Date.now());
-    if (!this.barTimer) this.hideBarLater(cx);
+    const now = Date.now();
+    this.input.bar.scrolled(now);
+    // 予定の描き直しが無いか、予定の時刻を過ぎても来なかったときは入れ直す。
+    if (!(this.barDue > now - BODY_STALE_MS)) this.hideBarLater(cx);
   }
 
   hideBarLater(cx) {
-    const left = this.barShow.remaining(Date.now());
-    if (left === null) { this.barTimer = null; cx.notify(); return; }
-    this.barTimer = cx.timer.after(left + 10, (cx) => this.hideBarLater(cx));
+    const now = Date.now();
+    const left = this.input.bar.remaining(now);
+    if (left === null) { this.barDue = null; cx.notify(); return; }
+    this.barDue = now + left + 10;
+    cx.timer.after(left + 10, (cx) => this.hideBarLater(cx));
+  }
+
+  // スクロールバーの帯の上のマウスの位置（離れたら null）。つまみに載ったか離れたかが変わったときだけ描き直す
+  // （載っている間はスクロールバーを出したままにする）。
+  barPointer(y, cx) {
+    const input = this.input;
+    input.pointerAt(y);
+    if (input.onThumb(thumbSpan(this.mdScroll)) !== input.bar.hovered) cx.notify();
   }
 
   // 本文の中で左ボタンを押した（スクロールバーの上は除く）。app は押したボタンを mouse move で知らせないので、
@@ -1288,35 +1307,32 @@ export default class FileViewer extends View {
   dragPress(e) {
     const x = e.local_position?.x, w = e.bounds?.width;
     if (x !== undefined && w !== undefined && x >= w - BAR_INSET * 2 - BAR_WIDTH * 2) return;
-    this.selDrag.pressed = true;
-  }
-
-  // ボタンを離したか、本文の外に出た（外では mouse move も mouse up も来ないので、そこで止める）。
-  dragRelease() {
-    this.selDrag.pressed = false;
-    this.selDrag.dir = 0;
+    this.input.pressed = true;
   }
 
   // 押したまま動かした。上下の端の帯にいる間、本文をスクロールし続ける。選んでいる範囲は、部品がマウスの動きを受けたときに
   // そこまで伸びる（止めたままだと伸びない。ガイドの「制約」の「選びながらのスクロール」）。
   dragMove(e, cx) {
-    const d = this.selDrag;
+    const d = this.input;
     if (!d.pressed) return;
     const y = e.local_position.y, h = e.bounds.height;
     if (y < DRAG_EDGE) { d.dir = -1; d.depth = (DRAG_EDGE - y) / DRAG_EDGE; }
     else if (y > h - DRAG_EDGE) { d.dir = 1; d.depth = (y - (h - DRAG_EDGE)) / DRAG_EDGE; }
     else d.dir = 0;
-    if (d.dir && !d.running) this.dragScroll(cx);
+    if (d.dir) this.dragScroll(cx);
   }
 
   // 1 歩ごとに入出力の await を挟む（ガイドの「長い同期処理」）。動いた時間に比べて進めるので、歩の間隔が揺れても速さは同じ。
+  // 動いている繰り返しがあれば始めない（黙って止まっていたら始め直す。BodyInput の drag）。表示していない間は render が
+  // 呼ばれず印も解けないので、タブが表示されているかは歩ごとに見る。
   dragScroll(cx) {
-    const d = this.selDrag, scroll = this.mdScroll;
-    d.running = true;
+    const d = this.input, scroll = this.mdScroll, lease = d.drag;
+    const owner = lease.take(scroll, Date.now());
+    if (!owner) return;
     cx.spawn(async (cx) => {
       try {
         let last = Date.now();
-        while (d.pressed && d.dir && this.mdScroll === scroll && this.bodyShown === "formatted") {
+        while (d.pressed && d.dir && this.mdScroll === scroll && lease.step(owner, Date.now()) && this.visibleNow()) {
           await pauseForApp();
           await cx.sleep(16);
           const now = Date.now();
@@ -1329,9 +1345,15 @@ export default class FileViewer extends View {
           this.syncBar(true, cx);
         }
       } finally {
-        d.running = false;
+        lease.end(owner);
       }
     });
+  }
+
+  // 今タブが表示されているか（visible は前の描画のときの見え方で、表示していない間は描画が無いので古い）。
+  visibleNow() {
+    const me = this.identify();
+    return Boolean(me?.space.active && me.tabInfo?.active);
   }
 
   // スクロールの位置が変わった（changed）か、本文の長さが変わったとき。スクロールバーのつまみを位置に合わせる。

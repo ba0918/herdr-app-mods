@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BodyScroll, BarShow } from "../mods/file-viewer/lib/body-scroll.js";
+import { BodyScroll, BarShow, BodyInput } from "../mods/file-viewer/lib/body-scroll.js";
 
 const sized = (view, content) => {
   const s = new BodyScroll();
@@ -43,5 +43,25 @@ describe("BarShow", () => {
     expect(bar.shown(10000)).toBe(true);
     bar.hover(false);
     expect(bar.shown(10000)).toBe(false);
+  });
+});
+
+describe("BodyInput", () => {
+  // つまみが帯の上から 100 px の長さにあり、マウスはその上。
+  const span = { top: 0, length: 100 };
+  test.each([
+    ["載せたままキーでタブを替えて戻った", (input) => input.frame({ returned: true, formatted: true })],
+    ["載せたまま整形表示から出て戻った", (input) => { input.frame({ returned: false, formatted: false }); input.frame({ returned: false, formatted: true }); }],
+    ["載せたまま本文が短くなってスクロールバーが描かれなかった", (input) => input.showBar(3000, null)],
+  ])("つまみに%sときは、離れた知らせが来なくても、最後のスクロールから 2 秒で消える", (_name, boundary) => {
+    const input = new BodyInput({ keepMs: 2000, staleMs: 1000 });
+    input.frame({ returned: false, formatted: true });
+    input.bar.scrolled(0);
+    input.pointerAt(50);
+    expect(input.showBar(2500, span)).toBe(true);
+    input.bar.scrolled(3000);
+    boundary(input);
+    expect(input.showBar(4999, span)).toBe(true);
+    expect(input.showBar(5000, span)).toBe(false);
   });
 });

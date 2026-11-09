@@ -144,6 +144,96 @@ export class BarShow {
   }
 }
 
+// 整形表示の本文で mod が覚えている操作の印: スクロールバーの帯の上のマウス、本文の中で押している左ボタンと端の帯の向き・深さ、
+// 本文をスクロールし続ける非同期処理（drag）と部品が中身を描くのを見る非同期処理（watch）、スクロールバーの出し入れ（bar）。
+// 印を付けた知らせと対になる知らせ（on_hover(false)、mouse up、非同期処理の finally）は、いつも届くとは限らない。要素が
+// 描かれなくなったとき、タブを表示していない間（render も呼ばれない。ガイドの「制約」の「表示していない間の部品の状態」）、
+// 非同期処理が黙って止まったとき（同じく「長い同期処理」）は来ない。そこで印は、描画のたびに frame と showBar で今の描画に
+// 合わせて解き、非同期処理は最後に進んだ時刻で見る（Lease）。時刻は ms。
+export class BodyInput {
+  constructor({ keepMs, staleMs }) {
+    this.bar = new BarShow(keepMs);
+    // スクロールバーの帯の上のマウスの y（帯の中の位置、px）。帯の上に無ければ null。
+    this.pointer = null;
+    // 左ボタンを本文の中で押している。dir: 上下の端の帯にいれば -1（上）/ 1（下）。depth: 帯の中の深さ（0〜1）。
+    this.pressed = false;
+    this.dir = 0;
+    this.depth = 0;
+    this.drag = new Lease(staleMs);
+    this.watch = new Lease(staleMs);
+    // 前の描画でスクロールバーを描いたか。
+    this.barDrawn = false;
+  }
+
+  // 描画のたびに、本文の場所に出すものを決めたところで呼ぶ。returned: タブの表示に戻った最初の描画。formatted: 整形表示を出す。
+  // タブに戻ったときと整形表示を出さないときは、印をすべて解き、非同期処理を手放す（手放した処理は次の歩で止まる）。
+  frame({ returned, formatted }) {
+    if (returned || !formatted) this.reset();
+  }
+
+  // このフレームでスクロールバーを描くか。span: つまみの帯の中の位置 { top, length }（px）。スクロールできなければ null。
+  // つまみにマウスが載っているかは、覚えているマウスの位置と今のつまみの位置で決め直す。描かないなら、帯の上のマウスの位置は
+  // 消す（帯が無ければ、離れた知らせも来ない）。
+  showBar(now, span) {
+    this.bar.hover(this.onThumb(span));
+    this.barDrawn = span !== null && this.bar.shown(now);
+    if (!this.barDrawn) this.pointer = null;
+    return this.barDrawn;
+  }
+
+  onThumb(span) {
+    return span !== null && this.pointer !== null && this.pointer >= span.top && this.pointer <= span.top + span.length;
+  }
+
+  // 帯の上のマウスの位置（離れたら null）。
+  pointerAt(y) {
+    this.pointer = y;
+  }
+
+  release() {
+    this.pressed = false;
+    this.dir = 0;
+  }
+
+  reset() {
+    this.pointer = null;
+    this.bar.hover(false);
+    this.release();
+    this.drag.end();
+    this.watch.end();
+  }
+}
+
+// 非同期の繰り返し 1 本を動かしてよい持ち主。黙って止まった繰り返しは finally を動かさないので、動いているかは最後に進んだ
+// 時刻で見て、staleMs のあいだ進んでいなければ止まったと見なし、次の take で新しい持ち主に替える（古い繰り返しが動き出しても、
+// 次の step で止まる）。key: 何のための繰り返しか（違う key の take は、動いている持ち主も替える）。
+export class Lease {
+  constructor(staleMs) {
+    this.staleMs = staleMs;
+    this.owner = null;
+    this.at = 0;
+  }
+
+  // 同じ key で動いている繰り返しが無ければ、新しい持ち主を返す。あれば null。
+  take(key, now) {
+    if (this.owner?.key === key && now - this.at < this.staleMs) return null;
+    this.at = now;
+    return (this.owner = { key });
+  }
+
+  // 持ち主の繰り返しが 1 歩進む。持ち主でなくなっていれば false（止める）。
+  step(owner, now) {
+    if (this.owner !== owner) return false;
+    this.at = now;
+    return true;
+  }
+
+  // 手放す（owner を渡せば、その持ち主のときだけ）。
+  end(owner = this.owner) {
+    if (this.owner === owner) this.owner = null;
+  }
+}
+
 // 高さを見る文章の部分の番号（parts は lib/prepare.js の parts）。何も描かない文章（空白、参照形式の定義、1 行の HTML の
 // コメントだけ）の部分は高さが来ないので見ない。
 export function measuredParts(parts) {
