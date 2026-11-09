@@ -74,7 +74,8 @@ export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, o
 // 本文の右端のスクロールバー。app のスクロールバー（overflow_y_scrollbar）に合わせる: 幅 6 px で、本文の場所の端から 4 px
 // 内側に置き、つまみは文字の色を 35% ほどにした色。つまみにマウスを載せると幅 8 px（左へ広がる）で 55% ほどの色になる。
 // つまみの長さは本文の場所と本文の高さの比で決め、下限は 40 px（ガイドの「制約」の「スクロールバー」）。
-// つまみを動かすか溝を押すと bar の "change" が来る。
+// つまみを動かすか溝を押すと bar の "change" が来る。マウスの位置を受ける帯は、広がったつまみの幅（8 px）にする（帯の外に
+// 出た部分では、帯の on_mouse_move が来ず、つまみに載っていても離れたことになる）。
 export const BAR_INSET = 4;
 export const BAR_WIDTH = 6;
 const BAR_HOVER_WIDTH = 8;
@@ -83,15 +84,17 @@ function scrollBar({ id, bar, scroll, onPointer, t }) {
   const thumb = thumbSpan(scroll).length;
   const ink = (alpha) => `${t.foreground.slice(0, 7)}${alpha}`;
   const grow = BAR_HOVER_WIDTH - BAR_WIDTH;
-  return div().id(`${id}-strip`).absolute().top(BAR_INSET).bottom(BAR_INSET).right(BAR_INSET).w(BAR_WIDTH)
+  return div().id(`${id}-strip`).absolute().top(BAR_INSET).bottom(BAR_INSET).right(BAR_INSET).w(BAR_HOVER_WIDTH)
     .on_mouse_move((e, cx) => onPointer(e.local_position.y, cx))
     .on_hover((hovered, cx) => { if (!hovered) onPointer(null, cx); })
-    .child(Slider.new(bar).id(id).axis("vertical").size_full()
-      // つまみの中心が動く範囲（Indicator）を、つまみの半分ずつ内側にする（端でもつまみが欠けない）。
-      .child(SliderTrack.new(bar).axis("vertical").size_full().py(thumb / 2)
-        .child(SliderIndicator.new(bar).axis("vertical").relative().size_full()
-          .child(SliderThumb.new(bar).axis("vertical").w(BAR_WIDTH).h(thumb).mb(-thumb / 2).rounded(BAR_WIDTH / 2).bg(ink("59"))
-            .hover((s) => s.w(BAR_HOVER_WIDTH).ml(-grow).rounded(BAR_HOVER_WIDTH / 2).bg(ink("8c")))))));
+    // 溝とつまみは、帯の右端に寄せた幅 6 px の中に置く。
+    .child(div().absolute().top(0).bottom(0).right(0).w(BAR_WIDTH)
+      .child(Slider.new(bar).id(id).axis("vertical").size_full()
+        // つまみの中心が動く範囲（Indicator）を、つまみの半分ずつ内側にする（端でもつまみが欠けない）。
+        .child(SliderTrack.new(bar).axis("vertical").size_full().py(thumb / 2)
+          .child(SliderIndicator.new(bar).axis("vertical").relative().size_full()
+            .child(SliderThumb.new(bar).axis("vertical").w(BAR_WIDTH).h(thumb).mb(-thumb / 2).rounded(BAR_WIDTH / 2).bg(ink("59"))
+              .hover((s) => s.w(BAR_HOVER_WIDTH).ml(-grow).rounded(BAR_HOVER_WIDTH / 2).bg(ink("8c"))))))));
 }
 
 // 整形表示を出す前に待つ間に、整形表示の場所に出すもの（進み具合は出さない）。loading: 開くときの待ち（ファイルの読み込み中と
