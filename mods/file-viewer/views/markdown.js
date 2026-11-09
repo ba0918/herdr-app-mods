@@ -37,7 +37,8 @@ export function diagramError({ id, message, fence, t }) {
 // bar: スクロールバーのつまみの状態（SliderState。0〜BAR_MAX、下が 0）。onScroll(changed, cx): 位置（changed が true のとき）か
 // 本文や本文の場所の大きさが変わりうるとき（つまみを合わせ、要れば描き直す）。onWheel(changed, cx): ホイールで動かしたとき。
 // barShown: スクロールバーを出すか。onBarHover(hovered, cx): スクロールバーにマウスが載った・離れたとき。
-// drag: 本文の中のドラッグ（文字の選択）を知らせる先 { press(e), release(), move(e, cx) }。
+// drag: 本文の中のドラッグ（文字の選択）を知らせる先 { press(e), release(), move(e, cx) }。リンクや図を押したときは、離したことが
+// 本文の枠に届かない（開いたタブに移る）ので、そこでも離したことにする。
 // cover: 本文の部品が中身を描くまで、本文の上に重ねて出す前の表示。無ければ null。
 export const BAR_MAX = 1000;
 export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, onScroll, onWheel, barShown, onBarHover, drag, cover, t }) {
@@ -48,12 +49,12 @@ export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, o
       if (part.type === "markdown") {
         return div().id(`${id}-${i}-box`).flex_none().w_full()
           .on_size_change((size, cx) => moved(scroll.partSized(i, size.height), cx))
-          .child(TextView.markdown(`${id}-${i}`, part.text).selectable(true).on_link_click((url, cx) => onLink(url, cx)));
+          .child(TextView.markdown(`${id}-${i}`, part.text).selectable(true).on_link_click((url, cx) => { drag.release(); onLink(url, cx); }));
       }
       if (part.error) return diagramError({ id: `${id}-${i}`, message: part.error.message, fence: part.fence, t });
       const file = part.file;
       return div().id(`${id}-${i}`).flex_none().cursor_pointer().rounded(6).py(6).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => onDiagram(part, cx))
+        .on_click((_e, cx) => { drag.release(); onDiagram(part, cx); })
         .child(file ? diagramImage(file) : div());
     }))
     .child(div().h(24).flex_none());

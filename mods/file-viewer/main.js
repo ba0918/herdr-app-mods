@@ -1323,7 +1323,10 @@ export default class FileViewer extends View {
           const speed = DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * Math.min(1, Math.max(0, d.depth));
           const step = d.dir * speed * (now - last) / 1000;
           last = now;
-          if (scroll.wheel(-step)) { this.showBar(cx); this.syncBar(true, cx); }
+          // 本文の端まで来たら止める（帯の中でまた動かせば、dragMove が始め直す）。
+          if (!scroll.wheel(-step)) break;
+          this.showBar(cx);
+          this.syncBar(true, cx);
         }
       } finally {
         d.running = false;
