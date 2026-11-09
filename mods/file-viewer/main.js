@@ -347,7 +347,8 @@ export default class FileViewer extends View {
       // 付き添いの mod が無いと分かっていれば、整形の準備で図を配置しない（仕様の「描けない図」）。
       const companion = await companionPresent();
       this.copying.delete(file.picture);
-      if (this.loads !== gen) { file.editor?.release(); return; }
+      // 古い読み込みのコピーは誰も使わないので、描画が来なくても使っている絵の表を更新して手放す（表示していないタブは描画されない）。
+      if (this.loads !== gen) { file.editor?.release(); this.trackPictures(cx); return; }
       this.companion = companion;
       this.file = file;
       this.setDirty(false);
@@ -550,7 +551,8 @@ export default class FileViewer extends View {
       const next = await this.read(file.path, file.machine);
       // 読み直したコピーは、採らなければ使っている絵から外れて手放される。
       this.copying.delete(next.picture);
-      if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); return; }
+      // 古い読み直しのコピーも、描画が来なくても使っている絵の表を更新して手放す。
+      if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); this.trackPictures(cx); return; }
       const outcomeNow = () => reloadOutcome({
         editor: Boolean(file.editor), image: Boolean(file.cache), edited: Boolean(file.editor) && file.editor.value() !== before, missing: Boolean(next.missing),
       });
@@ -576,7 +578,7 @@ export default class FileViewer extends View {
         this.copying.add(next.picture);
         await this.whenImageLoaded(file, { picture: next.picture, cache: next.cache }, cx);
         this.copying.delete(next.picture);
-        if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); return; }
+        if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); this.trackPictures(cx); return; }
         if (outcomeNow() === "keep-edits") { keepEdits(); return; }
       }
       file.editor?.release();
