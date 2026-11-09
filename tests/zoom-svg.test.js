@@ -219,6 +219,26 @@ describe("拡大の窓の絵を手放す", () => {
     expect(draw(tb, z)).toEqual([]);
   });
 
+  test("書いている間に描画が起きても、書き終えた新しい絵は、次の描画より先に前の描画が済んでも手放す名前に入らない", () => {
+    const tb = windowTable();
+    const z = opened(tb);
+    z.request(2);
+    const task = z.task();
+    const name = tb.name("s2-c1", "svg");
+    const file = { name, path: name, width: 200, height: 100 };
+    tb.writing(name);
+    z.writes(task, file);
+    // 書いている間の描画
+    tb.use("zoom", z.keep());
+    const frame = tb.commit();
+    tb.wrote(name);
+    z.wrote(task, file);
+    tb.drawn(frame);
+    expect(tb.takeReleases(true)).toEqual([]);
+    z.loadedImage(name);
+    expect(draw(tb, z)).toEqual(["tok~z1-fit.svg"]);
+  });
+
   test("倍率を続けて変えて途中の絵が要らなくなったら、その絵が手放す名前に入る", () => {
     const tb = windowTable();
     const z = opened(tb);

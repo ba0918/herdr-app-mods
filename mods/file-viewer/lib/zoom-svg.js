@@ -15,6 +15,7 @@ export class ZoomSvg {
     this.shownColors = colorsKey;
     this.want = { scale: shown.scale, colorsKey };
     this.writing = null;   // 書いている書き出し { scale, colorsKey }
+    this.writingFile = null; // 書いている書き出しのファイル（書き終えて読み込みを待つ絵に移るまで、使っている絵に入れる）
     this.ready = null;     // 書き終えて、読み込みを待っている { task, file }
     this.loaded = new Set(tilesOf(shown).map((t) => t.name));
     this.notice = null;    // { kind: "write", message } | { kind: "timeout" }
@@ -54,11 +55,17 @@ export class ZoomSvg {
     return this.writing;
   }
 
+  // 書き出し task を、ファイル file に書き始めるとき（名前を決めた直後）。書いている間の描画で手放されないように、使っている絵に入れる。
+  writes(task, file) {
+    if (this.writing === task) this.writingFile = file;
+  }
+
   // 書き終えたとき（タイルに分けた絵は全部のタイル）。file: { name, path, width, height, tiles? }。もう望まれていない倍率なら出さない。
   // 時間切れで手放した書き出しが遅れて戻ったときも出さない。
   wrote(task, file) {
     if (this.writing !== task) return;
     this.writing = null;
+    this.writingFile = null;
     if (keyOf(task) !== keyOf(this.want)) return;
     this.ready = { task, file };
     if (this.allLoaded(file)) this.swap();
@@ -71,6 +78,7 @@ export class ZoomSvg {
   failed(task, message) {
     if (this.writing !== task) return;
     this.writing = null;
+    this.writingFile = null;
     if (keyOf(task) !== keyOf(this.want)) return;
     this.notice = { kind: "write", message };
     this.gaveUp = keyOf(this.want);
@@ -116,13 +124,16 @@ export class ZoomSvg {
     this.notice = { kind: "timeout" };
     this.gaveUp = keyOf(this.want);
     this.writing = null;
+    this.writingFile = null;
     return true;
   }
 
-  // 使っている絵の名前（出している絵と、読み込ませている絵）。これ以外の窓の絵は消してよい。
+  // 使っている絵の名前（出している絵と、読み込ませている絵と、書いている絵）。これ以外の窓の絵は消してよい。
+  // 書いている絵を含めるので、書いている間の描画のあと、書き終えて読み込ませる絵に移るまでの間も手放されない。
   keep() {
     const names = new Set(tilesOf(this.shown).map((t) => t.name));
     if (this.ready) for (const t of tilesOf(this.ready.file)) names.add(t.name);
+    if (this.writingFile) for (const t of tilesOf(this.writingFile)) names.add(t.name);
     return names;
   }
 

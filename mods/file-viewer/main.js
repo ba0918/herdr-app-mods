@@ -1313,6 +1313,7 @@ export default class FileViewer extends View {
             const file = diagramFile((key) => o.pictures.name(key, "svg"), { source: o.source, layout: o.size }, scaleLook(o.colors[task.colorsKey], task.scale));
             const tiles = tileNames(file);
             for (const name of tiles) o.pictures.writing(name);
+            o.zs.writes(task, file);
             try {
               await writeTiles(text, file, o.size, (name) => o.written.has(name));
             } finally {
@@ -1345,7 +1346,7 @@ export default class FileViewer extends View {
     return o.svgs[key];
   }
 
-  // 拡大の窓が使っている絵（出している絵と、読み込ませている絵）を窓の表に渡す。差し替えて窓だけが使っていた前の絵は、その描画が
+  // 拡大の窓が使っている絵（出している絵と、読み込ませている絵と、書いている絵）を窓の表に渡す。差し替えて窓だけが使っていた前の絵は、その描画が
   // 済んでから手放す（本文から借りた絵は窓の表に無いので、手放さない）。
   trackOverlayPictures(cx) {
     const o = this.overlay, tb = o.pictures;
