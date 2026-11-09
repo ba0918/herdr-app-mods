@@ -362,6 +362,17 @@ describe("失敗したとき", () => {
     expect(s.display()).toEqual({ kind: "formatted", parts: partsOf("small a"), notices: [] });
   });
 
+  test("開いたときの描画の中の準備が戻らないまま次の描画が来なくても、見張りが描画の外の準備に移して整形表示まで進む", () => {
+    const { start, halt } = stallable();
+    const s = makeState({ start });
+    halt(() => s.open("small a"));
+    expect(s.watch(clock(), true)).toBe(true);
+    expect(s.display()).toEqual({ kind: "preparing", notices: [] });
+    expect(s.busy).toBe(true);
+    finish(s);
+    expect(s.display()).toEqual({ kind: "formatted", parts: partsOf("small a"), notices: [] });
+  });
+
   test("整形表示を出したまま書き換えたときの描画の中の準備が戻らないまま、次の描画が同じ中身で来たら、描画の外の準備に移し、終わらなければ 10 秒で代わりの整形表示にする", () => {
     const { start, stall, halt } = stallable();
     const s = makeState({ start });

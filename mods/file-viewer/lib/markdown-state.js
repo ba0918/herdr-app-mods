@@ -60,6 +60,16 @@ export class MarkdownState {
     return this.job !== null;
   }
 
+  // 見張り（watch）が見る要があるか: 描画の外で進める準備があるか、今の中身の描画の中の準備が戻っていないか。
+  get watched() {
+    return this.busy || this.interrupted;
+  }
+
+  // 今の中身の描画の中の準備が戻っていない（その描画が打ち切られた）か。
+  get interrupted() {
+    return this.trying !== null && this.trying === this.text;
+  }
+
   // タブで開いたとき（開く、プレビュータブの入れ替え、再起動後の復元）。userSource: 記録にある、利用者が選んだソース表示か。
   open(text, { userSource = false } = {}) {
     this.text = text;
@@ -94,7 +104,7 @@ export class MarkdownState {
       this.change(text);
       return;
     }
-    if (this.trying === text) this.begin(text, false);
+    if (this.interrupted) this.begin(text, false);
     else if (this.mode === "formatted" && !this.job && this.shown?.text !== text) this.begin(text, this.judge(text).inRender);
   }
 
@@ -310,7 +320,13 @@ export class MarkdownState {
   // 止まってから気づくまでの間も表示している間の時間に数え、上限を超えていれば終わらなかったことにし、超えていなければ準備を始めからやり直す
   // （止まった単位の途中までの変化が残っていても、結果が一度に準備したときと同じになるように）。中身が変わって捨てた準備なら待たない。
   // 区間を動かしていたものを手放して、次の準備を始めてよくなったら true。
+  // 今の中身の描画の中の準備が戻っていなければ、その描画は打ち切られたと見なし、次の描画を待たずに（打ち切りのあとに描き直しが
+  // 来るとは限らない）同じ中身の準備を描画の外の準備に移して true（sync と同じ）。
   watch(now, visible) {
+    if (this.interrupted) {
+      this.begin(this.text, false);
+      return true;
+    }
     if (!this.slice && this.job?.parts) return this.watchLoads(now, visible);
     const job = this.slice;
     if (!job) return false;
