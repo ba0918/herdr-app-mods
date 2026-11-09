@@ -1302,11 +1302,11 @@ export default class FileViewer extends View {
     if (input.onThumb(thumbSpan(this.mdScroll)) !== input.bar.hovered) cx.notify();
   }
 
-  // 本文の中で左ボタンを押した（スクロールバーの上は除く）。app は押したボタンを mouse move で知らせないので、
-  // 押している間を自分で覚える。
+  // 本文の中で左ボタンを押した（描いているスクロールバーの上は除く。消えている間は、右端も本文）。app は押したボタンを
+  // mouse move で知らせないので、押している間を自分で覚える。
   dragPress(e) {
     const x = e.local_position?.x, w = e.bounds?.width;
-    if (x !== undefined && w !== undefined && x >= w - BAR_INSET * 2 - BAR_WIDTH * 2) return;
+    if (this.input.barDrawn && x !== undefined && w !== undefined && x >= w - BAR_INSET * 2 - BAR_WIDTH * 2) return;
     this.input.pressed = true;
   }
 

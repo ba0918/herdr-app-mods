@@ -197,6 +197,7 @@ export class BodyInput {
 
   reset() {
     this.pointer = null;
+    this.barDrawn = false;
     this.bar.hover(false);
     this.release();
     this.drag.end();
