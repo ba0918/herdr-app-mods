@@ -47,13 +47,13 @@ describe("BarShow", () => {
 });
 
 describe("BodyInput", () => {
-  // つまみが帯の上から 100 px の長さにあり、マウスはその上。
+  // つまみが帯の上から 100 px の長さにあり、マウスは最後にその上で動いた。
   const span = { top: 0, length: 100 };
   test.each([
-    ["載せたままキーでタブを替えて戻った", (input) => input.frame({ returned: true, formatted: true })],
-    ["載せたまま整形表示から出て戻った", (input) => { input.frame({ returned: false, formatted: false }); input.frame({ returned: false, formatted: true }); }],
-    ["載せたまま本文が短くなってスクロールバーが描かれなかった", (input) => input.showBar(3000, null)],
-  ])("つまみに%sときは、離れた知らせが来なくても、最後のスクロールから 2 秒で消える", (_name, boundary) => {
+    ["タブの表示に戻った", (input) => input.frame({ returned: true, formatted: true })],
+    ["整形表示から出て戻った", (input) => { input.frame({ returned: false, formatted: false }); input.frame({ returned: false, formatted: true }); }],
+    ["本文が短くなってスクロールバーが描かれなかった", (input) => input.showBar(3000, null)],
+  ])("つまみの上で動いたマウスが離れた知らせを出さないまま%sときは、最後のスクロールから 2 秒で消える", (_name, boundary) => {
     const input = new BodyInput({ keepMs: 2000, staleMs: 1000 });
     input.frame({ returned: false, formatted: true });
     input.bar.scrolled(0);
