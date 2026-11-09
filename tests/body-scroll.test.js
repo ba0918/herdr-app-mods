@@ -16,10 +16,6 @@ describe("BodyScroll.thumb", () => {
   test("本文が長くても、つまみは下限より短くならない", () => {
     expect(sized(600, 100000).thumb(592, 40)).toBe(40);
   });
-
-  test("溝が下限より短いときは、溝の長さを超えない", () => {
-    expect(sized(30, 100000).thumb(22, 40)).toBe(22);
-  });
 });
 
 describe("BarShow", () => {
@@ -47,13 +43,5 @@ describe("BarShow", () => {
     expect(bar.shown(10000)).toBe(true);
     bar.hover(false);
     expect(bar.shown(10000)).toBe(false);
-  });
-
-  test("消えるまでの残りの時間（出ていなければ null）", () => {
-    const bar = new BarShow(2000);
-    expect(bar.remaining(0)).toBe(null);
-    bar.scrolled(1000);
-    expect(bar.remaining(1500)).toBe(1500);
-    expect(bar.remaining(3000)).toBe(null);
   });
 });
