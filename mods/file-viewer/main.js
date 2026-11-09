@@ -111,11 +111,16 @@ export default class FileViewer extends View {
         source: p.mermaid, firstLine: p.firstLine ?? 1, token: p.token ?? "fv-overlay", mark: p.mark ?? "z0",
         size: { width: p.layoutWidth ?? 1, height: p.layoutHeight ?? 1 },
         zoom: diagramZoom({ fitMax: 3 }), layout: null, running: null,
-        // 窓が書く絵の名前（窓の印を付ける）と、書いた名前。
+        // 窓が書く絵の名前（窓の印を付ける）の表と、書いた名前、手放してから消すのを待つファイル。
         pictures: new PictureTable(new PictureNames({ token: p.token ?? "fv-overlay", mark: p.mark ?? "z0" })), written: new Set(),
+        releases: new ReleaseQueue(),
         colors: { [colorsKey(colors)]: colors }, svgs: { [colorsKey(colors)]: p.svg ?? null },
         zs: p.shown ? new ZoomSvg({ shown: p.shown, colorsKey: colorsKey(colors) }) : null,
       };
+      // 開いたタブが書いて渡した、窓の印の付いた絵は、窓の表に載せる（本文から借りた絵は載せない。窓は手放さない）。
+      const o = this.overlay;
+      o.borrowing = !(p.shown?.tiles ?? (p.shown ? [p.shown] : [])).some((t) => parsePictureName(t.name)?.mark === o.mark);
+      if (!o.borrowing) for (const t of p.shown.tiles ?? [p.shown]) o.pictures.adopt(t.name);
       cx.timer.every(OVERLAY_WATCH_MS, (cx) => this.watchOverlay(cx));
       return;
     }
@@ -162,14 +167,16 @@ export default class FileViewer extends View {
     this.md = null;
     // 描画の外の準備を動かしている非同期処理の印（runPreparation が作る。動かしていなければ null）。
     this.preparing = null;
-    // 拡大の窓を本文の絵で開いたときに、窓に貸した本文の SVG の名前（窓が出している間は消さない）。タブは窓が閉じたことを
-    // 知れないので、次に窓を開くまで（窓は 1 つずつなので、そのときには前の窓は閉じている）か、タブを閉じるまで覚える。
+    // 拡大の窓を本文の絵で開いたときに、窓に貸した本文の SVG の名前（窓が出している間は手放さない）。窓が自分の絵に替えたか
+    // 閉じたことは、記録の window で知る（checkLent）。windowMark: 最後に開いた窓の印。
     this.lent = null;
+    this.windowMark = null;
     this.focus = cx.focus_handle();
     cx.timer.every(POLL_MS, (cx) => {
       this.noticeHidden();
       this.watchPreparation(cx);
       this.poll(cx);
+      this.checkLent(cx);
       // 始めの回に、前のコピー（再起動の前）が書いた自分の絵を片付ける。表示していない復元タブは名乗らないので、名乗るのを待たない。
       if (this.token && !this.ownSwept) {
         this.ownSwept = true;
@@ -188,10 +195,12 @@ export default class FileViewer extends View {
   async close() {
     const o = this.overlay;
     if (o) {
-      for (const name of await listPictures()) {
-        const owner = parsePictureName(name);
-        if (owner?.token === o.token && owner.mark === o.mark) await removePicture(name);
-      }
+      // 窓が閉じたことを、開いたタブに記録で知らせる（タブは貸した本文の絵を外す）。窓の印の自分の絵を手放し始める。
+      if (record(o.token)?.window?.mark === o.mark) putRecord(o.token, { window: null });
+      if (!(await companionPresent())) return;
+      const mine = (await listPictures()).filter((name) => { const p = parsePictureName(name); return p?.token === o.token && p.mark === o.mark; });
+      if (mine.length) await overwriteTiny(mine);
+      for (const name of mine) await removePicture(name);
       return;
     }
     const file = this.file;
@@ -227,6 +236,8 @@ export default class FileViewer extends View {
     tb.use("md", this.md?.keep() ?? []);
     // 拡大の窓に貸した本文の絵（窓が出している間は、本文が使わなくなっても手放さない）。
     tb.use("lent", this.lent ?? []);
+    // 拡大の窓を開く前に書いている、収まる大きさの絵。
+    tb.use("opening", this.opening ? tileNames(this.opening.file) : []);
     // image viewer の今のコピーと、差し替え待ちのコピーと、コピーしている途中のコピー。
     tb.use("image", [this.file?.picture, this.file?.incoming?.picture, ...this.copying].filter(Boolean));
     const frame = tb.commit();
@@ -1157,15 +1168,22 @@ export default class FileViewer extends View {
     const fit = Math.round(Math.min(3, (view.width * OVERLAY_WIDTH) / l.width, (view.height * OVERLAY_HEIGHT - 36) / l.height) * 1000) / 1000;
     const mark = windowMark();
     const look = scaleLook(colors, fit);
+    // 窓の印の付いた名前で書く絵も、タブの使っている絵の表に載せる（開くまでは使っている絵。間に合えば窓に渡して表から外す）。
     const names = new PictureNames({ token: this.token, mark });
-    const file = diagramFile(() => names.next("svg"), part, look);
+    const file = diagramFile(() => { const name = names.next("svg"); this.pictures.add(name); return name; }, part, look);
+    const tiles = tileNames(file);
     const text = diagramSvg(l, colors, { width: l.width, height: l.height });
     const opening = this.opening = { state: new DiagramOpening(Date.now()), file, written: false };
+    for (const name of tiles) this.pictures.writing(name);
     cx.spawn(async (cx) => {
-      const writing = writeTiles(text, file, l).then(
+      // 付き添いの mod が無ければ、収まる大きさの絵を書かず、本文の絵を本来の大きさで出して開く。
+      const writing = (async () => {
+        if (!(await companionPresent())) throw new Error("付き添いの mod が入っていない");
+        await writeTiles(text, file, l);
+      })().then(
         () => { opening.state.wrote(); opening.written = true; },
         () => { opening.state.failed(); },
-      );
+      ).finally(() => { for (const name of tiles) this.pictures.wrote(name); });
       // 書けたら、見えない所で読み込ませるために描き直す。
       let written = false;
       while (this.opening === opening && opening.state.decide(Date.now()) === "wait") {
@@ -1175,20 +1193,44 @@ export default class FileViewer extends View {
       if (this.opening !== opening) return;
       this.opening = null;
       const natural = opening.state.decide(Date.now()) !== "fit";
-      this.lent = natural ? new Set(tileNames(part.file)) : null;
       const shown = !natural ? { ...file, scale: fit } : { ...part.file, scale: part.file.width / l.width };
-      // 書き終えずに本文の絵で開くときは、窓に別の印を渡す（窓が収まる大きさの絵を同じ名前で書こうとして、書きかけや書き損じの
-      // ファイルを読まないように）。書いていた絵は誰も使わないので、書き込みが終わったら消す。
+      // 書き終えずに本文の絵で開くときは、窓に別の印を渡す。間に合わなかった収まる大きさの絵は誰も使わないので、書き終わったら
+      // 手放す（タブの使っている絵から外れる）。間に合ったときは、その絵を窓に渡して、タブは手放さずに表から外す。
       const late = !opening.written;
+      const windowMarkNow = late ? windowMark() : mark;
+      const previous = this.windowMark;
+      this.windowMark = windowMarkNow;
+      // 本文の絵で開くときは、本文の絵を窓に貸し、窓が自分の絵に替えるか閉じるまで手放さない（記録の window で知る）。
+      this.lent = natural ? new Set(tileNames(part.file)) : null;
+      putRecord(this.token, { window: natural ? { mark: windowMarkNow, borrowing: true } : null });
+      if (!natural) this.pictures.forget(tiles);
       openOverlay({
         mod: "file-viewer", kind: "dialog", width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT,
-        props: { mermaid: part.source, firstLine: part.firstLine, token: this.token, mark: late ? windowMark() : mark, colors, layoutWidth: l.width, layoutHeight: l.height, svg: text, shown },
+        props: { mermaid: part.source, firstLine: part.firstLine, token: this.token, mark: windowMarkNow, colors, layoutWidth: l.width, layoutHeight: l.height, svg: text, shown },
       });
       cx.notify();
-      if (!late) return;
+      // 窓は一度に 1 つなので、前の窓は閉じている。前の窓の close が呼ばれなかったときのために、前の窓の印の絵を手放す。
+      if (previous) await this.releaseWindowPictures(previous);
       await writing;
-      for (const t of file.tiles) await removePicture(t.name);
+      await this.releasePictures();
     });
+  }
+
+  // 前の拡大の窓の印の、自分の token の絵を手放して消す。
+  async releaseWindowPictures(mark) {
+    if (!(await companionPresent())) return;
+    const names = (await listPictures()).filter((name) => { const p = parsePictureName(name); return p?.token === this.token && p.mark === mark; });
+    await this.releaseAndRemove(names.filter((n) => !n.endsWith(".b64")), names.filter((n) => n.endsWith(".b64")));
+  }
+
+  // 拡大の窓に本文の絵を貸しているとき、窓が自分の絵に替えたか閉じたら（記録の window が、渡した印で借りている形でなくなったら）、
+  // 貸した絵を使っている絵から外す（本文も使っていなければ手放す）。表示していないタブでも、POLL_MS の回ごとに見る。
+  checkLent(cx) {
+    if (!this.lent) return;
+    const w = record(this.token)?.window;
+    if (w && w.mark === this.windowMark && w.borrowing) return;
+    this.lent = null;
+    this.trackPictures(cx);
   }
 
   // 拡大の窓を開く前に、書いた絵を見えない所で読み込ませる要素。
@@ -1219,6 +1261,7 @@ export default class FileViewer extends View {
     o.zs.recolor(key);
     if (o.zoom.view) o.zs.request(Math.round(o.zoom.current(o.size.width, o.size.height) * 1000) / 1000);
     this.runOverlayWrites(cx);
+    this.trackOverlayPictures(cx);
     const { file, notice } = o.zs.display();
     const preloads = o.zs.preloads();
     return root
@@ -1229,8 +1272,12 @@ export default class FileViewer extends View {
       }))
       .when(preloads.length > 0, (el) => el.child(preloadImages({ id: "fv-overlay-preload", files: preloads, onLoaded: (name, cx) => {
         if (!o.zs.loadedImage(name)) return;
+        // 借りた本文の絵から自分の絵に替えたら、開いたタブに記録で知らせる（タブは貸した本文の絵を外す）。
+        if (o.borrowing) {
+          o.borrowing = false;
+          if (record(o.token)?.window?.mark === o.mark) putRecord(o.token, { window: { mark: o.mark, borrowing: false } });
+        }
         cx.notify();
-        cx.spawn(async () => this.dropOverlaySvgs());
       } })));
   }
 
@@ -1247,10 +1294,17 @@ export default class FileViewer extends View {
         await pauseForApp();
         for (let task = first; task; task = o.running === run ? o.zs.task() : null) {
           try {
+            // 付き添いの mod が無ければ書かず、今の絵のまま「図を書き出せなかった（付き添いの mod が入っていない）」にする。
+            if (!(await companionPresent())) throw new Error("付き添いの mod が入っていない");
             const text = await this.overlaySvgText(task.colorsKey);
             const file = diagramFile((key) => o.pictures.name(key, "svg"), { source: o.source, layout: o.size }, scaleLook(o.colors[task.colorsKey], task.scale));
-            await writeTiles(text, file, o.size, (name) => o.written.has(name));
-            for (const t of file.tiles) o.written.add(t.name);
+            const tiles = tileNames(file);
+            for (const name of tiles) o.pictures.writing(name);
+            try {
+              await writeTiles(text, file, o.size, (name) => o.written.has(name));
+            } finally {
+              for (const name of tiles) { o.pictures.wrote(name); o.written.add(name); }
+            }
             o.zs.wrote(task, file);
           } catch (e) {
             o.zs.failed(task, message(e));
@@ -1278,16 +1332,24 @@ export default class FileViewer extends View {
     return o.svgs[key];
   }
 
-  // 拡大の窓が書いた SVG のうち、もう出していないもの（前の倍率・色の絵）を消す。
-  async dropOverlaySvgs() {
-    const o = this.overlay;
-    for (const name of await listPictures()) {
-      const owner = parsePictureName(name);
-      if (owner?.token !== o.token || owner.mark !== o.mark || o.zs.keep().has(name)) continue;
-      await removePicture(name);
-      o.pictures.forget([name]);
-      o.written.delete(name);
-    }
+  // 拡大の窓が使っている絵（出している絵と、読み込ませている絵）を窓の表に渡す。差し替えて窓だけが使っていた前の絵は、その描画が
+  // 済んでから手放す（本文から借りた絵は窓の表に無いので、手放さない）。
+  trackOverlayPictures(cx) {
+    const o = this.overlay, tb = o.pictures;
+    tb.use("zoom", o.zs.keep());
+    const frame = tb.commit();
+    if (!tb.pending) return;
+    cx.spawn(async () => {
+      await pauseForApp();
+      tb.drawn(frame);
+      const names = tb.takeReleases(await companionPresent());
+      if (names.length) {
+        await overwriteTiny(names);
+        o.releases.released(names, Date.now());
+      }
+      for (const name of names) o.written.delete(name);
+      for (const name of o.releases.due(Date.now())) await removePicture(name);
+    });
   }
 
   // 拡大の窓の見張り: 書き直しが 10 秒たっても終わらないとき、配置し直しが止まったときは、前の絵のまま知らせる。

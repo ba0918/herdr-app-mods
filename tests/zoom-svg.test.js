@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ZoomSvg, DiagramOpening } from "../mods/file-viewer/lib/zoom-svg.js";
 import { resizeSvg } from "../mods/file-viewer/lib/mermaid/svg.js";
+import { PictureNames, PictureTable } from "../mods/file-viewer/lib/pictures.js";
 
 // 倍率と色から名前を決める書き出し先の代わり。
 const fileAt = (task) => ({ name: `s${task.scale}-${task.colorsKey}`, path: `cache/s${task.scale}-${task.colorsKey}`, width: 100 * task.scale, height: 50 * task.scale });
@@ -175,5 +176,107 @@ describe("拡大の窓のタイルに分けた絵", () => {
     expect(z.loadedImage("s3-c1#1")).toBe(true);
     expect(z.display().file).toEqual({ ...file, scale: 3 });
     expect([...z.keep()].sort()).toEqual(["s3-c1#0", "s3-c1#1"]);
+  });
+});
+
+// 仕様の「画像の置き場所」の拡大の窓: 窓は今出している絵を持ち、倍率や色を替えて差し替えたら窓だけが使っていた前の絵を手放す。
+// 本文から借りた絵は窓の表に無いので手放さない。main.js と同じく、描画のたびに窓の使っている絵（keep）を窓の表に渡す。
+describe("拡大の窓の絵を手放す", () => {
+  function windowTable(mark = "z1") {
+    let t = 1_000;
+    return new PictureTable(new PictureNames({ token: "tok", mark, clock: () => t++ }));
+  }
+  // 表から名前を取って書いた絵（倍率と色の鍵）。
+  const fileFrom = (tb) => (task) => {
+    const name = tb.name(`s${task.scale}-${task.colorsKey}`, "svg");
+    tb.writing(name);
+    tb.wrote(name);
+    return { name, path: name, width: 100 * task.scale, height: 50 * task.scale };
+  };
+  function draw(tb, z) {
+    tb.use("zoom", z.keep());
+    tb.drawn(tb.commit());
+    return tb.takeReleases(true);
+  }
+  // 窓を開いた絵（タブが書いて窓に渡した、収まる大きさの絵）を窓の表に載せる。
+  function opened(tb) {
+    tb.adopt("tok~z1-fit.svg");
+    const z = new ZoomSvg({ shown: { name: "tok~z1-fit.svg", path: "tok~z1-fit.svg", scale: 1, width: 100, height: 50 }, colorsKey: "c1" });
+    draw(tb, z);
+    return z;
+  }
+
+  test("差し替えたら、前の倍率の絵が手放す名前に入り、今の絵は入らない", () => {
+    const tb = windowTable();
+    const z = opened(tb);
+    z.request(2);
+    const task = z.task();
+    const file = fileFrom(tb)(task);
+    z.wrote(task, file);
+    expect(draw(tb, z)).toEqual([]);
+    z.loadedImage(file.name);
+    expect(draw(tb, z)).toEqual(["tok~z1-fit.svg"]);
+    expect(draw(tb, z)).toEqual([]);
+  });
+
+  test("倍率を続けて変えて途中の絵が要らなくなったら、その絵が手放す名前に入る", () => {
+    const tb = windowTable();
+    const z = opened(tb);
+    z.request(2);
+    const t2 = z.task();
+    const f2 = fileFrom(tb)(t2);
+    z.wrote(t2, f2);
+    z.request(3);
+    expect(draw(tb, z)).toEqual([f2.name]);
+    const t3 = z.task();
+    expect(t3).toEqual({ scale: 3, colorsKey: "c1" });
+  });
+
+  test("手放した倍率に戻ると、新しい名前で書く", () => {
+    const tb = windowTable();
+    const z = opened(tb);
+    const write = fileFrom(tb);
+    z.request(2);
+    let task = z.task();
+    const f2 = write(task);
+    z.wrote(task, f2);
+    z.loadedImage(f2.name);
+    z.request(3);
+    task = z.task();
+    const f3 = write(task);
+    z.wrote(task, f3);
+    z.loadedImage(f3.name);
+    expect(draw(tb, z)).toEqual(["tok~z1-fit.svg", f2.name]);
+    z.request(2);
+    task = z.task();
+    expect(write(task).name).not.toBe(f2.name);
+  });
+
+  test("本文から借りた絵は、窓の手放す名前に入らない", () => {
+    const tb = windowTable();
+    const z = new ZoomSvg({ shown: { name: "tok-body.svg", path: "tok-body.svg", scale: 1, width: 100, height: 50 }, colorsKey: "c1" });
+    draw(tb, z);
+    z.request(2);
+    const task = z.task();
+    const file = fileFrom(tb)(task);
+    z.wrote(task, file);
+    z.loadedImage(file.name);
+    expect(draw(tb, z)).toEqual([]);
+  });
+
+  test("間に合って開いた窓に渡した収まる大きさの絵は、タブの手放す名前に入らない", () => {
+    let t = 1_000;
+    const tab = new PictureTable(new PictureNames({ token: "tok", clock: () => t++ }));
+    const fit = new PictureNames({ token: "tok", mark: "z1", clock: () => t++ }).next("svg");
+    tab.add(fit);
+    tab.writing(fit);
+    tab.use("opening", [fit]);
+    tab.wrote(fit);
+    tab.drawn(tab.commit());
+    // 窓に渡して、窓の表に載せる（タブは手放さずに外す）
+    tab.forget([fit]);
+    tab.use("opening", []);
+    tab.drawn(tab.commit());
+    expect(tab.takeReleases(true)).toEqual([]);
   });
 });

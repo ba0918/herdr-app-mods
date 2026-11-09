@@ -30,15 +30,20 @@ export class ZoomSvg {
   // 倍率が変わったとき（窓に収める倍率を含む）。
   request(scale) {
     if (scale === this.want.scale) return;
-    this.want = { ...this.want, scale };
-    this.since = null;
+    this.wish({ ...this.want, scale });
   }
 
   // テーマの色が変わったとき。
   recolor(colorsKey) {
     if (colorsKey === this.want.colorsKey) return;
-    this.want = { ...this.want, colorsKey };
+    this.wish({ ...this.want, colorsKey });
+  }
+
+  // 望みが変わった。読み込みを待っていた絵が望みと違えば、もう要らないので持たない（使っている絵から外れて手放される）。
+  wish(want) {
+    this.want = want;
     this.since = null;
+    if (this.ready && keyOf(this.ready.task) !== keyOf(want)) this.ready = null;
   }
 
   // 次に書く書き出し { scale, colorsKey }。書いている間、今の絵で足りるとき、あきらめたとき、読み込みを待っているときは null。
