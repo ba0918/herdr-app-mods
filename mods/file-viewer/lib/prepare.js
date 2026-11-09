@@ -5,12 +5,20 @@
 import { blocksIn, addDefinitions, blockRewriter, splitMermaidBlocks } from "./markdown.js";
 import { parseMermaid } from "./mermaid/parse.js";
 import { layoutFlowchart, layoutSequence } from "./mermaid/layout.js";
+import { COMPANION_MISSING } from "./pictures.js";
 
 // 図の解析と配置。{ layout } か { error }。firstLine は図の中身の 1 行目のファイル全体での行番号。
 export function layoutMermaid(source, firstLine) {
+  return diagramLayout(source, firstLine);
+}
+
+// 図の解析と配置。companion: 付き添いの mod が入っているか。入っていなければ、解析だけをして、書き出す前に決まる理由（未対応の
+// 種類・未対応の書き方・文法エラー）が無ければ「付き添いの mod が入っていない」にする（描かない図を配置しない。仕様の「描けない図」）。
+export function diagramLayout(source, firstLine, { companion = true } = {}) {
   try {
     const r = parseMermaid(source, firstLine);
     if (r.error) return { error: r.error };
+    if (!companion) return { error: COMPANION_MISSING };
     return { layout: r.diagram.type === "flowchart" ? layoutFlowchart(r.diagram) : layoutSequence(r.diagram) };
   } catch {
     // 解析で断れなかった配置できない図。どの行かは分からないので、図の 1 行目を指す。
