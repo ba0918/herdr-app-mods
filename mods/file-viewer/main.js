@@ -40,7 +40,7 @@ const tileNames = (f) => (f.tiles ?? [f]).map((t) => t.name);
 const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: (width, height) => maxDiagramScale({ width, height }) });
 // 図の拡大の窓で、配置が止まっていないかを見る間隔。
 const OVERLAY_WATCH_MS = 1000;
-// 作り直した整形表示の部品が中身を描くのを待つ上限（何も描かない部分は高さが来ないので）。
+// 整形表示の部品が中身を描くのを待つ上限（何も描かない部分は高さが来ないので）。縮んでから数える（lib/body-scroll.js）。
 const BODY_WAIT_MS = 1500;
 
 function syntaxColors(t) {
@@ -125,6 +125,8 @@ export default class FileViewer extends View {
     // 上に重ねる前の表示（同じ値の 1 つか null）。
     this.bodyShown = null;
     this.mdCover = null;
+    // 本文の部品が中身を描くのを見ている mdScroll（見ていなければ null。watchBody）。
+    this.bodyWatch = null;
     // Markdown の整形表示の見え方（lib/markdown-state.js）。開いた中身ごとに作り、外部変更の読み直しや下書きの復元では残す
     // （this.file は読み直しで入れ替わるので、そこには置かない）。
     this.md = null;
@@ -1204,8 +1206,9 @@ export default class FileViewer extends View {
       this.bodyShown = "formatted";
       const entering = was !== "formatted";
       this.mdScroll.expect(measuredParts(md.parts), Date.now(), { fresh: entering });
-      if (entering) this.awaitBody(was, cx);
-      if (!this.mdScroll.collapsed) this.mdCover = null;
+      if (entering) this.awaitBody(was);
+      if (this.mdScroll.collapsed) this.watchBody(cx);
+      else this.mdCover = null;
       const cover = this.mdCover === "source" ? Editor.new(file.editor).flex_1().min_h(0)
         : this.mdCover ? waitingLabel(div().size_full(), { loading: this.mdCover === "loading", t }) : null;
       return markdownBody({
@@ -1225,14 +1228,25 @@ export default class FileViewer extends View {
 
   // ソース表示や待つ間から整形表示に入った。整形表示の部品は中身を描くまでの数フレーム空になる（ガイドの「制約」）ので、
   // 入る前の表示（was）が本文の場所にあったなら、部品が中身を描くまで、それを本文の上に重ねて出し続ける。
-  awaitBody(was, cx) {
+  awaitBody(was) {
     this.mdCover = was === "source" || was === "preparing" || was === "loading" ? was : null;
-    const scroll = this.mdScroll, since = scroll.since;
-    if (!this.mdCover || !scroll.collapsed) return;
+  }
+
+  // 本文の部品が中身を描くのを待っている（縮んでいる）。入ったときに限らず、中身の差し替えやタブの表示に戻ったときにも縮むので、
+  // 縮むたびに見て、BODY_WAIT_MS を過ぎても高さの来ない部分は数えるのをやめる（縮んだままだと位置が本文の長さに収まらない）。
+  // 見るのは mdScroll ごとに 1 つ。
+  watchBody(cx) {
+    const scroll = this.mdScroll;
+    if (this.bodyWatch === scroll) return;
+    this.bodyWatch = scroll;
     cx.spawn(async (cx) => {
-      while (this.mdScroll === scroll && scroll.since === since && scroll.collapsed) {
-        await pauseForApp();
-        if (this.mdScroll === scroll && scroll.since === since && scroll.expire(Date.now(), BODY_WAIT_MS)) { cx.notify(); break; }
+      try {
+        while (this.mdScroll === scroll && scroll.collapsed) {
+          await pauseForApp();
+          if (this.mdScroll === scroll && scroll.expire(Date.now(), BODY_WAIT_MS)) cx.notify();
+        }
+      } finally {
+        if (this.bodyWatch === scroll) this.bodyWatch = null;
       }
     });
   }
