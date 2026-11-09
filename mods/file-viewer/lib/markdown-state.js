@@ -6,9 +6,17 @@
 // 見えない所に置いて読み込ませた画像（preloads）が読み込み終えたことを loadedImage で知らせる。
 import { startPreparation, fallbackParts } from "./prepare.js";
 import { judgeSize } from "./render-size.js";
+import { COMPANION_MISSING } from "./pictures.js";
 
 // 図のファイルの SVG の並び（大きな絵はタイルに分かれる。lib/diagram-files.js）。
 const tilesOf = (f) => f.tiles ?? [f];
+// 付き添いの mod が入っていないので描かない図の部分か。
+const missingCompanion = (p) => p.type === "mermaid" && p.error?.kind === COMPANION_MISSING.kind;
+// 図の部分を「付き添いの mod が入っていない」の描けない図にする（仕様の「描けない図」）。
+function withoutCompanion(part) {
+  const { layout, ...rest } = part;
+  return { ...rest, error: COMPANION_MISSING };
+}
 
 // 描画の外の準備が終わらなかったと見なす、準備を動かしている間の時間（ms）。
 const TIME_LIMIT = 10_000;
@@ -43,6 +51,8 @@ export class MarkdownState {
     this.failure = null;
     this.slice = null;       // 区間を進めている準備（区間から戻らなければ残る）
     this.trying = null;      // 描画の中で準備している中身（描画が打ち切られて戻らなければ残る）
+    // 付き添いの mod が入っているか（最後に確かめた結果。companionChecked）。入っていないと分かっていれば、準備で図を配置しない。
+    this.companion = true;
   }
 
   // 描画の外で進める準備があるか。
@@ -100,6 +110,7 @@ export class MarkdownState {
       this.mode = "source";
       this.job = null;
       this.pending = null;
+      if (over) this.dropShown();
       return;
     }
     if (this.shown && this.job && !this.job.restyle) {
@@ -147,10 +158,10 @@ export class MarkdownState {
   }
 
   // 次に書く図の SVG（タイル 1 枚。{ name, path, x, y, width, height, file, part }。file は図のファイル全体）。
-  // 書く段でなければ、または書き終えていれば null。
+  // 書く段でなければ、書き終えていれば、付き添いの mod を確かめ直すのを待っていれば null。
   writeTask() {
     const job = this.job;
-    if (!job?.parts) return null;
+    if (!job?.parts || this.needsCheck) return null;
     const files = this.filesFor(job.parts);
     for (const [i, f] of files.entries()) {
       if (!f) continue;
@@ -160,10 +171,42 @@ export class MarkdownState {
     return null;
   }
 
-  // 描画の外で進める処理（準備の区間か、SVG の書き込み）があるか。画像の読み込みだけを待っているときは false。
+  // 描画の外で進める処理（準備の区間か、付き添いの mod の確かめ直しか、SVG の書き込み）があるか。画像の読み込みだけを待っているときは false。
   get needsRun() {
     const job = this.job;
-    return job !== null && (!job.parts || this.writeTask() !== null);
+    return job !== null && (!job.parts || this.needsCheck || this.writeTask() !== null);
+  }
+
+  // 付き添いの mod が無いと分かっていて配置しなかった図がある準備で、出す前に付き添いの mod を確かめ直すのを待っているか
+  // （入れたあとは、次に書き出すときから普通に出す。仕様の「画像の置き場所」）。
+  get needsCheck() {
+    const job = this.job;
+    return Boolean(job?.parts && !job.checked && job.parts.some(missingCompanion));
+  }
+
+  // 付き添いの mod を確かめた（書き出しに入るとき、絵を 1 つ書く直前、図を配置しなかった準備を出す前）。present: 入っているか。
+  // 入っていれば、配置しなかった図のある準備を、図を配置してやり直す。入っていなければ、今の準備でまだ書いて読み込めていない絵が要る
+  // 図を「付き添いの mod が入っていない」の描けない図にして出す（書き出しの失敗にも、代わりの整形表示にもしない）。
+  companionChecked(present) {
+    this.companion = present;
+    const job = this.job;
+    if (!job?.parts) return;
+    job.checked = true;
+    if (present) {
+      if (!job.parts.some(missingCompanion)) return;
+      job.prep = this.start(job.text, { companion: true });
+      job.parts = null;
+      job.inRender = false;
+      job.restyle = false;
+      return;
+    }
+    const files = this.filesFor(job.parts);
+    if (files.every((f) => !f || this.allWritten([f]))) {
+      this.settle(job);
+      return;
+    }
+    job.parts = job.parts.map((p, i) => (files[i] && !this.allWritten([files[i]]) ? withoutCompanion(p) : p));
+    this.settle(job);
   }
 
   // 書いたが、app がまだ画像として読み込んでいない SVG（見えない所に置いて読み込ませる）。
@@ -210,7 +253,11 @@ export class MarkdownState {
   }
 
   // 書いたはずの SVG が無くなっていたとき（起動後の掃除で消えたなど）。出している結果の絵なら、書き直すまで書いていない図と同じに待つ。
+  // 書き直す絵の名前は新しくなる（呼ぶ側が使っている絵の表から外してから呼ぶ）。付き添いの mod が無いと分かっていれば、書き直さずに
+  // 出している絵をそのまま出す（app はファイルが消えても絵を覚えている）。
   lost(names) {
+    if (!this.companion) return;
+    this.memo = null;
     for (const name of names) this.written.delete(name);
     const shown = this.shown;
     if (!shown || shown.fallback || !shown.files?.some((f) => f && tilesOf(f).some((t) => names.includes(t.name)))) return;
@@ -239,7 +286,8 @@ export class MarkdownState {
     const shown = this.shown;
     if (!shown || shown.fallback || this.job) return;
     const files = this.filesFor(shown.parts);
-    if (this.allWritten(files)) {
+    // 付き添いの mod が無くて描かなかった図があれば、確かめ直して、入っていれば描く（次に書き出すときから普通に出す）。
+    if (this.allWritten(files) && !shown.parts.some(missingCompanion)) {
       this.shown = { ...shown, files };
       return;
     }
@@ -247,9 +295,11 @@ export class MarkdownState {
   }
 
   // 使っている SVG の名前（出している結果か、整形表示に入るときに捨てた前の結果と、書いている途中の結果の今の見た目のもの）。
-  // これ以外の自分の SVG は消してよい。
+  // これ以外の自分の SVG は手放してよい。代わりの整形表示と描けない図は絵を持たない。整形表示の上限を超えている間は、整形表示に
+  // 戻れないので前の絵を持たない（利用者が選んだソース表示の間は、上限を超えるまで持つ）。
   keep() {
     const names = new Set();
+    if (this.over) return names;
     for (const f of [...(this.shown?.files ?? []), ...(this.held ?? [])]) if (f) for (const t of tilesOf(f)) names.add(t.name);
     if (this.job?.parts) for (const f of this.filesFor(this.job.parts)) if (f) for (const t of tilesOf(f)) names.add(t.name);
     return names;
@@ -272,7 +322,7 @@ export class MarkdownState {
       this.fail(job.text, { kind: "timeout" });
       return true;
     }
-    job.prep = this.start(job.text);
+    job.prep = this.start(job.text, { companion: this.companion });
     return true;
   }
 
@@ -320,6 +370,7 @@ export class MarkdownState {
       this.mode = "source";
       this.job = null;
       this.pending = null;
+      this.dropShown();
       return;
     }
     this.mode = "formatted";
@@ -332,16 +383,22 @@ export class MarkdownState {
     if (!this.shown && !this.job) this.begin(this.text, inRender);
   }
 
+  // 整形表示の上限を超えた。前の結果は、整形表示に戻れないので持たない（その絵は手放されるので、上限を下回って戻ったときも出さない）。
+  dropShown() {
+    this.shown = null;
+    this.held = null;
+  }
+
   // text の準備を始める。描画の中で済む大きさなら、その場で最後まで進め、図の SVG を書く段にする。
   begin(text, inRender) {
     this.trying = null;
     if (!inRender) {
-      this.job = { text, prep: this.start(text), parts: null, inRender: false, restyle: false, elapsed: 0, last: null };
+      this.job = { text, prep: this.start(text, { companion: this.companion }), parts: null, inRender: false, restyle: false, elapsed: 0, last: null };
       return;
     }
     this.job = null;
     this.trying = text;
-    const prep = this.start(text);
+    const prep = this.start(text, { companion: this.companion });
     try {
       prep.advance(Infinity, () => 0);
     } catch (e) {
@@ -360,12 +417,14 @@ export class MarkdownState {
     job.last = t;
   }
 
-  // 書く段の準備: 時間を超えていれば終わらなかったことにし、図を全部書き終えていれば結果を出す。
+  // 書く段の準備: 時間を超えていれば終わらなかったことにし、図を全部書き終えていれば結果を出す（付き添いの mod を確かめ直すのを
+  // 待っていれば、まだ出さない）。
   settle(job) {
     if (job.elapsed > this.timeLimit) {
       this.timeout(job);
       return;
     }
+    if (this.needsCheck) return;
     const files = this.filesFor(job.parts);
     if (!this.allWritten(files)) return;
     this.failure = null;

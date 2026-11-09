@@ -30,8 +30,9 @@ export function diagramLayout(source, firstLine, { companion = true } = {}) {
 // 終わったら true。終わると parts に、文章の部分（{ type: "markdown", text: 書き換えた Markdown }）と
 // 図の部分（{ type: "mermaid", source, firstLine, fence, layout | error }）の並びが入る。
 // 画像の書き換えが例外を投げたら、advance からそのまま投げ、failed にして以後は進めない。
-// rewriter: かたまりの書き換えを作るもの（既定は blockRewriter）。
-export function startPreparation(text, { rewriter = blockRewriter } = {}) {
+// rewriter: かたまりの書き換えを作るもの（既定は blockRewriter）。companion: 付き添いの mod が入っているか（入っていなければ図を
+// 配置しない。diagramLayout）。
+export function startPreparation(text, { rewriter = blockRewriter, companion = true } = {}) {
   const definitions = new Map();
   const parts = [];
   let blocks = blocksIn(text);
@@ -50,7 +51,7 @@ export function startPreparation(text, { rewriter = blockRewriter } = {}) {
     }
     const part = split[index];
     if (part.type === "mermaid") {
-      parts.push({ ...part, ...layoutMermaid(part.source, part.firstLine) });
+      parts.push({ ...part, ...diagramLayout(part.source, part.firstLine, { companion }) });
       index++;
       return index >= split.length;
     }

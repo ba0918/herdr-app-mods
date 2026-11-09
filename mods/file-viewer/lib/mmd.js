@@ -2,15 +2,15 @@
 // Markdown の整形表示と同じ決まり（lib/markdown-state.js）で、ファイル全体を図 1 つの文書として扱う。大きさで描画の中と外を
 // 分けず、いつも描画の外で準備する。図の準備の時間切れと最初の書き出しの失敗は、描けない図の理由にする（仕様の「描けない図」）。
 import { MarkdownState } from "./markdown-state.js";
-import { layoutMermaid } from "./prepare.js";
+import { diagramLayout } from "./prepare.js";
 
-// text の図の準備。1 単位（図 1 個の解析と配置）で終わる。parts は図の部分 1 つ。
-export function startDiagramPreparation(text) {
+// text の図の準備。1 単位（図 1 個の解析と配置）で終わる。parts は図の部分 1 つ。companion: 付き添いの mod が入っているか。
+export function startDiagramPreparation(text, { companion = true } = {}) {
   const prep = {
     parts: [], done: false, failed: false,
     advance() {
       if (!prep.done) {
-        prep.parts.push({ type: "mermaid", source: text, firstLine: 1, fence: "```\n" + text + "\n```", ...layoutMermaid(text, 1) });
+        prep.parts.push({ type: "mermaid", source: text, firstLine: 1, fence: "```\n" + text + "\n```", ...diagramLayout(text, 1, { companion }) });
         prep.done = true;
       }
       return true;

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { diagramFileState, diagramFileView, startDiagramPreparation } from "../mods/file-viewer/lib/mmd.js";
+import { PictureNames, PictureTable } from "../mods/file-viewer/lib/pictures.js";
 
 const fileOf = (part, look) => ({ name: `${part.source.trim()}@${look.key}`, path: "p", width: 10, height: 5 });
 const FLOW = "flowchart LR\n  A-->B\n";
@@ -131,5 +132,39 @@ describe(".mmd の図の準備", () => {
     u.tick(0, now);
     expect(view(u, FLOW).kind).toBe("diagram");
     expect(view(u, FLOW).notices).toEqual([{ kind: "restyle-timeout" }]);
+  });
+});
+
+describe(".mmd の付き添いの mod と使っている絵", () => {
+  test("付き添いの mod が無いとき、描けない図の「付き添いの mod が入っていない」になる", () => {
+    const s = state();
+    s.open(FLOW);
+    s.tick(100, () => 1);
+    s.companionChecked(false);
+    expect(view(s, FLOW)).toEqual({ kind: "error", message: "付き添いの mod が入っていない", fence: "```\n" + FLOW + "\n```", notices: [] });
+  });
+
+  test("利用者が選んだソース表示の間は、前の絵を使っている名前に含む", () => {
+    const s = state();
+    s.open(FLOW);
+    finish(s);
+    s.toSource();
+    expect([...s.keep()]).toEqual([`${FLOW.trim()}@c1|s1`]);
+  });
+
+  test("倍率を続けて変えて途中の絵が要らなくなったら、その絵は使っている名前から外れる", () => {
+    let t = 1_000;
+    const tb = new PictureTable(new PictureNames({ token: "tok", clock: () => t++ }));
+    const s = diagramFileState({ fileOf: (part, look) => { const name = tb.name(`${part.source}@${look.key}`, "svg"); return { name, path: name, width: 10, height: 5 }; } });
+    s.setLook({ key: "s1" });
+    s.open(FLOW);
+    finish(s);
+    const shown = view(s, FLOW).part.file.name;
+    s.setLook({ key: "s2" });
+    const middle = s.writeTask().name;
+    expect(s.keep().has(middle)).toBe(true);
+    s.setLook({ key: "s3" });
+    expect(s.keep().has(middle)).toBe(false);
+    expect(s.keep().has(shown)).toBe(true);
   });
 });
