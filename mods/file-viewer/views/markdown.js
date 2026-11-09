@@ -35,10 +35,11 @@ export function diagramError({ id, message, fence, t }) {
 // box: 本文の幅を覚える入れ物。前の整形表示から差し替えるときも要素の id を変えない（スクロールの位置が保たれる。ガイドの「制約」）。
 // scroll: スクロールの位置（lib/body-scroll.js）。本文は app の部品でスクロールさせず、位置の分だけ上にずらして出す。
 // bar: スクロールバーのつまみの状態（SliderState。0〜BAR_MAX、下が 0）。onScroll(changed, cx): 位置（changed が true のとき）か
-// 本文や本文の場所の大きさが変わりうるとき（つまみを合わせ、要れば描き直す）。
+// 本文や本文の場所の大きさが変わりうるとき（つまみを合わせ、要れば描き直す）。onWheel(changed, cx): ホイールで動かしたとき。
+// barShown: スクロールバーを出すか。onBarHover(hovered, cx): スクロールバーにマウスが載った・離れたとき。
 // cover: 本文の部品が中身を描くまで、本文の上に重ねて出す前の表示。無ければ null。
 export const BAR_MAX = 1000;
-export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, onScroll, cover, t }) {
+export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, onScroll, onWheel, barShown, onBarHover, cover, t }) {
   const moved = (changed, cx) => onScroll(changed, cx);
   const content = v_flex().id(`${id}-content`).absolute().left(0).right(0).top(-scroll.shown()).px(PAD_X).py(16).gap(12)
     .on_size_change((size, cx) => moved(scroll.sized({ content: size.height }), cx))
@@ -57,20 +58,32 @@ export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, o
     .child(div().h(24).flex_none());
   return div().id(`${id}-scroll`).relative().flex_1().min_h(0).w_full().overflow_hidden().text_color(t.foreground)
     .on_size_change((size, cx) => { measure(box)(size, cx); moved(scroll.sized({ view: size.height }), cx); })
-    .on_scroll_wheel((e, cx) => moved(scroll.wheel(e.delta.y), cx))
+    .on_scroll_wheel((e, cx) => onWheel(scroll.wheel(e.delta.y), cx))
     .child(content)
-    .when(scroll.max() > 0, (el) => el.child(scrollBar({ id: `${id}-bar`, bar, t })))
+    .when(scroll.max() > 0 && barShown, (el) => el.child(scrollBar({ id: `${id}-bar`, bar, scroll, onHover: onBarHover, t })))
     .when(Boolean(cover), (el) => el.child(v_flex().id(`${id}-cover`).absolute().inset_0().bg(t.background).child(cover)));
 }
 
-// 本文の右端のスクロールバー。つまみを動かすと bar の "change" が来る。
-const BAR_THUMB = 40;
-function scrollBar({ id, bar, t }) {
-  return Slider.new(bar).id(id).axis("vertical").absolute().top(2).bottom(2).right(2).w(8)
-    // つまみの中心が動く範囲（Indicator）を、つまみの半分ずつ内側にする（端でもつまみが欠けない）。
-    .child(SliderTrack.new(bar).axis("vertical").size_full().py(BAR_THUMB / 2)
-      .child(SliderIndicator.new(bar).axis("vertical").relative().size_full()
-        .child(SliderThumb.new(bar).axis("vertical").w(8).h(BAR_THUMB).mb(-BAR_THUMB / 2).rounded(4).bg(t.border).hover((s) => s.bg(t.dim)))));
+// 本文の右端のスクロールバー。app のスクロールバー（overflow_y_scrollbar）に合わせる: 幅 6 px で、本文の場所の端から 4 px
+// 内側に置き、つまみは文字の色を 35% ほどにした色。つまみにマウスを載せると幅 8 px（左へ広がる）で 55% ほどの色になる。
+// つまみの長さは本文の場所と本文の高さの比で決め、下限は 40 px（ガイドの「制約」の「スクロールバー」）。
+// つまみを動かすか溝を押すと bar の "change" が来る。
+const BAR_INSET = 4;
+const BAR_WIDTH = 6;
+const BAR_HOVER_WIDTH = 8;
+const BAR_MIN_THUMB = 40;
+function scrollBar({ id, bar, scroll, onHover, t }) {
+  const thumb = scroll.thumb(Math.max(0, scroll.view - BAR_INSET * 2), BAR_MIN_THUMB);
+  const ink = (alpha) => `${t.foreground.slice(0, 7)}${alpha}`;
+  const grow = BAR_HOVER_WIDTH - BAR_WIDTH;
+  return div().id(`${id}-strip`).absolute().top(BAR_INSET).bottom(BAR_INSET).right(BAR_INSET).w(BAR_WIDTH)
+    .on_hover((hovered, cx) => onHover(hovered, cx))
+    .child(Slider.new(bar).id(id).axis("vertical").size_full()
+      // つまみの中心が動く範囲（Indicator）を、つまみの半分ずつ内側にする（端でもつまみが欠けない）。
+      .child(SliderTrack.new(bar).axis("vertical").size_full().py(thumb / 2)
+        .child(SliderIndicator.new(bar).axis("vertical").relative().size_full()
+          .child(SliderThumb.new(bar).axis("vertical").w(BAR_WIDTH).h(thumb).mb(-thumb / 2).rounded(BAR_WIDTH / 2).bg(ink("59"))
+            .hover((s) => s.w(BAR_HOVER_WIDTH).ml(-grow).rounded(BAR_HOVER_WIDTH / 2).bg(ink("8c")))))));
 }
 
 // 整形表示を出す前に待つ間に、整形表示の場所に出すもの（進み具合は出さない）。loading: 開くときの待ち（ファイルの読み込み中と

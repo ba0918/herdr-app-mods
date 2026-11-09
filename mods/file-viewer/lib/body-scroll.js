@@ -86,6 +86,12 @@ export class BodyScroll {
     return this.moveTo(Math.max(0, this.collapsed ? y : Math.min(y, this.max())));
   }
 
+  // スクロールバーのつまみの長さ（px）。track: 溝の長さ。min: 下限（溝より長くはしない）。
+  thumb(track, min) {
+    const ratio = this.content > 0 ? Math.min(1, this.view / this.content) : 1;
+    return Math.min(track, Math.max(min, Math.round(track * ratio)));
+  }
+
   // 割合 f（0〜1）の位置へ動かす。位置が変わったら true。
   moveToFraction(f) {
     return this.moveTo(Math.round(Math.max(0, Math.min(1, f)) * this.max()));
@@ -108,6 +114,33 @@ export class BodyScroll {
     update();
     if (!this.collapsed) this.since = null;
     return this.shown() !== shown || this.collapsed !== collapsed;
+  }
+}
+
+// スクロールバーを出しているか。app のスクロールバーに合わせ、スクロールしてから keepMs のあいだ出し、つまみにマウスを
+// 載せている間は出したままにする。時刻は ms。
+export class BarShow {
+  constructor(keepMs) {
+    this.keepMs = keepMs;
+    this.until = null;
+    this.hovered = false;
+  }
+
+  scrolled(now) {
+    this.until = now + this.keepMs;
+  }
+
+  hover(hovered) {
+    this.hovered = hovered;
+  }
+
+  shown(now) {
+    return this.hovered || this.remaining(now) !== null;
+  }
+
+  // 時間で消えるまでの残り（ms）。時間では出ていなければ null。
+  remaining(now) {
+    return this.until !== null && now < this.until ? this.until - now : null;
   }
 }
 

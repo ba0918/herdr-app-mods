@@ -24,7 +24,7 @@ import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, writeCacheText, cacheExists, CACHE_DIR, pauseForApp } from "./io.js";
 import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, BAR_MAX } from "./views/markdown.js";
-import { BodyScroll, measuredParts } from "./lib/body-scroll.js";
+import { BodyScroll, BarShow, measuredParts } from "./lib/body-scroll.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
 
@@ -42,6 +42,8 @@ const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: (width, h
 const OVERLAY_WATCH_MS = 1000;
 // 整形表示の部品が中身を描くのを待つ上限（何も描かない部分は高さが来ないので）。縮んでから数える（lib/body-scroll.js）。
 const BODY_WAIT_MS = 1500;
+// 整形表示のスクロールバーを、スクロールしてから出しておく時間（app のスクロールバーに合わせる。ガイドの「制約」の「スクロールバー」）。
+const BAR_KEEP_MS = 2000;
 
 function syntaxColors(t) {
   return { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 };
@@ -120,7 +122,16 @@ export default class FileViewer extends View {
     // 整形表示の本文のスクロールの位置（lib/body-scroll.js）と、スクロールバーのつまみ。開いた中身ごとに位置を始めから数える。
     this.mdScroll = new BodyScroll();
     this.bar = SliderState.new({ min: 0, max: BAR_MAX, step: 1, value: BAR_MAX });
-    this.bar.on("change", (v, cx) => { if (this.mdScroll.moveToFraction(1 - v / BAR_MAX)) cx.notify(); });
+    this.bar.on("change", (v, cx) => {
+      // syncBar が合わせた値が返ってきただけなら、スクロールしたことにしない（スクロールバーを出さない）。
+      const echo = this.barSet !== null && Math.abs(Number(v) - this.barSet) <= 1;
+      if (this.mdScroll.moveToFraction(1 - v / BAR_MAX)) { if (!echo) this.showBar(cx); cx.notify(); }
+    });
+    // スクロールバーを出しているか（BarShow）と、出す時間が過ぎたら描き直すタイマー（無ければ null）。
+    this.barShow = new BarShow(BAR_KEEP_MS);
+    // syncBar がつまみに最後に合わせた値（まだなら null）。
+    this.barSet = null;
+    this.barTimer = null;
     // 前の描画で本文の場所に出したもの（"formatted" | "source" | "preparing" | "loading" | null）と、本文の部品が中身を描くまで
     // 上に重ねる前の表示（同じ値の 1 つか null）。
     this.bodyShown = null;
@@ -1214,6 +1225,9 @@ export default class FileViewer extends View {
       return markdownBody({
         id: "fv-markdown", parts: md.parts, box: this.mdBox, scroll: this.mdScroll, bar: this.bar, cover, t,
         onScroll: (changed, cx) => this.syncBar(changed, cx),
+        onWheel: (changed, cx) => { if (changed) this.showBar(cx); this.syncBar(changed, cx); },
+        barShown: this.barShow.shown(Date.now()),
+        onBarHover: (hovered, cx) => { this.barShow.hover(hovered); cx.notify(); },
         onLink: (url, cx) => this.followLink(url, cx),
         onDiagram: (part, cx) => this.openDiagram(part, cx),
       });
@@ -1251,10 +1265,22 @@ export default class FileViewer extends View {
     });
   }
 
+  // 本文をスクロールした。スクロールバーを出し、出す時間が過ぎたら描き直して消す。
+  showBar(cx) {
+    this.barShow.scrolled(Date.now());
+    if (!this.barTimer) this.hideBarLater(cx);
+  }
+
+  hideBarLater(cx) {
+    const left = this.barShow.remaining(Date.now());
+    if (left === null) { this.barTimer = null; cx.notify(); return; }
+    this.barTimer = cx.timer.after(left + 10, (cx) => this.hideBarLater(cx));
+  }
+
   // スクロールの位置が変わった（changed）か、本文の長さが変わったとき。スクロールバーのつまみを位置に合わせる。
   syncBar(changed, cx) {
     const v = Math.round((1 - this.mdScroll.fraction()) * BAR_MAX);
-    if (Math.abs(Number(this.bar.value()) - v) > 1) { this.bar.set_value(v); changed = true; }
+    if (Math.abs(Number(this.bar.value()) - v) > 1) { this.barSet = v; this.bar.set_value(v); changed = true; }
     if (changed) cx.notify();
   }
 
