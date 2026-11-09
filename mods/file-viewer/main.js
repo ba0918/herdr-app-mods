@@ -557,8 +557,10 @@ export default class FileViewer extends View {
         editor: Boolean(file.editor), image: Boolean(file.cache), edited: Boolean(file.editor) && file.editor.value() !== before, missing: Boolean(next.missing),
       });
       // 読み込みの間に打った文字は捨てない。読み直さずに、ディスクが変わったことを知らせる。
+      // 捨てる読み直しのコピーは、描画が来なくても使っている絵の表を更新して手放す。
       const keepEdits = () => {
         next.editor?.release();
+        this.trackPictures(cx);
         if (next.base) this.considerExternal(file, { changed: next.base.hash !== file.base?.hash, diskHash: next.base.hash, dirty: true });
         cx.notify();
       };
