@@ -551,9 +551,16 @@ export default class FileViewer extends View {
       // 読み直したコピーは、採らなければ使っている絵から外れて手放される。
       this.copying.delete(next.picture);
       if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); return; }
-      const outcome = reloadOutcome({
+      const outcomeNow = () => reloadOutcome({
         editor: Boolean(file.editor), image: Boolean(file.cache), edited: Boolean(file.editor) && file.editor.value() !== before, missing: Boolean(next.missing),
       });
+      // 読み込みの間に打った文字は捨てない。読み直さずに、ディスクが変わったことを知らせる。
+      const keepEdits = () => {
+        next.editor?.release();
+        if (next.base) this.considerExternal(file, { changed: next.base.hash !== file.base?.hash, diskHash: next.base.hash, dirty: true });
+        cx.notify();
+      };
+      const outcome = outcomeNow();
       // 読み直したらファイルが無かった: 表示していた中身（テキストも画像も）と未保存の編集（と下書き）を残し、「ファイルが無くなった」にする。
       if (outcome === "missing") {
         next.editor?.release();
@@ -562,19 +569,15 @@ export default class FileViewer extends View {
         cx.notify();
         return;
       }
-      // 読み込みの間に打った文字は捨てない。読み直さずに、ディスクが変わったことを知らせる。
-      if (outcome === "keep-edits") {
-        next.editor?.release();
-        if (next.base) this.considerExternal(file, { changed: next.base.hash !== file.base?.hash, diskHash: next.base.hash, dirty: true });
-        cx.notify();
-        return;
-      }
+      if (outcome === "keep-edits") { keepEdits(); return; }
       // 画像の中身が変わったら、新しいコピーを読み込み終えてから替える（前のコピーは、替えた描画のあとに手放す）。
+      // 読み込みを待つ間に打った文字（SVG のソース表示）も捨てない。
       if (next.cache && file.cache) {
         this.copying.add(next.picture);
         await this.whenImageLoaded(file, { picture: next.picture, cache: next.cache }, cx);
         this.copying.delete(next.picture);
         if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); return; }
+        if (outcomeNow() === "keep-edits") { keepEdits(); return; }
       }
       file.editor?.release();
       carryOver(file, next);
