@@ -153,6 +153,7 @@ export default class FileViewer extends View {
     this.lent = null;
     this.focus = cx.focus_handle();
     cx.timer.every(POLL_MS, (cx) => {
+      this.noticeHidden();
       this.watchPreparation(cx);
       this.poll(cx);
     });
@@ -193,6 +194,15 @@ export default class FileViewer extends View {
   // 表示中: そのタブの space が表示中で、そのタブが space の中で選ばれている。
   visible() {
     return Boolean(this.me?.space.active && this.me.tabInfo?.active);
+  }
+
+  // タブが表示されなくなったことに、描画ではなくタイマーで気づく（表示していない間は render が呼ばれないので、描画だけでは
+  // 隠れたことも戻ったことも分からない。ガイドの「制約」の「表示していない間の部品の状態」）。隠れている間は本文の操作の
+  // 知らせ（離れた・離した）が来ないので、本文で覚えている操作の印を解き、戻った最初の描画をタブの表示に戻ったときにする。
+  noticeHidden() {
+    if (this.visibleNow()) return;
+    this.wasVisible = false;
+    this.input.reset();
   }
 
   // 初めて名乗ったとき: 記録を作り（または更新し）、開いたときに選ばれていたタブの右に移る。
@@ -1205,7 +1215,8 @@ export default class FileViewer extends View {
     const file = this.file;
     const was = this.bodyShown;
     this.bodyShown = this.bodyKind(rec);
-    // 本文の操作の印を解くのはここだけ（タブに戻ったとき、整形表示を出さないとき。lib/body-scroll.js の BodyInput）。
+    // 本文の操作の印を、タブに戻ったときと整形表示を出さないときに解く（lib/body-scroll.js の BodyInput。タブが隠れたときは
+    // noticeHidden も解く）。
     this.input.frame({ returned, formatted: this.bodyShown === "formatted" });
     if (!file) return div().p(16).text_color(t.dim).child(this.token ? "" : "開くファイルが指定されていない");
     if (file.loading) return markdownWaiting({ id: "fv-loading", loading: true, box: this.mdBox, t });
@@ -1324,7 +1335,7 @@ export default class FileViewer extends View {
 
   // 1 歩ごとに入出力の await を挟む（ガイドの「長い同期処理」）。動いた時間に比べて進めるので、歩の間隔が揺れても速さは同じ。
   // 動いている繰り返しがあれば始めない（黙って止まっていたら始め直す。BodyInput の drag）。表示していない間は render が
-  // 呼ばれず印も解けないので、タブが表示されているかは歩ごとに見る。
+  // 呼ばれず、印を解く noticeHidden も POLL_MS おきなので、タブが表示されているかは歩ごとに見る。
   dragScroll(cx) {
     const d = this.input, scroll = this.mdScroll, lease = d.drag;
     const owner = lease.take(scroll, Date.now());

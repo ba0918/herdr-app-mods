@@ -149,7 +149,7 @@ export class BarShow {
 // 印を付けた知らせと対になる知らせ（on_hover(false)、mouse up、非同期処理の finally）は、いつも届くとは限らない。要素が
 // 描かれなくなったとき、タブを表示していない間（render も呼ばれない。ガイドの「制約」の「表示していない間の部品の状態」）、
 // 非同期処理が黙って止まったとき（同じく「長い同期処理」）は来ない。そこで印は、描画のたびに frame と showBar で今の描画に
-// 合わせて解き、非同期処理は最後に進んだ時刻で見る（Lease）。時刻は ms。
+// 合わせて解き、タブが隠れたことにタイマーで気づいたときにも reset で解き、非同期処理は最後に進んだ時刻で見る（Lease）。時刻は ms。
 export class BodyInput {
   constructor({ keepMs, staleMs }) {
     this.bar = new BarShow(keepMs);
