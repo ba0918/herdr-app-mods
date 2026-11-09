@@ -103,6 +103,11 @@ export class PictureTable {
     return frame;
   }
 
+  // 手放す処理を動かす要があるか（描画が済むのを待っている名前か、手放してよい名前があるか）。
+  get pending() {
+    return this.candidates.length > 0 || this.due.size > 0;
+  }
+
   // frame の描画が済んだ。そのとき選んだ名前を、手放してよい名前にする。
   drawn(frame) {
     const rest = [];

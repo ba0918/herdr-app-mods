@@ -174,6 +174,24 @@ describe("使っている絵の表", () => {
     expect(render(tb, { opening: [] })).toEqual([]);
   });
 
+  test("使わなくなった名前の描画が済むのを待っている間と、手放す名前が残っている間だけ、手放す処理を動かす要がある", () => {
+    const tb = table();
+    const a = tb.name("図A", "svg");
+    tb.use("body", [a]);
+    tb.commit();
+    expect(tb.pending).toBe(false);
+    tb.use("body", []);
+    const frame = tb.commit();
+    expect(tb.pending).toBe(true);
+    tb.writing(a);
+    tb.drawn(frame);
+    expect(tb.takeReleases(true)).toEqual([]);
+    expect(tb.pending).toBe(true);
+    tb.wrote(a);
+    expect(tb.takeReleases(true)).toEqual([a]);
+    expect(tb.pending).toBe(false);
+  });
+
   test("受け取った書いてある絵（拡大の窓が渡された絵）は、使わなくなったら手放す", () => {
     const tb = table();
     tb.adopt("渡された.svg", "窓の絵|1");

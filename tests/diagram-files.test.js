@@ -1,43 +1,41 @@
 import { describe, expect, test } from "bun:test";
-import { diagramFile, exportSize, bodyLook, scaleLook, fitLook, svgOwner, maxDiagramScale, tileView, TILE_SIDE } from "../mods/file-viewer/lib/diagram-files.js";
+import { diagramFile, exportSize, bodyLook, scaleLook, fitLook, maxDiagramScale, tileView, TILE_SIDE } from "../mods/file-viewer/lib/diagram-files.js";
+
+// 名前を見た目の鍵そのものにする表の代わり（使っている絵の表は、持っている間は同じ鍵に同じ名前を返す。lib/pictures.js）。
+const key = (k) => k;
 
 const COLORS = { background: "#101112", foreground: "#e1e2e3", muted: "#909192", raised: "#2a2b2c", surface: "#1a1b1c", border: "#3a3b3c" };
 const part = (source, firstLine = 3, width = 300, height = 120) => ({ type: "mermaid", source, firstLine, layout: { width, height } });
 
-describe("SVG の名前", () => {
+describe("SVG の名前（使っている絵の表から、見た目の鍵で取る）", () => {
   const look = bodyLook(COLORS, 800);
 
-  test("file-viewer-cache/ に置く", () => {
-    const f = diagramFile("tok-1", part("flowchart LR; A-->B"), look);
-    expect(f.path).toBe(`file-viewer-cache/${f.name}`);
+  test("付き添いの mod のフォルダに置く", () => {
+    const f = diagramFile(() => "tok-1-000000001-0.svg", part("flowchart LR; A-->B"), look);
+    expect(f.name).toBe("tok-1-000000001-0.svg");
+    expect(f.path).toBe("mods/file-viewer-images/tok-1-000000001-0.svg");
   });
 
-  test("図のソースが変わると名前が変わる", () => {
-    expect(diagramFile("t", part("flowchart LR; A-->B"), look).name).not.toBe(diagramFile("t", part("flowchart LR; A-->C"), look).name);
+  test("図のソースが変わると鍵が変わる", () => {
+    expect(diagramFile(key, part("flowchart LR; A-->B"), look).name).not.toBe(diagramFile(key, part("flowchart LR; A-->C"), look).name);
   });
 
-  test("色が変わると名前が変わる", () => {
+  test("色が変わると鍵が変わる", () => {
     const other = bodyLook({ ...COLORS, muted: "#000000" }, 800);
-    expect(diagramFile("t", part("x"), look).name).not.toBe(diagramFile("t", part("x"), other).name);
+    expect(diagramFile(key, part("x"), look).name).not.toBe(diagramFile(key, part("x"), other).name);
   });
 
-  test("書き出しの大きさが変わると名前が変わる", () => {
+  test("書き出しの大きさが変わると鍵が変わる", () => {
     // 本文の幅より広い図は、本文の幅に縮めて書き出す
-    expect(diagramFile("t", part("x", 3, 1000), look).name).not.toBe(diagramFile("t", part("x", 3, 1000), bodyLook(COLORS, 600)).name);
+    expect(diagramFile(key, part("x", 3, 1000), look).name).not.toBe(diagramFile(key, part("x", 3, 1000), bodyLook(COLORS, 600)).name);
   });
 
-  test("図より上の行が変わって図の 1 行目の行番号が変わっても、名前は変わらない", () => {
-    expect(diagramFile("t", part("x", 3), look).name).toBe(diagramFile("t", part("x", 40), look).name);
+  test("図より上の行が変わって図の 1 行目の行番号が変わっても、鍵は変わらない", () => {
+    expect(diagramFile(key, part("x", 3), look).name).toBe(diagramFile(key, part("x", 40), look).name);
   });
 
-  test("本文の幅が変わっても、本文より狭い図の名前は変わらない", () => {
-    expect(diagramFile("t", part("x", 3, 300), look).name).toBe(diagramFile("t", part("x", 3, 300), bodyLook(COLORS, 600)).name);
-  });
-
-  test("拡大の窓が書く SVG も、持ち主の token は同じに読め、窓の印が分かる", () => {
-    const f = diagramFile("tok-1", part("x"), look, "z1a");
-    expect(svgOwner(f.name)).toEqual({ token: "tok-1", mark: "z1a" });
-    expect(svgOwner(diagramFile("tok-1", part("x"), look).name)).toEqual({ token: "tok-1", mark: null });
+  test("本文の幅が変わっても、本文より狭い図の鍵は変わらない", () => {
+    expect(diagramFile(key, part("x", 3, 300), look).name).toBe(diagramFile(key, part("x", 3, 300), bodyLook(COLORS, 600)).name);
   });
 });
 
@@ -58,7 +56,7 @@ describe("書き出しの大きさ", () => {
   });
 
   test("書き出しの大きさは整数の px で、出す大きさと同じ（引き伸ばさない）", () => {
-    const f = diagramFile("t", part("x", 1, 333.3, 111.1), { colors: COLORS, scale: 1.5 });
+    const f = diagramFile(key, part("x", 1, 333.3, 111.1), { colors: COLORS, scale: 1.5 });
     expect(f.exportWidth).toBe(500);
     expect(f.exportHeight).toBe(167);
     expect(f.width).toBe(500);
@@ -84,13 +82,13 @@ describe("大きな絵（引き伸ばさない）", () => {
   };
 
   test("本文の縦に長い図（400 × 6000）は、配置の大きさのまま書き出して出す（縮めた絵を引き伸ばさない）", () => {
-    const f = diagramFile("t", part("tall", 1, 400, 6000), bodyLook(COLORS, 800));
+    const f = diagramFile(key, part("tall", 1, 400, 6000), bodyLook(COLORS, 800));
     expect([f.width, f.height, f.exportWidth, f.exportHeight]).toEqual([400, 6000, 400, 6000]);
     tilesCover(f);
   });
 
   test("長い辺が 1 枚の上限を超える絵は、上限以下のタイルに分ける。どのタイルも書き出しの大きさと出す大きさが同じ", () => {
-    const f = diagramFile("t", part("big", 1, 1500, 9000), scaleLook(COLORS, 1));
+    const f = diagramFile(key, part("big", 1, 1500, 9000), scaleLook(COLORS, 1));
     expect(f.tiles.length).toBeGreaterThan(1);
     for (const t of f.tiles) {
       expect(t.width).toBeLessThanOrEqual(TILE_SIDE);
@@ -100,17 +98,14 @@ describe("大きな絵（引き伸ばさない）", () => {
   });
 
   test("上限以下の絵は 1 枚", () => {
-    const f = diagramFile("t", part("small"), bodyLook(COLORS, 800));
+    const f = diagramFile(key, part("small"), bodyLook(COLORS, 800));
     expect(f.tiles).toEqual([{ name: f.name, path: f.path, x: 0, y: 0, width: 300, height: 120 }]);
   });
 
-  test("タイルの名前は別々で、どれもタブの token（と窓の印）で持ち主が読める", () => {
-    const f = diagramFile("tok-1", part("big", 1, 1500, 9000), scaleLook(COLORS, 1), "z9");
+  test("タイルは 1 枚ずつ別の鍵で名前を取り、付き添いの mod のフォルダに置く", () => {
+    const f = diagramFile(key, part("big", 1, 1500, 9000), scaleLook(COLORS, 1));
     expect(new Set(f.tiles.map((t) => t.name)).size).toBe(f.tiles.length);
-    for (const t of f.tiles) {
-      expect(svgOwner(t.name)).toEqual({ token: "tok-1", mark: "z9" });
-      expect(t.path).toBe(`file-viewer-cache/${t.name}`);
-    }
+    for (const t of f.tiles) expect(t.path).toBe(`mods/file-viewer-images/${t.name}`);
   });
 
   test("倍率で書き出す絵の面積には上限があり、拡大の上限の倍率はその面積に収まる倍率", () => {
@@ -127,7 +122,7 @@ describe("大きな絵（引き伸ばさない）", () => {
 describe("タイルの範囲", () => {
   test("タイルの位置と大きさを、配置の座標の範囲にする（隣のタイルと切れ目なくつながる）", () => {
     const layout = { width: 1500, height: 9000 };
-    const f = diagramFile("t", { source: "big", layout }, scaleLook(COLORS, 1));
+    const f = diagramFile(key, { source: "big", layout }, scaleLook(COLORS, 1));
     const views = f.tiles.map((t) => tileView(f, t, layout));
     expect(views[0]).toEqual({ x: 0, y: 0, width: 1500 * (f.tiles[0].width / f.width), height: f.tiles[0].height * (9000 / f.height) });
     for (const [i, t] of f.tiles.entries()) {
@@ -144,7 +139,7 @@ describe("縦に長い図のある文書", () => {
     const doc = `# 長い図\n\n\`\`\`mermaid\nflowchart TD\n${chain}\n\`\`\`\n`;
     const part = prepareAll(doc).parts.find((p) => p.type === "mermaid");
     expect(part.layout.height).toBeGreaterThan(TILE_SIDE);
-    const f = diagramFile("t", part, bodyLook(COLORS, 900));
+    const f = diagramFile(key, part, bodyLook(COLORS, 900));
     expect(f.height).toBe(Math.round(part.layout.height * Math.min(1, 900 / part.layout.width)));
     expect([f.exportWidth, f.exportHeight]).toEqual([f.width, f.height]);
     expect(f.tiles.length).toBeGreaterThan(1);

@@ -11,6 +11,7 @@ import { createDraftStore } from "./lib/draft-store.js";
 import { utf8Checker } from "./lib/utf8.js";
 
 import { CACHE_DIR } from "./lib/diagram-files.js";
+import { IMAGES_DIR, companionInstalled, tinyPicture } from "./lib/pictures.js";
 
 export { CACHE_DIR };
 export const DRAFTS_DIR = "file-viewer-drafts";
@@ -236,16 +237,6 @@ export async function copyImage(path, on, prefix) {
   return { exists: true, size, base: { hash, stat }, cache: `${CACHE_DIR}/${name}`, header: base64ToBytes(data, HEADER_BYTES) };
 }
 
-// file-viewer-cache/ に文字列のファイルを書く（図の SVG）。name: ファイルの名前。
-export async function writeCacheText(name, text) {
-  await fs.mkdir(`${appHome()}/${CACHE_DIR}`, { recursive: true }).catch(() => {});
-  await fs.writeFile(cachePath(name), text);
-}
-
-export async function cacheExists(name) {
-  return fs.exists(cachePath(name)).catch(() => false);
-}
-
 export async function removeCache(cache) {
   if (!cache) return;
   await fs.unlink(`${appHome()}/${cache}`).catch(() => {});
@@ -253,6 +244,58 @@ export async function removeCache(cache) {
 
 export async function listCache() {
   return fs.readdir(`${appHome()}/${CACHE_DIR}`).catch(() => []);
+}
+
+// ---- 絵のファイル（付き添いの mod のフォルダ mods/file-viewer-images/。名前と選び方は lib/pictures.js） ----
+
+const picturesDir = () => `${appHome()}/${IMAGES_DIR}`;
+const picturePath = (name) => `${picturesDir()}/${name}`;
+
+// 付き添いの mod が入っているか（main.js と mod.json の両方があるか）。file-viewer はこのフォルダを作らない。
+export async function companionPresent() {
+  const main = await fs.exists(`${picturesDir()}/main.js`).catch(() => false);
+  const mod = await fs.exists(`${picturesDir()}/mod.json`).catch(() => false);
+  return companionInstalled({ main, mod });
+}
+
+// 文字列の絵のファイル（図の SVG）を書く。フォルダが無ければ失敗する（作らない）。
+export async function writePictureText(name, text) {
+  await fs.writeFile(picturePath(name), text);
+}
+
+export async function pictureExists(name) {
+  return fs.exists(picturePath(name)).catch(() => false);
+}
+
+export async function listPictures() {
+  return fs.readdir(picturesDir()).catch(() => []);
+}
+
+export async function removePicture(name) {
+  await fs.unlink(picturePath(name)).catch(() => {});
+}
+
+// 1 回の PowerShell に渡すコマンドの長さの目安（Windows のコマンドラインの上限より十分短く。ガイドの「制約」の exec）。
+const POWERSHELL_CHARS = 20_000;
+
+// names を、ごく小さい同じ形式の絵で書き換えて手放す（仕様の「手放す」）。SVG は文字列で書き、ほかの形式は mod からバイナリを
+// 書けないので、PowerShell でまとめて書く。失敗は飲み込む（次の見張りが片付ける）。
+export async function overwriteTiny(names) {
+  const scripts = [];
+  let script = "$ErrorActionPreference='Continue'";
+  for (const name of names) {
+    const tiny = tinyPicture(name.slice(name.lastIndexOf(".") + 1));
+    if (tiny.text !== undefined) {
+      await fs.writeFile(picturePath(name), tiny.text).catch(() => {});
+      continue;
+    }
+    if (!tiny.base64) continue;
+    const line = `; [IO.File]::WriteAllBytes(${psQuote(picturePath(name))}, [Convert]::FromBase64String('${tiny.base64}'))`;
+    if (script.length + line.length > POWERSHELL_CHARS) { scripts.push(script); script = "$ErrorActionPreference='Continue'"; }
+    script += line;
+  }
+  if (script.includes("WriteAllBytes")) scripts.push(script);
+  for (const s of scripts) await exec("powershell", ["-NoProfile", "-Command", s]).catch(() => {});
 }
 
 // ---- 下書き（app home の file-viewer-drafts/ に置く。ファイルの形は lib/draft-store.js） ----
