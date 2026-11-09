@@ -192,6 +192,27 @@ describe("使っている絵の表", () => {
     expect(tb.pending).toBe(false);
   });
 
+  test("手放す名前に選ばれたあとでも、手放す前に同じ見た目の鍵でまた取られた名前は、手放さない", () => {
+    const tb = table();
+    const a = tb.name("図A|色1", "svg");
+    written(tb, a);
+    render(tb, { body: [a] });
+    tb.use("body", []);
+    tb.drawn(tb.commit());
+    expect(tb.name("図A|色1", "svg")).toBe(a);
+    expect(tb.takeReleases(true)).toEqual([]);
+    expect(render(tb, { body: [a] })).toEqual([]);
+  });
+
+  test("ほかで名前を決めた絵（拡大の窓の印の付いた絵）を表に載せると、書いて使わなくなったら手放す", () => {
+    const tb = table();
+    tb.add("窓の絵.svg");
+    tb.writing("窓の絵.svg");
+    expect(render(tb, { opening: [] })).toEqual([]);
+    tb.wrote("窓の絵.svg");
+    expect(tb.takeReleases(true)).toEqual(["窓の絵.svg"]);
+  });
+
   test("受け取った書いてある絵（拡大の窓が渡された絵）は、使わなくなったら手放す", () => {
     const tb = table();
     tb.adopt("渡された.svg", "窓の絵|1");

@@ -54,8 +54,14 @@ export class PictureTable {
   }
 
   // 見た目の鍵 key の絵の名前。表にあればそれ、無ければ新しい名前を表に載せる。key が null なら、いつも新しい名前（画像のコピー）。
+  // 表にある名前をまた取ったら、手放す名前に選んでいても手放さない（次の描画で使うかを決め直す）。
   name(key, ext) {
-    if (key !== null && this.byKey.has(key)) return this.byKey.get(key);
+    if (key !== null && this.byKey.has(key)) {
+      const held = this.byKey.get(key);
+      this.due.delete(held);
+      for (const c of this.candidates) c.names = c.names.filter((n) => n !== held);
+      return held;
+    }
     const name = this.names.next(ext);
     this.entries.set(name, { key, writing: false, written: false });
     if (key !== null) this.byKey.set(key, name);
@@ -64,6 +70,11 @@ export class PictureTable {
 
   has(name) {
     return this.entries.has(name);
+  }
+
+  // ほかで名前を決めた絵（拡大の窓の印の付いた名前）を、まだ書いていない絵として表に載せる。
+  add(name) {
+    this.entries.set(name, { key: null, writing: false, written: false });
   }
 
   // 書いてある絵を表に載せる（拡大の窓が、開いたタブの書いた絵を受け取るとき）。
