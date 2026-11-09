@@ -23,7 +23,7 @@ import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, writeCacheText, cacheExists, CACHE_DIR, pauseForApp } from "./io.js";
-import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, BAR_MAX } from "./views/markdown.js";
+import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, BAR_MAX, BAR_INSET, BAR_WIDTH } from "./views/markdown.js";
 import { BodyScroll, BarShow, measuredParts } from "./lib/body-scroll.js";
 import { imageBody, imageInfo } from "./views/image.js";
 import { Zoom, zoomTools, zoomArea } from "./views/zoom.js";
@@ -44,6 +44,8 @@ const OVERLAY_WATCH_MS = 1000;
 const BODY_WAIT_MS = 1500;
 // 整形表示のスクロールバーを、スクロールしてから出しておく時間（app のスクロールバーに合わせる。ガイドの「制約」の「スクロールバー」）。
 const BAR_KEEP_MS = 2000;
+// 文字を選びながら本文の上下の端の帯（この高さ）に来たら、本文をスクロールし続ける。速さは帯の外側ほど速い（px / 秒）。
+const DRAG_EDGE = 32, DRAG_SPEED_MIN = 200, DRAG_SPEED_MAX = 1500;
 
 function syntaxColors(t) {
   return { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 };
@@ -132,6 +134,9 @@ export default class FileViewer extends View {
     // syncBar がつまみに最後に合わせた値（まだなら null）。
     this.barSet = null;
     this.barTimer = null;
+    // 本文の中のドラッグ（文字の選択）。pressed: 左ボタンを本文の中で押している。dir: 上下の端の帯にいれば -1（上）/ 1（下）。
+    // depth: 帯の中の深さ（0〜1）。running: スクロールし続ける非同期処理が動いている。
+    this.selDrag = { pressed: false, dir: 0, depth: 0, running: false };
     // 前の描画で本文の場所に出したもの（"formatted" | "source" | "preparing" | "loading" | null）と、本文の部品が中身を描くまで
     // 上に重ねる前の表示（同じ値の 1 つか null）。
     this.bodyShown = null;
@@ -1228,6 +1233,7 @@ export default class FileViewer extends View {
         onWheel: (changed, cx) => { if (changed) this.showBar(cx); this.syncBar(changed, cx); },
         barShown: this.barShow.shown(Date.now()),
         onBarHover: (hovered, cx) => { this.barShow.hover(hovered); cx.notify(); },
+        drag: { press: (e) => this.dragPress(e), release: () => this.dragRelease(), move: (e, cx) => this.dragMove(e, cx) },
         onLink: (url, cx) => this.followLink(url, cx),
         onDiagram: (part, cx) => this.openDiagram(part, cx),
       });
@@ -1275,6 +1281,54 @@ export default class FileViewer extends View {
     const left = this.barShow.remaining(Date.now());
     if (left === null) { this.barTimer = null; cx.notify(); return; }
     this.barTimer = cx.timer.after(left + 10, (cx) => this.hideBarLater(cx));
+  }
+
+  // 本文の中で左ボタンを押した（スクロールバーの上は除く）。app は押したボタンを mouse move で知らせないので、
+  // 押している間を自分で覚える。
+  dragPress(e) {
+    const x = e.local_position?.x, w = e.bounds?.width;
+    if (x !== undefined && w !== undefined && x >= w - BAR_INSET * 2 - BAR_WIDTH * 2) return;
+    this.selDrag.pressed = true;
+  }
+
+  // ボタンを離したか、本文の外に出た（外では mouse move も mouse up も来ないので、そこで止める）。
+  dragRelease() {
+    this.selDrag.pressed = false;
+    this.selDrag.dir = 0;
+  }
+
+  // 押したまま動かした。上下の端の帯にいる間、本文をスクロールし続ける。選んでいる範囲は、部品がマウスの動きを受けたときに
+  // そこまで伸びる（止めたままだと伸びない。ガイドの「制約」の「選びながらのスクロール」）。
+  dragMove(e, cx) {
+    const d = this.selDrag;
+    if (!d.pressed) return;
+    const y = e.local_position.y, h = e.bounds.height;
+    if (y < DRAG_EDGE) { d.dir = -1; d.depth = (DRAG_EDGE - y) / DRAG_EDGE; }
+    else if (y > h - DRAG_EDGE) { d.dir = 1; d.depth = (y - (h - DRAG_EDGE)) / DRAG_EDGE; }
+    else d.dir = 0;
+    if (d.dir && !d.running) this.dragScroll(cx);
+  }
+
+  // 1 歩ごとに入出力の await を挟む（ガイドの「長い同期処理」）。動いた時間に比べて進めるので、歩の間隔が揺れても速さは同じ。
+  dragScroll(cx) {
+    const d = this.selDrag, scroll = this.mdScroll;
+    d.running = true;
+    cx.spawn(async (cx) => {
+      try {
+        let last = Date.now();
+        while (d.pressed && d.dir && this.mdScroll === scroll && this.bodyShown === "formatted") {
+          await pauseForApp();
+          await cx.sleep(16);
+          const now = Date.now();
+          const speed = DRAG_SPEED_MIN + (DRAG_SPEED_MAX - DRAG_SPEED_MIN) * Math.min(1, Math.max(0, d.depth));
+          const step = d.dir * speed * (now - last) / 1000;
+          last = now;
+          if (scroll.wheel(-step)) { this.showBar(cx); this.syncBar(true, cx); }
+        }
+      } finally {
+        d.running = false;
+      }
+    });
   }
 
   // スクロールの位置が変わった（changed）か、本文の長さが変わったとき。スクロールバーのつまみを位置に合わせる。

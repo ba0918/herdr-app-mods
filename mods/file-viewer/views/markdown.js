@@ -37,9 +37,10 @@ export function diagramError({ id, message, fence, t }) {
 // bar: スクロールバーのつまみの状態（SliderState。0〜BAR_MAX、下が 0）。onScroll(changed, cx): 位置（changed が true のとき）か
 // 本文や本文の場所の大きさが変わりうるとき（つまみを合わせ、要れば描き直す）。onWheel(changed, cx): ホイールで動かしたとき。
 // barShown: スクロールバーを出すか。onBarHover(hovered, cx): スクロールバーにマウスが載った・離れたとき。
+// drag: 本文の中のドラッグ（文字の選択）を知らせる先 { press(e), release(), move(e, cx) }。
 // cover: 本文の部品が中身を描くまで、本文の上に重ねて出す前の表示。無ければ null。
 export const BAR_MAX = 1000;
-export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, onScroll, onWheel, barShown, onBarHover, cover, t }) {
+export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, onScroll, onWheel, barShown, onBarHover, drag, cover, t }) {
   const moved = (changed, cx) => onScroll(changed, cx);
   const content = v_flex().id(`${id}-content`).absolute().left(0).right(0).top(-scroll.shown()).px(PAD_X).py(16).gap(12)
     .on_size_change((size, cx) => moved(scroll.sized({ content: size.height }), cx))
@@ -59,6 +60,10 @@ export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, o
   return div().id(`${id}-scroll`).relative().flex_1().min_h(0).w_full().overflow_hidden().text_color(t.foreground)
     .on_size_change((size, cx) => { measure(box)(size, cx); moved(scroll.sized({ view: size.height }), cx); })
     .on_scroll_wheel((e, cx) => onWheel(scroll.wheel(e.delta.y), cx))
+    .on_mouse_down("left", (e) => drag.press(e))
+    .on_mouse_up("left", () => drag.release())
+    .on_mouse_move((e, cx) => drag.move(e, cx))
+    .on_hover((hovered) => { if (!hovered) drag.release(); })
     .child(content)
     .when(scroll.max() > 0 && barShown, (el) => el.child(scrollBar({ id: `${id}-bar`, bar, scroll, onHover: onBarHover, t })))
     .when(Boolean(cover), (el) => el.child(v_flex().id(`${id}-cover`).absolute().inset_0().bg(t.background).child(cover)));
@@ -68,8 +73,8 @@ export function markdownBody({ id, parts, onLink, onDiagram, box, scroll, bar, o
 // 内側に置き、つまみは文字の色を 35% ほどにした色。つまみにマウスを載せると幅 8 px（左へ広がる）で 55% ほどの色になる。
 // つまみの長さは本文の場所と本文の高さの比で決め、下限は 40 px（ガイドの「制約」の「スクロールバー」）。
 // つまみを動かすか溝を押すと bar の "change" が来る。
-const BAR_INSET = 4;
-const BAR_WIDTH = 6;
+export const BAR_INSET = 4;
+export const BAR_WIDTH = 6;
 const BAR_HOVER_WIDTH = 8;
 const BAR_MIN_THUMB = 40;
 function scrollBar({ id, bar, scroll, onHover, t }) {
