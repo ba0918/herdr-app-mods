@@ -4,8 +4,6 @@
 // 図の 1 行目の行番号は鍵に入れない（配置に効かないので、図より上の行が変わっても書き直さない）。
 import { IMAGES_DIR } from "./pictures.js";
 
-// 画像のコピーの置き場所（app home 直下）。
-export const CACHE_DIR = "file-viewer-cache";
 // 1 枚の SVG の辺の上限（px）。app は 1 辺 8,192 px までの SVG をくっきり描き、それより大きいと縮めた画像を引き伸ばしてぼやける
 // （ガイドの「image(path) の SVG の大きさ」）。これより大きな絵は、この大きさ以下のタイル（同じ絵の viewBox の切れ端）に分けて
 // 書き出し、隙間なく並べて出す。引き伸ばした・縮めた絵は出さない（仕様の「描き方」）。
@@ -71,13 +69,6 @@ export function diagramFile(nameOf, part, look) {
     }
   }
   return { name: tiles[0].name, path: tiles[0].path, width: size.width, height: size.height, exportWidth: size.width, exportHeight: size.height, tiles };
-}
-
-// file-viewer-cache/ のファイルの名前（画像のコピー）から、持ち主の token と窓の印を読む。読めなければ null。
-const CACHE_NAME = /^(.+?)(?:~([0-9a-z]+))?-[0-9a-f]{12}\.[^.]+(?:\.b64)?$/;
-export function svgOwner(name) {
-  const m = CACHE_NAME.exec(name);
-  return m ? { token: m[1], mark: m[2] ?? null } : null;
 }
 
 // タイルの位置と大きさ（出す絵の px）を、配置の座標の範囲（SVG の viewBox）にする。

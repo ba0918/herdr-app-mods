@@ -16,15 +16,15 @@ import { normalizePath } from "./lib/path.js";
 import { imageSize } from "./lib/image.js";
 import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
-import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, svgOwner, maxDiagramScale, tileView } from "./lib/diagram-files.js";
-import { PictureNames, PictureTable, ReleaseQueue, parsePictureName, ownStale } from "./lib/pictures.js";
+import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, tileView } from "./lib/diagram-files.js";
+import { PictureNames, PictureTable, ReleaseQueue, parsePictureName, ownStale, sweepTargets, oldCacheNames } from "./lib/pictures.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
 import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
-import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, openFile } from "./registry.js";
-import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, removeCache, listCache, CACHE_DIR, pauseForApp } from "./io.js";
-import { companionPresent, writePictureText, pictureExists, listPictures, removePicture, overwriteTiny } from "./io.js";
+import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, liveViewerTokens, openFile } from "./registry.js";
+import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, pauseForApp } from "./io.js";
+import { companionPresent, writePictureText, pictureExists, listPictures, removePicture, overwriteTiny, listOldCache, removeOldCache, removeOldCacheDir } from "./io.js";
 import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, thumbSpan, BAR_MAX, BAR_INSET, BAR_WIDTH } from "./views/markdown.js";
 import { BodyScroll, BodyInput, measuredParts } from "./lib/body-scroll.js";
 import { imageBody, imageInfo } from "./views/image.js";
@@ -182,6 +182,7 @@ export default class FileViewer extends View {
         this.ownSwept = true;
         cx.spawn(async () => this.sweepOwnStale());
       }
+      cx.spawn(async () => this.watchPictures());
     });
     // 表示していないタブでも動き続けるので、閉じるときに呼ばれない場合（裏のタブを閉じた、強制終了）も
     // 数秒前までの編集が下書きに残る。
@@ -323,7 +324,7 @@ export default class FileViewer extends View {
       pruneRecords();
       cx.spawn(async () => {
         for (const d of expiredDrafts(await listDrafts(), Date.now())) await deleteDraft(d.name);
-        await this.sweepCaches();
+        await this.watchPictures();
       });
     }
     cx.notify();
@@ -443,13 +444,27 @@ export default class FileViewer extends View {
     if (file.incoming?.done === done) file.incoming = null;
   }
 
-  // どの viewer のタブも使っていない画像のコピーを消す。表示していないタブを閉じたときは close() が
-  // 呼ばれないので、動き出したときに加えて、ときどきこれで消す。
-  async sweepCaches() {
-    const open = openTokens();
-    for (const name of await listCache()) {
-      const owner = svgOwner(name)?.token;
-      if (!owner || !open.has(owner)) await removeCache(`${CACHE_DIR}/${name}`);
+  // 絵のファイルの見張り（POLL_MS おきと名乗った直後。表示していなくても、名乗る前でも動く）。開いているタブ（名乗り待ちを含む）の
+  // どれの token でもない、名前の時刻から 10 秒以上たった絵のファイルを手放して消す（lib/pictures.js の sweepTargets）。最初の回に、
+  // 前の置き場所（file-viewer-cache/）の file-viewer の名前の形のファイルを消し、空ならフォルダも消す（mods/ の外なので手放せない）。
+  // 1 つずつ動かす。付き添いの mod が無ければ、手放しも消しもしない。
+  async watchPictures() {
+    if (this.watching) return;
+    this.watching = true;
+    try {
+      if (!this.oldSwept) {
+        this.oldSwept = true;
+        const old = await listOldCache();
+        if (old) {
+          for (const name of oldCacheNames(old)) await removeOldCache(name);
+          await removeOldCacheDir();
+        }
+      }
+      if (!(await companionPresent())) return;
+      const { release, remove } = sweepTargets({ names: await listPictures(), openTokens: liveViewerTokens(), now: Date.now() });
+      await this.releaseAndRemove(release, remove);
+    } finally {
+      this.watching = false;
     }
   }
 
@@ -593,8 +608,6 @@ export default class FileViewer extends View {
 
   // 編集している間、3 秒ごとに下書きを更新する。編集が無くなったら自分の下書きを消す。
   keepDraft(cx) {
-    this.ticks = (this.ticks ?? 0) + 1;
-    if (this.ticks % 10 === 0 && this.pane && this.visible()) cx.spawn(async () => this.sweepCaches());
     const file = this.file;
     if (!file?.editor || file.loading) return;
     if (file.dirty) {

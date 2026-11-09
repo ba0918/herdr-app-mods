@@ -5,7 +5,7 @@ import { shared, setShared, panes, spaces, focused, machines, run } from "herdr"
 import { randomUUID } from "crypto";
 import { openAction } from "./lib/tabs.js";
 import { normalizePath } from "./lib/path.js";
-import { staleRecords, PENDING_MS } from "./lib/records.js";
+import { staleRecords, liveTokens, PENDING_MS } from "./lib/records.js";
 
 export const MOD = "file-viewer";
 const TABS = "file-viewer:tabs";
@@ -33,6 +33,11 @@ function viewerPanes() {
 export function openTokens() {
   const live = new Set(viewerPanes().map((p) => p.pane));
   return new Set(Object.entries(records()).filter(([, r]) => r.pane && live.has(r.pane)).map(([token]) => token));
+}
+
+// 開いている viewer のタブの token（名乗り待ちの記録も含める。絵のファイルの見張りに使う）。
+export function liveViewerTokens() {
+  return liveTokens({ records: records(), livePanes: new Set(viewerPanes().map((p) => p.pane)) });
 }
 
 // 今の space の viewer のタブ（名乗り待ちの記録も含める）。

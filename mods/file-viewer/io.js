@@ -4,16 +4,14 @@
 import { exec, readTextFile, writeTextFile, appHome } from "herdr";
 import { createHash, randomUUID } from "crypto";
 import * as fs from "fs/promises";
-import { TEXT_LIMIT, IMAGE_LIMIT, extension } from "./lib/kind.js";
+import { TEXT_LIMIT, IMAGE_LIMIT } from "./lib/kind.js";
 import { splitForWrite } from "./lib/save.js";
 import { base64ToBytes } from "./lib/image.js";
 import { createDraftStore } from "./lib/draft-store.js";
 import { utf8Checker } from "./lib/utf8.js";
 
-import { CACHE_DIR } from "./lib/diagram-files.js";
-import { IMAGES_DIR, companionInstalled, tinyPicture } from "./lib/pictures.js";
+import { IMAGES_DIR, OLD_CACHE_DIR, companionInstalled, tinyPicture } from "./lib/pictures.js";
 
-export { CACHE_DIR };
 export const DRAFTS_DIR = "file-viewer-drafts";
 const HEADER_BYTES = 256 * 1024;
 
@@ -230,13 +228,22 @@ export async function copyImage(path, on, name) {
   return { exists: true, size, base: { hash, stat }, cache: `${IMAGES_DIR}/${name}`, header: base64ToBytes(data, HEADER_BYTES) };
 }
 
-export async function removeCache(cache) {
-  if (!cache) return;
-  await fs.unlink(`${appHome()}/${cache}`).catch(() => {});
+// ---- 前の置き場所（app home 直下の file-viewer-cache/。片付けるだけ） ----
+
+const oldCacheDir = () => `${appHome()}/${OLD_CACHE_DIR}`;
+
+// 前の置き場所のファイルの名前。フォルダが無ければ null。
+export async function listOldCache() {
+  return fs.readdir(oldCacheDir()).catch(() => null);
 }
 
-export async function listCache() {
-  return fs.readdir(`${appHome()}/${CACHE_DIR}`).catch(() => []);
+export async function removeOldCache(name) {
+  await fs.unlink(`${oldCacheDir()}/${name}`).catch(() => {});
+}
+
+// 前の置き場所のフォルダが空なら消す。
+export async function removeOldCacheDir() {
+  if ((await listOldCache())?.length === 0) await fs.rmdir(oldCacheDir()).catch(() => {});
 }
 
 // ---- 絵のファイル（付き添いの mod のフォルダ mods/file-viewer-images/。名前と選び方は lib/pictures.js） ----

@@ -25,3 +25,9 @@ export function staleRecords({ records, livePanes, readyMachines, unclaimedMachi
   }
   return { drop, mark, unmark };
 }
+
+// 開いているタブの token（絵のファイルの見張りが、持ち主のいる絵を片付けないように）。pane が今ある viewer のペインの記録と、
+// pane の無い（名乗り待ちの）記録。space と machine を問わない。
+export function liveTokens({ records, livePanes }) {
+  return new Set(Object.entries(records).filter(([, r]) => !r.pane || livePanes.has(r.pane)).map(([token]) => token));
+}
