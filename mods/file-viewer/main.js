@@ -109,8 +109,8 @@ export default class FileViewer extends View {
       // （layout: lib/overlay-layout.js）。絵は、開いたタブの印（token）の窓の使う場所で絵の席の表に数える（開いたときの絵は、タブが
       // 窓の集まりに入れてから渡す。本文と共有する絵の席は、本文が使わなくなっても窓が出している間は手放さない）。
       // 窓が出している絵は窓の使う場所に置き（trackOverlayPictures）、同じ窓のコピーが init し直したら（hot reload など）、開いたときの
-      // 絵ではなくそれから始める。どちらの絵も、その絵の席が窓の集まりにあって書き終えたままでなければ（もう手放して別の絵になって
-      // いうる）、出さずに同じ倍率と色の絵を書き直してから出す。
+      // 絵ではなくそれから始める。どちらの絵も、その絵の席が窓の集まりにあって書き終えたままその絵の鍵の絵を持っていなければ（もう
+      // 手放して別の絵になっていうる。開いたタブが確かめられずに集まりに入れなかったときも）、出さずに同じ倍率と色の絵を書き直してから出す。
       const colors = p.colors ?? diagramColors(theme());
       this.overlay = {
         source: p.mermaid, firstLine: p.firstLine ?? 1,
@@ -130,7 +130,7 @@ export default class FileViewer extends View {
           start = kept;
           this.overlay.colors[kept.colorsKey] ??= kept.colors;
         }
-        untrusted = Boolean(start) && !holds(this.seats, this.seatOwner.place, tileNames(start.file));
+        untrusted = Boolean(start) && !holds(this.seats, this.seatOwner.place, tilesOf(start.file));
       }
       if (start) this.overlay.zs = new ZoomSvg({ shown: start.file, colorsKey: start.colorsKey, untrusted });
       if (this.seatUser && this.overlay.zs) this.seatUser.use([...this.overlay.zs.keep()]);
@@ -1354,7 +1354,7 @@ export default class FileViewer extends View {
   // 図を押したら、タブの上に重ねる窓で拡大して見せる（タブは増やさない）。窓に収まる大きさの SVG を絵の席に書いて、見えない所で
   // 読み込ませてから開く。1 秒たっても終わらなければ、本文の SVG を本来の大きさで出して開く（lib/zoom-svg.js の DiagramOpening）。
   // 書き込みを待つ間も 1 秒を数える（書き込みが遅くても 1 秒で開く）。収まる大きさの絵は、開くまで本文の使う場所で数え（this.opening）、
-  // 開くときは、窓が出す絵の席を窓の使う場所に入れてから渡す（共有なので、タブが外しても手放されない）。窓は一度に 1 つなので、前の窓の
+  // 開くときは、窓が出す絵の席を、まだその絵を持っていると確かめてから窓の使う場所に入れて渡す（共有なので、タブが外しても手放されない）。窓は一度に 1 つなので、前の窓の
   // 使う場所は外して作り直す（close が呼ばれなかった前の窓の絵の席は、描画を待たずに手放される）。間に合わなかった収まる大きさの絵は、
   // 書き終わったら本文から外れて手放される。
   openDiagram(part, cx) {
@@ -1386,10 +1386,15 @@ export default class FileViewer extends View {
       }
       if (this.opening !== opening) return;
       const natural = opening.state.decide(Date.now()) !== "fit";
-      const shown = !natural ? { ...opening.file, scale: fit } : { ...part.file, scale: part.file.width / l.width };
+      const chosen = !natural ? { ...opening.file, scale: fit } : { ...part.file, scale: part.file.width / l.width };
+      // 待つ間にテーマや本文の幅が変わって本文の絵が差し替わると、押したときの絵の絵の席は手放されて別の絵に使われうる。出す絵の
+      // 絵の席が本文の集まりにあってその絵を持っているときだけ窓の集まりに入れる。入れなければ窓はその絵を出さず（init の holds）、
+      // 窓に収まる倍率の絵を書いてから出す。
+      const held = holds(this.seats, bodyPlace(this.token), tilesOf(chosen));
+      const shown = held ? chosen : { ...chosen, scale: fit };
       const place = windowPlace(this.token);
       dropPlace(this.seats, place);
-      useSeats(this.seats, place, tileNames(shown));
+      if (held) useSeats(this.seats, place, tileNames(shown));
       this.opening = null;
       openOverlay({
         mod: "file-viewer", kind: "dialog", width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT,

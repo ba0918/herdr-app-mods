@@ -54,8 +54,8 @@ function scaled(layout, scale) {
 
 // nameOf(key): 見た目の鍵の絵の名前（使っている絵の表から取る）。part: 整形の準備の図の部分（source と layout を持つ）。
 // { name, path, width, height, exportWidth, exportHeight, tiles }。width / height は出す大きさ（論理 px）で、書き出しの大きさと同じ。
-// tiles: 書き出す SVG の並び { name, path, x, y, width, height }（出す絵の中の位置と大きさ）。上限以下の絵は 1 枚で、name と path は
-// その 1 枚のもの。
+// tiles: 書き出す SVG の並び { name, key, path, x, y, width, height }（key は名前を取った見た目の鍵。x から height は出す絵の中の位置と
+// 大きさ）。上限以下の絵は 1 枚で、name と path はその 1 枚のもの。
 export function diagramFile(nameOf, part, look) {
   const size = exportSize(part.layout, look);
   const base = `${part.source}\n${colorsKey(look.colors)}\n${size.width}x${size.height}`;
@@ -64,8 +64,9 @@ export function diagramFile(nameOf, part, look) {
     for (let x = 0; x < size.width; x += TILE_SIDE) {
       const width = Math.min(TILE_SIDE, size.width - x), height = Math.min(TILE_SIDE, size.height - y);
       const whole = width === size.width && height === size.height;
-      const name = nameOf(whole ? base : `${base}\n${x},${y}`);
-      tiles.push({ name, path: `${IMAGES_DIR}/${name}`, x, y, width, height });
+      const key = whole ? base : `${base}\n${x},${y}`;
+      const name = nameOf(key);
+      tiles.push({ name, key, path: `${IMAGES_DIR}/${name}`, x, y, width, height });
     }
   }
   return { name: tiles[0].name, path: tiles[0].path, width: size.width, height: size.height, exportWidth: size.width, exportHeight: size.height, tiles };

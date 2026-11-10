@@ -257,11 +257,14 @@ export function shownOf(table, place) {
   return table.places[place]?.shown ?? null;
 }
 
-// names の絵の席がどれも、place の集まりにあって書き終えたままか（集まりにある間は手放されないので、入れたときの絵のまま）。
-// 手放されて空きか別の絵になっていうるなら false。
-export function holds(table, place, names) {
+// 絵のタイル（{ name, key }。lib/diagram-files.js の tiles）の絵の席がどれも、place の集まりにあって書き終えたままで、そのタイルの鍵の
+// 絵を持っているか（集まりにある間は手放されないので、入れたときの絵のまま）。手放されて空きか別の絵になっていうるなら false。
+export function holds(table, place, tiles) {
   const p = table.places[place];
-  return Boolean(p) && names.every((name) => p.names.includes(name) && table.seats[name]?.state === "ready");
+  return Boolean(p) && tiles.every(({ name, key }) => {
+    const s = table.seats[name];
+    return p.names.includes(name) && s?.state === "ready" && key !== undefined && s.key === key;
+  });
 }
 
 // place を表から外す（タブや窓を閉じた、見張りが閉じたタブを見つけた、窓を作り直す）。その集まりの絵の席は描画の回数を待たない。

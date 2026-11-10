@@ -6,6 +6,7 @@ import {
   setShown, shownOf, holds,
 } from "../mods/file-viewer/lib/seats.js";
 import { RENDER_LIMIT } from "../mods/file-viewer/lib/render-size.js";
+import { diagramFile, scaleLook } from "../mods/file-viewer/lib/diagram-files.js";
 
 // 仕様の「画像の置き場所」の確かめ方: 絵の席の表（使い始める・共有して数える・手放す絵の席を選ぶ・本文と窓で分けて引き継ぐ・
 // 初めて作るときに手放す・見張りが外す・消えた絵の席を作り直す）は単体テストで確かめる。
@@ -277,14 +278,32 @@ describe("窓のコピーが init し直したとき", () => {
   test("出す絵の絵の席が、使う場所の集まりにあって書き終えたままのときだけ確かで、手放されたあとは確かでない", () => {
     const { table } = ready();
     const a = take(table, own(win1), "図A|s1");
-    expect(holds(table, win1, [a.name])).toBe(true);
+    const tiles = [{ name: a.name, key: "図A|s1" }];
+    expect(holds(table, win1, tiles)).toBe(true);
     use(table, win1, []);
     rendered(table, win1);
     released(table, takeReleases(table, own(win1)), own(win1));
-    expect(holds(table, win1, [a.name])).toBe(false);
+    expect(holds(table, win1, tiles)).toBe(false);
     const b = take(table, own(body1), "図B");
     expect(b.name).toBe(a.name);
-    expect(holds(table, win1, [a.name])).toBe(false);
+    expect(holds(table, win1, tiles)).toBe(false);
+  });
+
+  // 仕様: 拡大の窓は、本文が使わなくなっても今出している絵を持つ。図は正しい絵で出る。
+  test("出す絵の絵の席が手放されて別の見た目の絵に使い直されたら、その名前を窓の集まりに入れ直しても確かでない", () => {
+    const { table } = ready(1);
+    const part = { source: "flowchart LR; A-->B", layout: { width: 300, height: 120 } };
+    const fileOf = (owner, colors) => diagramFile((k) => take(table, owner, k).name, part, scaleLook(colors, 1));
+    const before = fileOf(own(body1), { background: "#000" });
+    use(table, body1, []);
+    rendered(table, body1);
+    released(table, takeReleases(table, own(body1)), own(body1));
+    const after = fileOf(own(body2), { background: "#fff" });
+    expect(after.name).toBe(before.name);
+    dropPlace(table, win1);
+    use(table, win1, [before.name]);
+    expect(holds(table, win1, before.tiles)).toBe(false);
+    expect(holds(table, win1, after.tiles)).toBe(true);
   });
 
   test("集まりには、空きと手放し中の絵の席を入れない（手放した絵の席をほかが使い始めても守らない）", () => {

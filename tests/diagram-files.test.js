@@ -99,7 +99,8 @@ describe("大きな絵（引き伸ばさない）", () => {
 
   test("上限以下の絵は 1 枚", () => {
     const f = diagramFile(key, part("small"), bodyLook(COLORS, 800));
-    expect(f.tiles).toEqual([{ name: f.name, path: f.path, x: 0, y: 0, width: 300, height: 120 }]);
+    expect(f.tiles).toHaveLength(1);
+    expect(f.tiles[0]).toMatchObject({ name: f.name, path: f.path, x: 0, y: 0, width: 300, height: 120 });
   });
 
   test("タイルは 1 枚ずつ別の鍵で名前を取り、絵の席のフォルダに置く", () => {
