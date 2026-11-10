@@ -4,7 +4,7 @@ import { View, div, image } from "gpui-kit";
 import { randomUUID } from "crypto";
 import { v_flex, h_flex, Editor, EditorState, SliderState } from "gpui-base";
 import { spaces, props, theme, settings, run, notify, openOverlay, closeOverlay } from "herdr";
-import { kind, languageFor, unopenableReason, IMAGE_LIMIT } from "./lib/kind.js";
+import { kind, languageFor, unopenableReason, extension, IMAGE_LIMIT } from "./lib/kind.js";
 import { formatSize, formatSizes } from "./lib/size.js";
 import { tabTitles } from "./lib/tabs.js";
 import { splitBom, contentToSave, looksNonUtf8 } from "./lib/save.js";
@@ -21,6 +21,8 @@ import { oldCacheNames } from "./lib/pictures.js";
 import { IMAGES_DIR, imageKey, unshare, awaiting, setShown, shownOf, holds, ensureTable, startGen, beat, claimInit, stopInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
 import { SeatUser } from "./lib/seat-user.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
+import { svgFileState, svgFileView, svgLook, svgSource } from "./lib/svg-file.js";
+import { readSvgRoot, rewriteSvg } from "./lib/svg-root.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
 import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
@@ -45,7 +47,8 @@ const OVERLAY_WIDTH = 0.92, OVERLAY_HEIGHT = 0.9;
 const tilesOf = (f) => f.tiles ?? [f];
 const tileNames = (f) => tilesOf(f).map((t) => t.name);
 // 図の拡大（拡大の窓・.mmd）の倍率の上限: 書き出す絵の面積の上限に収まる倍率（lib/diagram-files.js）。
-const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: (width, height) => maxDiagramScale({ width, height }) });
+const diagramMaxScale = (width, height) => maxDiagramScale({ width, height });
+const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: diagramMaxScale });
 // 絵の席に書き終えてから、見えない所で読み込ませるまで待つ時間。書いた絵自身の変化の知らせが読み込みのあとに届くと、読み込んだ絵が
 // 捨てられて一瞬空白になる（ガイドの「フォルダの変化の知らせ」。250 ms 待てば空白が出なかった）。
 const SEAT_SETTLE_MS = 250;
@@ -91,6 +94,18 @@ function markdownNotice(n) {
   if (n.kind === "restyle-write") return `図を書き出せなかったので、図は前の色や大きさのまま表示している（${n.message}）`;
   if (n.kind === "restyle-timeout") return "整形の準備が終わらなかったので、図は前の色や大きさのまま表示している";
   return "整形の準備が終わらなかったので、画像と図をそのまま表示している";
+}
+
+// 書き直した SVG の知らせ（lib/svg-file.js の svgFileView の notices の 1 つ。倍率を変えたときと中身が変わったときの失敗）の文言。
+function svgNotice(n) {
+  return `表示し直せなかった（${n.kind === "restyle-timeout" ? "10 秒たっても読み込みが終わらなかった" : n.message}）`;
+}
+
+// 部分（図か SVG）のファイル file のタイル tile に書く SVG の全文。図は配置の大きさの SVG を、SVG は元の全文の根の要素を書き換える。
+function partSvg(part, colors, file, tile) {
+  if (part.type === "svg") return rewriteSvg(part.text, part.root, { width: file.width, height: file.height, tile: tilesOf(file).length > 1 ? tile : null });
+  const l = part.layout;
+  return diagramSvg(l, colors, { width: tile.width, height: tile.height, view: tileView(file, tile, l) });
 }
 
 function button(id, label, t, onClick, active = false) {
@@ -298,7 +313,8 @@ export default class FileViewer extends View {
     const found = md?.lostTile(name);
     if (!found) { this.seatUser.wrote(name, { ok: false }); return; }
     const l = found.part.layout;
-    await this.writeSeatTile(found.tile, diagramSvg(l, found.look.colors, { width: l.width, height: l.height }), found.file, l, cx);
+    if (found.part.type === "svg") await this.writeSeat(name, () => partSvg(found.part, null, found.file, found.tile), cx);
+    else await this.writeSeatTile(found.tile, diagramSvg(l, found.look.colors, { width: l.width, height: l.height }), found.file, l, cx);
     md.wrote(name, Date.now());
     this.awaitPreloads(md, cx);
   }
@@ -408,10 +424,15 @@ export default class FileViewer extends View {
     this.trackSeats(cx, [...(this.md?.keep() ?? []), ...(this.opening?.file ? tileNames(this.opening.file) : []), ...images]);
   }
 
-  // 図の SVG のタイル 1 枚を絵の席に書く（text: 配置の大きさの SVG。file: 図のファイル全体、layout: 配置の大きさ）。ほかのコピーが
-  // 書く絵の席か、ファイルが無くなって使う場所が書き直す絵の席を共有したなら、書き終わるのを待つ。書けなかったら例外。
+  // 図の SVG のタイル 1 枚を絵の席に書く（text: 配置の大きさの SVG。file: 図のファイル全体、layout: 配置の大きさ）。書けなかったら例外。
   async writeSeatTile(tile, text, file, layout, cx) {
-    const user = this.seatUser, name = tile.name;
+    await this.writeSeat(tile.name, () => resizeSvg(text, { width: tile.width, height: tile.height, view: tileView(file, tile, layout) }), cx);
+  }
+
+  // 絵の席 name に、make() が返す SVG の全文を書く。ほかのコピーが書く絵の席か、ファイルが無くなって使う場所が書き直す絵の席を
+  // 共有したなら、書かずに書き終わるのを待つ。書けなかったら例外。
+  async writeSeat(name, make, cx) {
+    const user = this.seatUser;
     if (!user.mustWrite(name)) {
       const until = Date.now() + 10_000;
       while (awaiting(this.seats, name) && Date.now() < until) await cx.sleep(50);
@@ -420,7 +441,7 @@ export default class FileViewer extends View {
     }
     user.writing(name);
     try {
-      await writeSeatText(name, resizeSvg(text, { width: tile.width, height: tile.height, view: tileView(file, tile, layout) }));
+      await writeSeatText(name, make());
       user.wrote(name, { ok: true });
     } catch (e) {
       user.wrote(name, { ok: false });
@@ -508,6 +529,7 @@ export default class FileViewer extends View {
     // 同じファイルを開き直すこと（A → B → A）もあるので、どの読み込みかは鍵ではなく回数で見分ける。
     const gen = this.loads = (this.loads ?? 0) + 1;
     this.md = null;
+    this.mdSvg = false;
     this.preparing = null;
     this.mdScroll = new BodyScroll();
     this.file?.editor?.release();
@@ -555,8 +577,9 @@ export default class FileViewer extends View {
   }
 
   // 画像は絵の席にコピーして表示する（copyPicture。コピーしている間は使っている絵に入れ、読み込んだ file を採るか捨てるときに外す）。
-  // SVG はソースも読んで Editor に入れる（1 MiB まで）。
+  // SVG は readSvg。
   async readImage(file, cx, hash = null) {
+    if (extension(file.path) === "svg") return this.readSvg(file, cx, hash);
     const r = await this.copyPicture(file, cx, hash);
     if (!r.exists) {
       file.missing = true;
@@ -569,18 +592,51 @@ export default class FileViewer extends View {
     file.cache = r.cache;
     file.base = r.base;
     file.zoom = new Zoom();
-    if (file.view.source) {
-      const text = await readText(file.path, file.machine);
-      if (text.text !== undefined) {
-        this.takeText(file, text.text, await this.notUtf8(text.text, file.path, file.machine));
-        file.base = text.base;
-      }
-    }
-    const header = base64ToBytes(r.header64 ?? "");
-    file.dims = file.text !== undefined ? imageSize({ svg: file.text })
-      : /svg$/i.test(file.path) ? imageSize({ svg: String.fromCharCode(...header.slice(0, 4096)) })
-      : imageSize({ bytes: header });
+    file.dims = imageSize({ bytes: base64ToBytes(r.header64 ?? "") });
     return file;
+  }
+
+  // SVG は全文を文字として読み（画像の上限まで）、1 MiB までは Editor にも入れる。画面に出す大きさで書き直したコピーで出す
+  // （仕様の「表示の大きさで書き直す」。中身を file.svg に置き、描画で見え方の決まりに渡す。syncSvg）。書かれた大きさが決められない
+  // SVG と UTF-8 として読めない SVG は、元のままコピーして出す（routeSvg）。変化の確かめの基準は、1 MiB までは文字のハッシュ、
+  // それより大きいものはほかの画像と同じ（readText の基準）。
+  async readSvg(file, cx, hash = null) {
+    const sig = await statOf(file.path, file.machine);
+    const r = sig ? await readText(file.path, file.machine, { limit: IMAGE_LIMIT }) : { exists: false };
+    if (!r.exists) {
+      file.missing = true;
+      file.view = { type: "unopenable", reason: "missing" };
+      return file;
+    }
+    file.size = r.size;
+    file.view = kind({ path: file.path, size: r.size });
+    if (file.view.type === "unopenable") { await this.sign(file); return file; }
+    const readonly = await this.notUtf8(r.text, file.path, file.machine);
+    if (file.view.source) this.takeText(file, r.text, readonly);
+    file.base = r.base;
+    file.zoom = new Zoom();
+    await this.routeSvg(file, { text: r.text, size: r.size, mtime: sig.slice(sig.indexOf("|") + 1), hash: r.base.hash, utf8: !readonly }, cx, hash);
+    return file;
+  }
+
+  // SVG の中身 content（{ text, size, mtime, hash, utf8 }）の出し方を決める（仕様の「表示の大きさで書き直す」）。書き直すもの
+  // （app が描けないものも、見え方の決まりが開けない案内にする）は file.svg に中身を置き、元のままコピーするもの（書かれた大きさが
+  // 決められない・UTF-8 として読めない）は絵の席にコピーして file.cache に置く（hash は copyPicture と同じ）。寸法は書かれた大きさ。
+  async routeSvg(file, content, cx, hash = null) {
+    const root = readSvgRoot(content.text);
+    file.dims = root.kind === "rewrite" ? { width: root.width, height: root.height } : null;
+    if (content.utf8 && root.kind !== "asis") {
+      file.svg = { text: content.text, key: svgSource({ machine: file.machine, path: file.path, size: content.size, mtime: content.mtime, hash: content.hash }) };
+      file.cache = null;
+      file.picture = null;
+      return;
+    }
+    file.svg = null;
+    const copy = await this.copyPicture(file, cx, hash);
+    file.cache = copy.cache ?? null;
+    if (copy.cache) return;
+    file.missing = !copy.exists;
+    file.view = copy.exists ? kind({ path: file.path, size: copy.size }) : { type: "unopenable", reason: "missing" };
   }
 
   // 画像を絵の席にコピーする。絵の席は machine・パス・大きさ・更新時刻の鍵で表から取り、同じ鍵の絵があればコピーせずに共有して、
@@ -710,7 +766,7 @@ export default class FileViewer extends View {
       // 古い読み直しのコピーも、描画が来なくても使っている絵の表を更新して手放す。
       if (this.loadedKey !== key || this.file !== file) { next.editor?.release(); this.trackPictures(cx); return; }
       const outcomeNow = () => reloadOutcome({
-        editor: Boolean(file.editor), image: Boolean(file.cache), edited: Boolean(file.editor) && file.editor.value() !== before, missing: Boolean(next.missing),
+        editor: Boolean(file.editor), image: Boolean(file.cache || file.svg), edited: Boolean(file.editor) && file.editor.value() !== before, missing: Boolean(next.missing),
       });
       // 読み込みの間に打った文字は捨てない。読み直さずに、ディスクが変わったことを知らせる。
       // 捨てる読み直しのコピーは、描画が来なくても使っている絵の表を更新して手放す。
@@ -956,17 +1012,29 @@ export default class FileViewer extends View {
       file.drafted = undefined;
       await deleteDraft(this.draftNameOf(file));
     }
-    // SVG のソースを保存したら、画像表示も新しい名前でコピーし直し、読み込み終えてから替える（前のコピーは手放す）。
-    if (file.cache) {
-      const incoming = { path: file.path, machine: file.machine };
-      const r = await this.copyPicture(incoming, cx).catch(() => null);
-      if (r?.cache && this.file === file) await this.whenImageLoaded(file, { picture: incoming.picture, cache: r.cache }, cx);
-      this.copying.delete(incoming.picture);
-      if (r?.cache && this.file === file) {
-        file.cache = r.cache;
-        file.picture = incoming.picture;
-        file.dims = imageSize({ svg: file.text }) ?? file.dims;
-      }
+    if (file.view?.type === "image" && extension(file.path) === "svg") await this.resaved(file, content, cx);
+  }
+
+  // SVG のソースを保存したら、画像表示も保存した中身（content）にする。書き直す SVG は中身を見え方の決まりに渡し（画像表示に
+  // 戻ったときに、今の倍率のまま書いて差し替える。syncSvg）、元のままコピーする SVG は新しい名前でコピーし直し、読み込み終えてから
+  // 替える（前のコピーは手放す）。保存した中身は Editor から書いたので UTF-8。
+  async resaved(file, content, cx) {
+    const sig = await statOf(file.path, file.machine).catch(() => null);
+    if (this.file !== file) return;
+    if (readSvgRoot(content).kind !== "asis" && sig) {
+      const size = Number(sig.split("|")[0]), mtime = sig.slice(sig.indexOf("|") + 1);
+      await this.routeSvg(file, { text: content, size, mtime, hash: file.base.hash, utf8: true }, cx);
+      return;
+    }
+    const incoming = { path: file.path, machine: file.machine };
+    const r = await this.copyPicture(incoming, cx).catch(() => null);
+    if (r?.cache && this.file === file) await this.whenImageLoaded(file, { picture: incoming.picture, cache: r.cache }, cx);
+    this.copying.delete(incoming.picture);
+    if (r?.cache && this.file === file) {
+      file.cache = r.cache;
+      file.picture = incoming.picture;
+      file.svg = null;
+      file.dims = imageSize({ svg: content });
     }
   }
 
@@ -1080,6 +1148,7 @@ export default class FileViewer extends View {
     const returned = shownNow && !this.wasVisible;
     this.wasVisible = shownNow;
     this.syncMarkdown(rec, t, cx);
+    this.syncSvg(rec, cx);
     this.trackPictures(cx);
 
     return v_flex().id("fv-root").relative().size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
@@ -1096,7 +1165,8 @@ export default class FileViewer extends View {
     const source = this.showsSource(rec);
     const md = type === "markdown" ? this.md?.display() : null;
     const isCode = type === "code" || ((type === "markdown" || type === "image" || type === "mermaid") && source && file?.editor);
-    const isImage = type === "image" && !source;
+    // 書き直す SVG を開けなかったとき（開けない案内）は、寸法とズームを出さない。
+    const isImage = type === "image" && !source && this.svgView()?.kind !== "error";
     return h_flex().id("fv-toolbar").h(34).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border)
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(file?.path ?? ""))
       .when(Boolean(rec?.preview), (el) => el.child(button("fv-pin", "固定", t, (cx) => { putRecord(this.token, { preview: false }); cx.notify(); })))
@@ -1140,6 +1210,9 @@ export default class FileViewer extends View {
     for (const [i, m] of shownNotices.entries()) {
       out.push(this.banner(`fv-md-notice-${i}`, markdownNotice(m), t, m.kind === "over" ? t.working : t.blocked));
     }
+    // 書き直した SVG の書き直しの失敗（知らせるだけのもの。画像表示のときだけ出し、次に書けたら消える）。
+    const svg = file.view?.type === "image" && !(this.showsSource(record(this.token)) && file.editor) ? this.svgView() : null;
+    for (const [i, m] of (svg?.notices ?? []).entries()) out.push(this.banner(`fv-svg-notice-${i}`, svgNotice(m), t, t.blocked));
     for (const [i, d] of (file.drafts ?? []).entries()) {
       out.push(h_flex().id(`fv-draft-${i}`).flex_none().px(12).py(6).gap(8).items_center().border_b(1).border_color(t.border).bg(t.raised)
         .child(div().w(3).h(16).flex_none().rounded(2).bg(t.accent))
@@ -1200,6 +1273,39 @@ export default class FileViewer extends View {
   freshSeat(md, name) {
     md?.fresh(name);
     this.seatTurns.set(name, (this.seatTurns.get(name) ?? 0) + 1);
+  }
+
+  // 描画のたびに、書き直す SVG の今の中身（file.svg）と見た目（倍率か枠に収める倍率）を見え方の決まり（lib/svg-file.js）に渡し、
+  // 書くものがあれば描画の外で進める（.mmd と同じ。syncMarkdown）。ソース表示の間は渡さず、画像表示に戻ったときに今の中身で書き直す。
+  // 元のままコピーする SVG（file.svg が無い）に替わったら、見え方の決まりを捨てる（その絵の席は使っている絵から外れて手放される）。
+  syncSvg(rec, cx) {
+    const file = this.file;
+    if (!file || file.loading || !file.svg) {
+      if (this.mdSvg) { this.md = null; this.mdSvg = false; }
+      return;
+    }
+    if (this.showsSource(rec) && file.editor) return;
+    // 図と同じく、書く面積の上限に収まる倍率までにする（元のままコピーするコピーから替わったときも）。
+    file.zoom.maxScale = diagramMaxScale;
+    const viewport = window.viewport_size();
+    const look = svgLook(file.zoom, file.dims ?? { width: 1, height: 1 }, { width: viewport.width, height: viewport.height });
+    if (!this.mdSvg || !this.md) {
+      let md = null;
+      const fileOf = (part, look) => diagramFile((key) => this.seatUser.nameOf(key, (name) => this.freshSeat(md, name)), part, look);
+      md = this.md = svgFileState({ fileOf, preloadWait: SEAT_SETTLE_MS });
+      this.mdSvg = true;
+      md.setLook(look);
+      md.open(file.svg);
+    } else {
+      this.md.setLook(look);
+      this.md.sync(file.svg);
+    }
+    if (this.md.needsRun && !this.preparing && this.visible()) this.runPreparation(cx);
+  }
+
+  // 書き直す SVG の出し方（lib/svg-file.js の svgFileView）。書き直す SVG でなければ null。
+  svgView() {
+    return this.file?.svg && this.mdSvg && this.md ? svgFileView(this.md.display()) : null;
   }
 
   // 整形の準備の決まり（this.md）で出すファイルの種類（"markdown" | "mermaid"）。ほかは null。
@@ -1325,11 +1431,10 @@ export default class FileViewer extends View {
       else md.refresh();
       return;
     }
-    const colors = md.look.colors, l = task.part.layout;
     user.writing(name);
     try {
       this.ensureRecord();
-      await writeSeatText(name, diagramSvg(l, colors, { width: task.width, height: task.height, view: tileView(task.file, task, l) }));
+      await writeSeatText(name, partSvg(task.part, md.look.colors, task.file, task));
       user.wrote(name, { ok: true });
       md.wrote(name, Date.now());
     } catch (e) {
@@ -1592,7 +1697,12 @@ export default class FileViewer extends View {
     const view = file.view;
     if (view.type === "unopenable") return this.unopenable(file, view, t);
     if (view.type === "image" && !(this.showsSource(rec) && file.editor)) {
-      return imageBody({ file, t });
+      // 書き直す SVG の開くときの失敗と、app が描けない SVG は、ソース表示のボタンを残したまま開けない案内（読み込みの失敗と理由）を出す。
+      const svg = this.svgView();
+      if (svg?.kind === "error") return this.unopenable(file, { type: "unopenable", reason: "error", message: svg.message }, t);
+      // 書き直す SVG の中身は、読んだときに元のままコピーするものと分けてあるので、元のまま（asis）はここに来ない。
+      if (svg?.kind === "asis" || (!svg && !file.cache)) return div().p(16).text_color(t.dim).child("表示できない");
+      return imageBody({ file, svg, t });
     }
     if (view.type === "markdown" && file.editor && !this.showsSource(rec)) {
       const md = this.md.display();
