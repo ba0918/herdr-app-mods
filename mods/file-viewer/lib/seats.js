@@ -13,7 +13,7 @@ export const IMAGES_DIR = "mods/file-viewer-images";
 export const SEATS_VERSION = 1;
 const HOLDER_KEY = "__fileViewerSeatTable";
 // 初めに作る絵の席の数: 上限ちょうどの図の文書でテーマを替える間は前と新しい色の絵の席を両方使うので図の数の 2 倍。そのあと拡大の窓の
-// 2 つ（開いた絵と倍率を替えた絵）を使う。8 は差し替えが重なるときのゆとり。
+// 2 つ（開いた絵と倍率を替えた絵）と、image viewer の SVG の 2 つ（前と新しい倍率の絵）を使う。8 は差し替えが重なるときのゆとり。
 export const INITIAL_SEATS = RENDER_LIMIT.diagrams * 2 + 8;
 export const GROW_SEATS = 64;
 // 最後の見張りの回からこれだけたった世代は止まったものとして、その書いている途中・手放し中の印を扱う。

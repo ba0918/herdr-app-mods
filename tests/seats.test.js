@@ -631,7 +631,7 @@ describe("消えた絵の席", () => {
 });
 
 describe("初めの数で足りること", () => {
-  test("図の数が上限ちょうどの本文でテーマを替え、窓で 1 つの図を開いて倍率を 1 回替える間、増やす指示が一度も返らない", () => {
+  test("図の数が上限ちょうどの本文でテーマを替え、窓で 1 つの図を開いて倍率を 1 回替え、image viewer で SVG を 1 つ開いて倍率を 1 回替える間、増やす指示が一度も返らない", () => {
     const { table } = ready(INITIAL_SEATS);
     const n = RENDER_LIMIT.diagrams;
     const owner = own(body1);
@@ -654,6 +654,16 @@ describe("初めの数で足りること", () => {
     const scaled = get(w, "図0|B|s2").name;
     use(table, win1, [scaled]);
     rendered(table, win1);
+    // image viewer の SVG を 1 つ開いて倍率を 1 回替える。差し替えの間は前と新しい絵の席を両方使う。
+    const viewer = own(body2);
+    const before = get(viewer, "svg|s1").name;
+    use(table, body2, [before]);
+    rendered(table, body2);
+    const after = get(viewer, "svg|s2").name;
+    use(table, body2, [before, after]);
+    rendered(table, body2);
+    use(table, body2, [after]);
+    rendered(table, body2);
     expect(grows).toEqual([]);
   });
 });
