@@ -7,7 +7,7 @@ import { MarkdownState } from "./markdown-state.js";
 import { scaleLook, fitLook, maxSvgScale, svgDrawable } from "./diagram-files.js";
 
 // content の準備。1 単位（根の要素を読む）で終わる。parts は SVG の部分 1 つ: { type: "svg", source, text, root, layout }。
-// layout の無い部分は書き直さない: 書かれた大きさが決められない SVG は asis（元のままコピーする）、app が描けない SVG と、書く大きさの
+// layout（{ width, height, styled }。styled は CSS を持つか）の無い部分は書き直さない: 書かれた大きさが決められない SVG は asis（元のままコピーする）、app が描けない SVG と、書く大きさの
 // 上限の中で短い辺が 1 px に満たないほど縦横の比が極端な SVG は error（{ message }）を持つ。
 export function startSvgPreparation(content) {
   const prep = {
@@ -16,7 +16,7 @@ export function startSvgPreparation(content) {
       if (!prep.done) {
         const root = readSvgRoot(content.text);
         const part = { type: "svg", source: content.key, text: content.text, root };
-        const layout = root.kind === "rewrite" ? { width: root.width, height: root.height } : null;
+        const layout = root.kind === "rewrite" ? { width: root.width, height: root.height, styled: root.styled } : null;
         if (layout && svgDrawable(layout)) part.layout = layout;
         else if (layout) part.error = { message: "縦横の比が極端で表示できない" };
         else if (root.kind === "asis") part.asis = true;

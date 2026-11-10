@@ -44,8 +44,11 @@ export function maxDiagramScale(layout) {
 
 // 書き直す SVG の、倍率の上限。面積が MAX_AREA に、長い辺が MAX_TILES 枚のタイルの長さに収まる倍率（面積が収まれば、長い辺が
 // TILE_SIDE を超えるとき短い辺は TILE_SIDE より短く、タイルは 1 列に並ぶので、長い辺の上限がタイルの数の上限になる）。
+// CSS を持つ SVG（layout.styled）はタイルに分けず、長い辺が TILE_SIDE に収まる倍率まで（タイルは元の根を外側の svg で包むので、
+// CSS の祖先の関係が変わり、倍率によって当たる CSS が変わりうる。lib/svg-root.js の rewriteSvg）。
 export function maxSvgScale(layout) {
-  return Math.min(maxDiagramScale(layout), (MAX_TILES * TILE_SIDE) / Math.max(layout.width, layout.height));
+  const side = layout.styled ? TILE_SIDE : MAX_TILES * TILE_SIDE;
+  return Math.min(maxDiagramScale(layout), side / Math.max(layout.width, layout.height));
 }
 
 // 書き直す SVG を、上限の倍率で短い辺が 1 px 以上に書けるか（縦横の比が極端でないか）。
