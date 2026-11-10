@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PictureNames, PictureTable, ReleaseQueue, parsePictureName, sweepTargets, ownStale, oldCacheNames, companionInstalled, tinyPicture, IMAGES_DIR } from "../mods/file-viewer/lib/pictures.js";
+import { PictureNames, PictureTable, ReleaseQueue, parsePictureName, sweepTargets, ownStale, oldCacheNames, tinyPicture, IMAGES_DIR } from "../mods/file-viewer/lib/pictures.js";
 
 // 仕様の「画像の置き場所」の確かめ方: 名前の決め方は単体テストで確かめる。
 const TOKEN = "3f2b9c1e-8a7d-4e6f-9b0c-1d2e3f4a5b6c";
@@ -278,14 +278,6 @@ describe("前の置き場所で消すファイル", () => {
     const old = [`${TOKEN}-0123456789ab.svg`, `${TOKEN}~z1a-abcdef012345.svg`, `${TOKEN}-0123456789ab.png.b64`];
     const others = ["notes.txt", new PictureNames({ token: TOKEN, clock: () => 1 }).next("svg"), "desktop.ini"];
     expect(oldCacheNames([...old, ...others])).toEqual(old);
-  });
-});
-
-describe("付き添いの mod", () => {
-  test("main.js と mod.json の両方があるときだけ入っている", () => {
-    expect(companionInstalled({ main: true, mod: true })).toBe(true);
-    expect(companionInstalled({ main: true, mod: false })).toBe(false);
-    expect(companionInstalled({ main: false, mod: true })).toBe(false);
   });
 });
 

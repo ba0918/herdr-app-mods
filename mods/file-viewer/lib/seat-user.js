@@ -17,17 +17,25 @@ export class SeatUser {
   // 鍵 key の絵の席の名前。このコピーが新しく使い始めた名前なら fresh(name) を呼ぶ（呼ぶ側は、その名前の絵を書いた・読み込んだ
   // ことを忘れる。手放したあとに同じ名前が別の絵に使われるので）。割り当てられなければ、絵の席の名前の形でない仮の名前を返す。
   nameOf(key, fresh) {
-    const r = acquire(this.table, this.owner, key);
-    if (r.name === undefined) {
-      this.blocked ??= r.grow ? { grow: r.grow } : { wait: r.wait };
-      return `waiting-${++this.waits}`;
-    }
-    if (r.write) this.mine.add(r.name);
+    const r = this.take(key);
+    if (r.name === undefined) return `waiting-${++this.waits}`;
     if (!this.held.has(r.name)) {
       this.held.add(r.name);
       fresh?.(r.name);
     }
     return r.name;
+  }
+
+  // 鍵 key の絵の席を取る（lib/seats.js の acquire の結果。画像のコピーのように、共有した絵の席の中身の情報が要るときに使う）。
+  // 割り当てられなければ name は無く、待つわけを blocked に覚える。
+  take(key) {
+    const r = acquire(this.table, this.owner, key);
+    if (r.name === undefined) {
+      this.blocked ??= r.grow ? { grow: r.grow } : { wait: r.wait };
+      return r;
+    }
+    if (r.write) this.mine.add(r.name);
+    return r;
   }
 
   // name を書くのはこのコピーか（書く印を受けて、まだ書き終えていない）。

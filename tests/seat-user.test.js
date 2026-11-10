@@ -87,3 +87,23 @@ describe("使っている絵の席を渡す", () => {
     expect(seen).toEqual([name, name]);
   });
 });
+
+describe("画像のコピーの絵の席を取る", () => {
+  test("割り当ての結果をそのまま返し、空きを割り当てたときだけ自分が書く絵の席になる", () => {
+    const table = ready();
+    const a = user(table), b = user(table, T2);
+    const r = a.take("画像A");
+    expect(r).toMatchObject({ write: true });
+    expect(a.mustWrite(r.name)).toBe(true);
+    a.wrote(r.name, { ok: true, info: { size: 3 } });
+    expect(b.take("画像A")).toMatchObject({ name: r.name, write: false, writing: false, info: { size: 3 } });
+    expect(b.mustWrite(r.name)).toBe(false);
+  });
+
+  test("割り当てを待つ間は名前を返さず、待っているわけを覚える", () => {
+    const a = user(ensureTable({}, 0));
+    expect(a.take("画像A").name).toBeUndefined();
+    expect(a.blocked).toEqual({ wait: "init" });
+  });
+});
+

@@ -14,11 +14,9 @@ export function extension(path) {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
 
-// companion: 付き添いの mod が入っているか（画像のコピーの置き場所。入っていなければ画像は開けないファイル）。
-export function kind({ path, size, text, companion = true }) {
+export function kind({ path, size, text }) {
   const ext = extension(path);
   if (IMAGE.has(ext)) {
-    if (!companion) return { type: "unopenable", reason: "companion" };
     if (size > IMAGE_LIMIT) return { type: "unopenable", reason: "too-large", limit: IMAGE_LIMIT };
     return { type: "image", source: ext === "svg" && size <= TEXT_LIMIT };
   }
@@ -33,7 +31,6 @@ export function unopenableReason(view, size) {
   if (view.reason === "binary") return "バイナリのため表示できない";
   if (view.reason === "too-large") return limitMessage({ limit: view.limit, size });
   if (view.reason === "missing") return "ファイルが無くなった";
-  if (view.reason === "companion") return "付き添いの mod が入っていない";
   return `読み込めなかった: ${view.message ?? ""}`;
 }
 

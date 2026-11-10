@@ -10,7 +10,7 @@ import { base64ToBytes } from "./lib/image.js";
 import { createDraftStore } from "./lib/draft-store.js";
 import { utf8Checker } from "./lib/utf8.js";
 
-import { IMAGES_DIR, OLD_CACHE_DIR, companionInstalled, tinyPicture } from "./lib/pictures.js";
+import { IMAGES_DIR, OLD_CACHE_DIR, tinyPicture } from "./lib/pictures.js";
 import { IMAGES_DIR as SEATS_DIR, TINY_SVG } from "./lib/seats.js";
 
 export const DRAFTS_DIR = "file-viewer-drafts";
@@ -201,17 +201,20 @@ printf '%s\\n' "$h"; ${STAT.replace('"$1"', '"$real"')}`;
   return { hash, stat };
 }
 
-// 画像を付き添いの mod のフォルダに name の名前でコピーする（image() は app home の相対パスしか出せない。フォルダは作らない）。
-// { exists, size, base, cache: "mods/file-viewer-images/<name>", header: Uint8Array }。上限超えは cache なし。
-export async function copyImage(path, on, name) {
+// 画像を絵の席 seat にコピーする（image() は app home の相対パスしか出せない）。絵の席のファイルを作り直さずにその場で書く（すでにある
+// ファイルの書き換えはフォルダの変化の知らせを出さず、同じフォルダのほかの絵が空白にならない。ガイドの「フォルダの変化の知らせ」）。
+// このコンピュータのファイルは 1 回の PowerShell で読んで書き、ほかの machine のファイルは base64 で受け取って区切りながらバイト列に戻し、
+// fs.writeFile で書く（Uint8Array はそのまま書ける。ガイドの「fs/promises の writeFile」）。
+// { exists, size, base, cache: "mods/file-viewer-images/<seat>", header64: 先頭のバイトの base64 }。上限超えは cache なし。
+export async function copyImage(path, on, seat) {
   if (!on) {
     const r = await exec("powershell", ["-NoProfile", "-Command",
-      `$ErrorActionPreference='Stop'; $p=${psQuote(path)}; if (-not (Test-Path -LiteralPath $p)) { exit 4 }; $b=[IO.File]::ReadAllBytes($p); $h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower(); "$($b.Length)"; $h; if ($b.Length -le ${IMAGE_LIMIT}) { [IO.File]::WriteAllBytes(${psQuote(picturePath(name))}, $b); [Convert]::ToBase64String($b, 0, [Math]::Min($b.Length, ${HEADER_BYTES})) }`]);
+      `$ErrorActionPreference='Stop'; $p=${psQuote(path)}; if (-not (Test-Path -LiteralPath $p)) { exit 4 }; $b=[IO.File]::ReadAllBytes($p); $h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower(); "$($b.Length)"; $h; if ($b.Length -le ${IMAGE_LIMIT}) { $f=[IO.File]::Open(${psQuote(seatPath(seat).replace(/\//g, "\\"))}, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write); try { $f.Write($b, 0, $b.Length); $f.SetLength($b.Length) } finally { $f.Close() }; [Convert]::ToBase64String($b, 0, [Math]::Min($b.Length, ${HEADER_BYTES})) }`]);
     if (r.code === 4) return { exists: false };
     if (r.code !== 0) throw new Error(r.stderr.trim() || "画像を読めなかった");
-    const [[size, hash, header]] = splitHead(r.stdout.replace(/\r/g, ""), 3);
+    const [[size, hash, header64]] = splitHead(r.stdout.replace(/\r/g, ""), 3);
     if (Number(size) > IMAGE_LIMIT) return { exists: true, size: Number(size) };
-    return { exists: true, size: Number(size), base: { hash, stat: null, bytes: true }, cache: `${IMAGES_DIR}/${name}`, header: base64ToBytes(header) };
+    return { exists: true, size: Number(size), base: { hash, stat: null, bytes: true }, cache: `${SEATS_DIR}/${seat}`, header64 };
   }
   const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; base64 -w0 -- "$1"`;
   const r = await sh(on, script, [path, String(IMAGE_LIMIT)]);
@@ -220,13 +223,24 @@ export async function copyImage(path, on, name) {
   const [[stat, hash], data] = splitHead(r.stdout, 2);
   const size = sizeOf(stat);
   if (size > IMAGE_LIMIT) return { exists: true, size };
-  // mod からはバイナリを書けない（Uint8Array は 0 バイトになる）ので、base64 の文字列を <name>.b64 に書いて PowerShell で戻す。
-  const b64 = picturePath(`${name}.b64`);
-  await fs.writeFile(b64, data);
-  const d = await exec("powershell", ["-NoProfile", "-Command",
-    `$ErrorActionPreference='Stop'; [IO.File]::WriteAllBytes(${psQuote(picturePath(name))}, [Convert]::FromBase64String([IO.File]::ReadAllText(${psQuote(b64)}))); Remove-Item -LiteralPath ${psQuote(b64)}`]);
-  if (d.code !== 0) throw new Error(d.stderr.trim() || "画像のコピーに失敗した");
-  return { exists: true, size, base: { hash, stat }, cache: `${IMAGES_DIR}/${name}`, header: base64ToBytes(data, HEADER_BYTES) };
+  await fs.writeFile(seatPath(seat), await decodeBase64(data, size));
+  return { exists: true, size, base: { hash, stat }, cache: `${SEATS_DIR}/${seat}`, header64: data.slice(0, Math.ceil(HEADER_BYTES / 3) * 4) };
+}
+
+// base64 の文字列を、区切りながら（区切りごとに入出力を待って）バイト列に戻す（QuickJS は長い同期処理を黙って止めるので。
+// ガイドの「長い同期処理」）。size: 戻したバイト数の見込み。
+const DECODE_CHARS = 256 * 1024;
+async function decodeBase64(text, size) {
+  let out = new Uint8Array(size);
+  let at = 0;
+  for (let i = 0; i < text.length; i += DECODE_CHARS) {
+    const part = base64ToBytes(text.slice(i, i + DECODE_CHARS));
+    if (at + part.length > out.length) { const grown = new Uint8Array(at + part.length); grown.set(out.subarray(0, at)); out = grown; }
+    out.set(part, at);
+    at += part.length;
+    await pauseForApp();
+  }
+  return at === out.length ? out : out.slice(0, at);
 }
 
 // ---- 前の置き場所（app home 直下の file-viewer-cache/。片付けるだけ） ----
@@ -277,13 +291,6 @@ export async function writeTinySeats(names) {
 
 const picturesDir = () => `${appHome()}/${IMAGES_DIR}`;
 const picturePath = (name) => `${picturesDir()}/${name}`;
-
-// 付き添いの mod が入っているか（main.js と mod.json の両方があるか）。file-viewer はこのフォルダを作らない。
-export async function companionPresent() {
-  const main = await fs.exists(`${picturesDir()}/main.js`).catch(() => false);
-  const mod = await fs.exists(`${picturesDir()}/mod.json`).catch(() => false);
-  return companionInstalled({ main, mod });
-}
 
 // 文字列の絵のファイル（図の SVG）を書く。フォルダが無ければ失敗する（作らない）。
 export async function writePictureText(name, text) {

@@ -230,12 +230,6 @@ export function oldCacheNames(names) {
   return names.filter((name) => OLD_CACHE_NAME.test(name));
 }
 
-// 付き添いの mod が入っているか（mods/file-viewer-images/ に main.js と mod.json の両方があるか）。
-export function companionInstalled({ main, mod }) {
-  return Boolean(main && mod);
-}
-
-
 // 手放すときに書く、ごく小さい同じ形式の絵（1 × 1）。SVG は文字列 { text }、ほかは base64 { base64 }（mod からはバイナリを書けないので、
 // PowerShell でバイト列に戻して書く）。png・jpg・gif・bmp・ico（png を包んだもの）・webp は ffmpeg で作り、どれも書き換えると
 // app が前の絵を放した（ガイドの「image(path) のメモリ」）。

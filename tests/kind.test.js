@@ -43,19 +43,9 @@ describe("kind", () => {
   });
 });
 
-// 仕様の「開けないファイル」: 画像で付き添いの mod が入っていないときは、内容の代わりに理由を出す。
-describe("付き添いの mod が入っていないときの画像", () => {
-  test("画像（SVG を含む）は、開けないファイルの理由「付き添いの mod が入っていない」になる", () => {
-    expect(kind({ path: "/r/a.png", size: 100, companion: false })).toEqual({ type: "unopenable", reason: "companion" });
-    expect(kind({ path: "/r/icon.svg", size: 100, companion: false })).toEqual({ type: "unopenable", reason: "companion" });
-    expect(unopenableReason({ type: "unopenable", reason: "companion" })).toBe("付き添いの mod が入っていない");
-  });
-
-  test("画像でないファイルは、付き添いの mod が無くても今までどおり", () => {
-    expect(kind({ path: "/r/a.md", size: 4, text: "# a", companion: false })).toEqual({ type: "markdown", source: true });
-  });
-
-  test("ほかの開けない理由の文言は今までどおり", () => {
+// 仕様の「開けないファイル」: 内容の代わりに出す理由。
+describe("開けない理由の文言", () => {
+  test("バイナリ・無くなった・読み込めなかったの文言", () => {
     expect(unopenableReason({ type: "unopenable", reason: "binary" })).toBe("バイナリのため表示できない");
     expect(unopenableReason({ type: "unopenable", reason: "missing" })).toBe("ファイルが無くなった");
     expect(unopenableReason({ type: "unopenable", reason: "error", message: "x" })).toBe("読み込めなかった: x");
