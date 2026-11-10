@@ -132,13 +132,14 @@ function side(l, box) {
 // 根の要素の名前の、名前空間の接頭辞を除いた部分。
 const localName = (name) => name.slice(name.indexOf(":") + 1);
 
-// CSS を持つか: <style> 要素（名前空間の接頭辞つきも）か style 属性がどこかにある。コメントや文字の中のものも数える（タイルに
-// 分けない側に倒れるだけ）。全文に 1 回当てるので、後戻りが長さに比例しない形にする。
-const STYLED = /<(?:\w[\w.-]*:)?style[\s/>]|\sstyle\s*=/;
+// <style> 要素（名前空間の接頭辞つきも）がどこかにあるか。コメントや文字の中のものも数える（タイルに分けない側に倒れるだけ）。
+// style 属性は数えない（書かれた要素にだけ当たり、祖先の関係に左右されず、タイルの外側の svg は何も設定しないので、包んでも当たり方は
+// 変わらない）。全文に 1 回当てるので、後戻りが長さに比例しない形にする。
+const STYLED = /<(?:\w[\w.-]*:)?style[\s/>]/;
 
 // SVG の全文 text の根の要素を読む。
-//   { kind: "rewrite", width, height, styled, ... }: 書かれた大きさ（px）が決まる。表示の大きさで書き直す（rewriteSvg）。styled: CSS を
-//   持つか（<style> 要素か style 属性。タイルで包むと CSS の祖先の関係が変わるので、タイルに分けない。lib/diagram-files.js の maxSvgScale）。
+//   { kind: "rewrite", width, height, styled, ... }: 書かれた大きさ（px）が決まる。表示の大きさで書き直す（rewriteSvg）。styled: <style>
+//   要素を持つか（タイルで包むと CSS の祖先の関係が変わるので、タイルに分けない。lib/diagram-files.js の maxSvgScale）。
 //   { kind: "asis" }: 書かれた大きさが決められない（width か height が無いか % で、viewBox も無い）。元のままコピーする。
 //   { kind: "unopenable", reason }: app が描けない（根が見つからない・svg でない・書かれた大きさが 0 以下）。
 export function readSvgRoot(text) {

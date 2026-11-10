@@ -152,12 +152,11 @@ describe("タイル", () => {
     expect(new Set(f.tiles.map((t) => t.name)).size).toBe(2);
   });
 
-  // タイルは元の根を外側の svg で包むので、CSS の祖先の関係（svg svg rect など）が変わり、倍率で色などが変わりうる。
-  test("<style> 要素か style 属性を持つ SVG はタイルに分けず、書く大きさの長い辺が 4,096 px を超えない倍率までにする", () => {
+  // タイルは元の根を外側の svg で包むので、<style> 要素の CSS の祖先の関係（svg svg rect など）が変わり、倍率で色などが変わりうる。
+  test("<style> 要素を持つ SVG はタイルに分けず、書く大きさの長い辺が 4,096 px を超えない倍率までにする", () => {
     const styled = [
       `<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800"><style>svg svg rect { fill: red }</style><rect width="1" height="1"/></svg>`,
-      `<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800"><rect style="fill: red" width="1" height="1"/></svg>`,
-      `<svg xmlns="http://www.w3.org/2000/svg" style="fill: red" width="8000" height="800"><rect width="1" height="1"/></svg>`,
+      `<svg:svg xmlns:svg="http://www.w3.org/2000/svg" width="8000" height="800"><svg:style>svg svg rect { fill: red }</svg:style><svg:rect width="1" height="1"/></svg:svg>`,
     ];
     for (const text of styled) {
       const prep = startSvgPreparation(content(text));
@@ -172,10 +171,23 @@ describe("タイル", () => {
       expect(most.tiles.length).toBe(1);
       expect(Math.max(most.width, most.height)).toBeLessThanOrEqual(TILE_SIDE);
     }
-    const plain = startSvgPreparation(content(svg(8000, 800)));
-    plain.advance(100, () => 0);
-    const f = diagramFile(names(), plain.parts[0], svgLook({ fit: false, scale: 1, view: null, fitMax: 1 }, plain.parts[0].layout, { width: 1280, height: 820 }));
-    expect(f.tiles.length).toBe(2);
+  });
+
+  // style 属性は書かれた要素にだけ当たり、外側の svg は何も設定しないので、包んでも当たり方は変わらない。
+  test("style 属性だけを持つ SVG と CSS を持たない SVG は、8,000 × 800 を倍率 1 でタイルに分ける", () => {
+    const plain = [
+      svg(8000, 800),
+      `<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800"><rect style="fill: red" width="1" height="1"/></svg>`,
+      `<svg xmlns="http://www.w3.org/2000/svg" style="fill: red" width="8000" height="800"><rect width="1" height="1"/></svg>`,
+    ];
+    for (const text of plain) {
+      const prep = startSvgPreparation(content(text));
+      prep.advance(100, () => 0);
+      const z = { fit: false, scale: 1, view: null, fitMax: 1 };
+      const f = diagramFile(names(), prep.parts[0], svgLook(z, prep.parts[0].layout, { width: 1280, height: 820 }));
+      expect(f.tiles.length).toBe(2);
+      expect(z.scale).toBe(1);
+    }
   });
 });
 

@@ -49,7 +49,7 @@ const tileNames = (f) => tilesOf(f).map((t) => t.name);
 // 図の拡大（拡大の窓・.mmd）の倍率の上限: 書き出す絵の面積の上限に収まる倍率（lib/diagram-files.js）。
 const diagramMaxScale = (width, height) => maxDiagramScale({ width, height });
 const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: diagramMaxScale });
-// 書き直す SVG の倍率の上限（CSS を持つ SVG はタイルに分けない上限。file.dims の styled）。
+// 書き直す SVG の倍率の上限（<style> 要素を持つ SVG はタイルに分けない上限。file.dims の styled）。
 const svgMaxScale = (file) => (width, height) => maxSvgScale({ width, height, styled: Boolean(file.dims?.styled) });
 // 絵の席に書き終えてから、見えない所で読み込ませるまで待つ時間。書いた絵自身の変化の知らせが読み込みのあとに届くと、読み込んだ絵が
 // 捨てられて一瞬空白になる（ガイドの「フォルダの変化の知らせ」。250 ms 待てば空白が出なかった）。

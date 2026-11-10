@@ -7,7 +7,7 @@ import { MarkdownState } from "./markdown-state.js";
 import { scaleLook, fitLook, maxSvgScale, svgDrawable } from "./diagram-files.js";
 
 // content の準備。1 単位（根の要素を読む）で終わる。parts は SVG の部分 1 つ: { type: "svg", source, text, root, layout }。
-// layout（{ width, height, styled }。styled は CSS を持つか）の無い部分は書き直さない: 書かれた大きさが決められない SVG は asis（元のままコピーする）、app が描けない SVG と、書く大きさの
+// layout（{ width, height, styled }。styled は <style> 要素を持つか）の無い部分は書き直さない: 書かれた大きさが決められない SVG は asis（元のままコピーする）、app が描けない SVG と、書く大きさの
 // 上限の中で短い辺が 1 px に満たないほど縦横の比が極端な SVG は error（{ message }）を持つ。
 export function startSvgPreparation(content) {
   const prep = {
