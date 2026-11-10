@@ -66,7 +66,8 @@ export function ensureTable(holder, now, { poll = 0 } = {}) {
 }
 
 // 状態: free（ごく小さい絵）、writing（owner が鍵の絵を書いている途中）、ready（鍵の絵がある）、releasing（owner がごく小さい絵で
-// 上書きしている途中。by が無ければ、ごく小さい絵で上書きできなかったので、次の手放しでもう一度上書きする）、dirty（中身が分からない。使わなくなったら手放す）、lost（ファイルが無くなった。使う場所が書き直す。
+// 上書きしている途中。by が無ければ、ごく小さい絵で上書きできなかったか、どこも使わなくなった無くなった絵の席なので、次の手放しで
+// 上書きする）、dirty（中身が分からない。使わなくなったら手放す）、lost（ファイルが無くなった。使う場所が書き直す。
 // 書いたことのない中身の分からない絵の席なら鍵は無い）。rewrite: writing のうち、無くなった絵の席の書き直し（書けなければ lost に戻る）。
 const seat = (state) => ({ state, key: null, by: null, info: null, rewrite: false });
 
@@ -138,13 +139,20 @@ function beginRelease(table, name, owner) {
   for (const p of Object.values(table.places)) delete p.dropped[name];
 }
 
+// 鍵を外し、ごく小さい絵で上書きできなかった絵の席と同じに、次の手放しで上書きする（ファイルが無ければ作る）。
+function releaseAgain(table, name) {
+  dropKey(table, name);
+  table.seats[name].state = "releasing";
+  table.seats[name].by = null;
+}
+
 // owner が鍵 key の絵を使う。返す値:
 // { name, write: true }: 空きの絵の席を割り当てた。owner が書き、wrote を呼ぶ。
 // { name, write: false, info }: 同じ鍵の絵がある（共有する。書き直さない）。writing: true なら、ほかのコピーが書いている途中か、
 //   ファイルが無くなって使う場所が書き直すのを待っている（awaiting）ので、書き終わるまで待つ。無くなった絵の席がどこの集まりにも
-//   無ければ共有せず、鍵を外して使っていない絵の席を割り当てる（無くなった絵の席は scan がごく小さい絵で作る）。
+//   無ければ共有せず、使っていない絵の席を割り当てる（無くなった絵の席は鍵を外し、次の手放しでごく小さい絵で上書きする。releaseAgain）。
 // { wait: "init" | "grow" }: 初めての手放しか、絵の席を増やしている途中。あとでもう一度求める。
-// { wait: "release" }: 空きが無く、ごく小さい絵で上書きできなかった絵の席がある（増やさずに、それを手放し直してから求める。上書きが
+// { wait: "release" }: 空きが無く、ごく小さい絵で上書きし直す絵の席がある（増やさずに、それを手放し直してから求める。上書きが
 //   続けて失敗しても絵の席を増やし続けないように）。
 // { grow: names }: 空きが無い。owner がその名前の絵の席をごく小さい絵で作り、grown を呼んでから、もう一度求める。
 // どれも、得た絵の席を owner の使う場所の集まりに入れる。
@@ -152,7 +160,7 @@ export function acquire(table, owner, key) {
   if (table.init.state !== "done") return { wait: "init" };
   let held = table.keys[key];
   if (held !== undefined && table.seats[held].state === "lost" && !usedNames(table).has(held)) {
-    dropKey(table, held);
+    releaseAgain(table, held);
     held = undefined;
   }
   if (held !== undefined) {
@@ -353,7 +361,8 @@ export function watch(table, live, now) {
 
 // フォルダの一覧（無ければ null）と表を突き合わせる。無い絵の席のうち、どこかの集まりにあるものは、鍵の有無（中身の分からない
 // 絵の席も）によらず lost にする（空きに戻さず、その使う場所のコピーが書き直す。rewrites）。どこの集まりにも無いものは、lost のまま
-// 書き直されずに使う場所が外したものも、鍵を外して owner がごく小さい絵で作る（create。作り終えたら released）。
+// 書き直されずに使う場所が外したものも、鍵を外して owner がごく小さい絵で作る（create。作り終えたら released）。ファイルのある lost
+// の絵の席（書き直しがファイルを作ってから失敗したものなど）も、どこの集まりにも無ければ、次の手放しでごく小さい絵で上書きする。
 // 書いている途中と手放し中の絵の席は、書く側がファイルを作るので触らない。
 export function scan(table, listing, owner) {
   if (table.init.state !== "done") return { mkdir: false, create: [] };
@@ -362,9 +371,13 @@ export function scan(table, listing, owner) {
   const create = [];
   for (const name of table.order) {
     const s = table.seats[name];
-    if (have.has(name) || s.state === "writing" || s.state === "releasing") continue;
+    if (s.state === "writing" || s.state === "releasing") continue;
     if (used.has(name)) {
-      s.state = "lost";
+      if (!have.has(name)) s.state = "lost";
+      continue;
+    }
+    if (have.has(name)) {
+      if (s.state === "lost") releaseAgain(table, name);
       continue;
     }
     beginRelease(table, name, owner);

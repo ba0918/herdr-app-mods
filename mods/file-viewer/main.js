@@ -265,7 +265,7 @@ export default class FileViewer extends View {
   // 自分の使う場所の、ファイルが無くなった絵の席を、出していた絵で同じ名前に書き直す（作り直す）。ほかのコピーと共有している絵の席は、
   // 先に受け持ったコピーが書く。図は見え方の決まりにも知らせ、書いて読み込み終えるまで出している結果を出し続ける。画像はコピーし直す。
   // 拡大の窓は出している絵を書き直す。書き直せなかった絵の席は無くなったままになり（lib/seats.js の wrote）、次の回に書き直し直すか、
-  // 使う場所が外すと、見張りがごく小さい絵で作り直す。
+  // 使う場所が外すと、見張りと手放しがごく小さい絵で作り直すか上書きする。
   async rewriteLostSeats(cx) {
     const user = this.seatUser;
     const mine = user.lostSeats().filter((name) => user.claim(name));

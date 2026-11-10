@@ -496,8 +496,27 @@ describe("消えた絵の席", () => {
     dropPlace(table, body1);
     const r = acquire(table, own(body2), "図A");
     expect(r).toMatchObject({ name: other, write: true });
-    const s = scan(table, [other], own(body2));
-    expect(s.create).toEqual([a.name]);
+    const names = takeReleases(table, own(body2));
+    expect(names).toEqual([a.name]);
+    released(table, names, own(body2));
+    expect(seatOf(table, a.name).state).toBe("free");
+  });
+
+  // 仕様: 使っていない絵の席は、ごく小さい絵のファイルとして残る（反例: 大きな絵のファイルが溜まり続ける）。書き直しがファイルを
+  // 作ってから失敗し、そのあとタブを閉じると、ファイルのある無くなった絵の席がどこの集まりにも無くなる。
+  test("ファイルのある無くなった絵の席も、どこの集まりにも無くなったら、次の確かめと手放しでごく小さい絵で上書きして空きに戻す", () => {
+    const { table } = ready(2);
+    const a = take(table, own(body1), "図A");
+    const other = [seatName(0), seatName(1)].find((n) => n !== a.name);
+    scan(table, [other], own(body2));
+    claimRewrite(table, a.name, own(body1));
+    wrote(table, a.name, own(body1), { ok: false });
+    dropPlace(table, body1);
+    scan(table, [a.name, other], own(body2));
+    const names = takeReleases(table, own(body2));
+    expect(names).toEqual([a.name]);
+    released(table, names, own(body2));
+    expect(seatOf(table, a.name).state).toBe("free");
   });
 
   test("書き直す前に使う場所がどこも使わなくなった絵の席は、次の確かめでごく小さい絵で作り、鍵を外して空きに戻す", () => {
