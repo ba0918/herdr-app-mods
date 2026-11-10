@@ -84,6 +84,11 @@ export class ZoomSvg {
     this.gaveUp = keyOf(this.want);
   }
 
+  // 絵の席の名前を新しく使い始めた（手放したあとに同じ名前が別の絵に使われるので、その名前の絵を読み込んだことを忘れる）。
+  fresh(name) {
+    this.loaded.delete(name);
+  }
+
   // app が画像を読み込み終えたとき。出す絵が替わったら true。
   loadedImage(name) {
     this.loaded.add(name);
@@ -128,7 +133,7 @@ export class ZoomSvg {
     return true;
   }
 
-  // 使っている絵の名前（出している絵と、読み込ませている絵と、書いている絵）。これ以外の窓の絵は消してよい。
+  // 使っている絵の名前（出している絵と、読み込ませている絵と、書いている絵）。これ以外の窓だけが使っていた絵は手放してよい。
   // 書いている絵を含めるので、書いている間の描画のあと、書き終えて読み込ませる絵に移るまでの間も手放されない。
   keep() {
     const names = new Set(tilesOf(this.shown).map((t) => t.name));

@@ -209,7 +209,10 @@ export function rendered(table, place) {
 }
 
 // place を表から外す（タブや窓を閉じた、見張りが閉じたタブを見つけた、窓を作り直す）。その集まりの絵の席は描画の回数を待たない。
-export function dropPlace(table, place) {
+// owner を渡したら、その使う場所の今の世代がそのコピーのときだけ外す（新しい窓に替わったあとで閉じた前の窓が、新しい窓の集まりを
+// 外さないように）。
+export function dropPlace(table, place, owner = null) {
+  if (owner && table.places[place]?.gen !== owner.gen) return;
   delete table.places[place];
 }
 
@@ -263,7 +266,7 @@ function clearMarks(table, stopped) {
 export function startGen(table, owner, now) {
   clearMarks(table, (by) => by.place === owner.place && by.gen !== owner.gen);
   table.gens[owner.gen] = now;
-  placeOf(table, owner.place);
+  placeOf(table, owner.place).gen = owner.gen;
 }
 
 // owner の見張りの回が動いた（止まっていない印）。

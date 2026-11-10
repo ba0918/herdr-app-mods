@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { ZoomSvg, DiagramOpening } from "../mods/file-viewer/lib/zoom-svg.js";
 import { resizeSvg } from "../mods/file-viewer/lib/mermaid/svg.js";
-import { PictureNames, PictureTable } from "../mods/file-viewer/lib/pictures.js";
+import { ensureTable, claimInit, initPlan, initDone, bodyPlace, windowPlace, rendered, takeReleases, released } from "../mods/file-viewer/lib/seats.js";
+import { SeatUser } from "../mods/file-viewer/lib/seat-user.js";
 
 // 倍率と色から名前を決める書き出し先の代わり。
 const fileAt = (task) => ({ name: `s${task.scale}-${task.colorsKey}`, path: `cache/s${task.scale}-${task.colorsKey}`, width: 100 * task.scale, height: 50 * task.scale });
@@ -179,124 +180,103 @@ describe("拡大の窓のタイルに分けた絵", () => {
   });
 });
 
-// 仕様の「画像の置き場所」の拡大の窓: 窓は今出している絵を持ち、倍率や色を替えて差し替えたら窓だけが使っていた前の絵を手放す。
-// 本文から借りた絵は窓の表に無いので手放さない。main.js と同じく、描画のたびに窓の使っている絵（keep）を窓の表に渡す。
-describe("拡大の窓の絵を手放す", () => {
-  function windowTable(mark = "z1") {
-    let t = 1_000;
-    return new PictureTable(new PictureNames({ token: "tok", mark, clock: () => t++ }));
+// 仕様の「画像の置き場所」の拡大の窓: 窓は今出している絵の席を持ち、倍率や色を替えて差し替えたら窓だけが使っていた前の絵の席を
+// 手放す。本文と共有する絵の席は、本文が使わなくなっても窓が出している間は手放さない。main.js と同じく、描画のたびに窓が使っている
+// 絵の席（keep）を表に渡す。
+describe("拡大の窓の絵の席を手放す", () => {
+  const TOK = "3f2b9c1e-8a7d-4e6f-9b0c-1d2e3f4a5b6c";
+  function seats() {
+    const table = ensureTable({}, 0);
+    const init = { place: bodyPlace(TOK), gen: "g0" };
+    claimInit(table, init, 0);
+    initPlan(table, [], 16);
+    initDone(table, init);
+    const body = new SeatUser(table, { place: bodyPlace(TOK), gen: "g1" });
+    const win = new SeatUser(table, { place: windowPlace(TOK), gen: "g2" });
+    return { table, body, win };
   }
-  // 表から名前を取って書いた絵（倍率と色の鍵）。
-  const fileFrom = (tb) => (task) => {
-    const name = tb.name(`s${task.scale}-${task.colorsKey}`, "svg");
-    tb.writing(name);
-    tb.wrote(name);
+  // 窓が倍率と色の鍵で絵の席を取って書いた絵。
+  const fileFrom = (user, z) => (task) => {
+    const name = user.nameOf(`s${task.scale}-${task.colorsKey}`, (n) => z.fresh(n));
+    user.wrote(name, { ok: true });
     return { name, path: name, width: 100 * task.scale, height: 50 * task.scale };
   };
-  function draw(tb, z) {
-    tb.use("zoom", z.keep());
-    tb.drawn(tb.commit());
-    return tb.takeReleases(true);
+  // 描画: 窓の使う絵の席を渡し、描画の回数を進め、手放す絵の席を手放す。
+  function draw(s, user, names) {
+    user.use(names);
+    rendered(s.table, user.owner.place);
+    const out = takeReleases(s.table, user.owner);
+    released(s.table, out, user.owner);
+    return out;
   }
-  // 窓を開いた絵（タブが書いて窓に渡した、収まる大きさの絵）を窓の表に載せる。
-  function opened(tb) {
-    tb.adopt("tok~z1-fit.svg");
-    const z = new ZoomSvg({ shown: { name: "tok~z1-fit.svg", path: "tok~z1-fit.svg", scale: 1, width: 100, height: 50 }, colorsKey: "c1" });
-    draw(tb, z);
-    return z;
+  // タブが書いた収まる大きさの絵の席で開いた窓（タブはそれを窓の集まりに入れてから、開く前の絵から外す）。
+  function opened(s) {
+    const fit = s.body.nameOf("fit");
+    s.body.wrote(fit, { ok: true });
+    const z = new ZoomSvg({ shown: { name: fit, path: fit, scale: 1, width: 100, height: 50 }, colorsKey: "c1" });
+    draw(s, s.win, z.keep());
+    expect(draw(s, s.body, [])).toEqual([]);
+    return { z, fit };
   }
 
-  test("差し替えたら、前の倍率の絵が手放す名前に入り、今の絵は入らない", () => {
-    const tb = windowTable();
-    const z = opened(tb);
+  test("差し替えたら前の倍率の絵の席が外れて手放され、今の絵の席は外れない", () => {
+    const s = seats();
+    const { z, fit } = opened(s);
     z.request(2);
     const task = z.task();
-    const file = fileFrom(tb)(task);
+    const file = fileFrom(s.win, z)(task);
     z.wrote(task, file);
-    expect(draw(tb, z)).toEqual([]);
+    expect(draw(s, s.win, z.keep())).toEqual([]);
     z.loadedImage(file.name);
-    expect(draw(tb, z)).toEqual(["tok~z1-fit.svg"]);
-    expect(draw(tb, z)).toEqual([]);
+    expect(draw(s, s.win, z.keep())).toEqual([fit]);
+    expect(z.keep().has(file.name)).toBe(true);
+    expect(draw(s, s.win, z.keep())).toEqual([]);
   });
 
-  test("書いている間に描画が起きても、書き終えた新しい絵は、次の描画より先に前の描画が済んでも手放す名前に入らない", () => {
-    const tb = windowTable();
-    const z = opened(tb);
-    z.request(2);
-    const task = z.task();
-    const name = tb.name("s2-c1", "svg");
-    const file = { name, path: name, width: 200, height: 100 };
-    tb.writing(name);
-    z.writes(task, file);
-    // 書いている間の描画
-    tb.use("zoom", z.keep());
-    const frame = tb.commit();
-    tb.wrote(name);
-    z.wrote(task, file);
-    tb.drawn(frame);
-    expect(tb.takeReleases(true)).toEqual([]);
-    z.loadedImage(name);
-    expect(draw(tb, z)).toEqual(["tok~z1-fit.svg"]);
-  });
-
-  test("倍率を続けて変えて途中の絵が要らなくなったら、その絵が手放す名前に入る", () => {
-    const tb = windowTable();
-    const z = opened(tb);
+  test("倍率を続けて変えて途中の絵が要らなくなったら、その絵の席が窓の集まりから外れて手放される", () => {
+    const s = seats();
+    const { z } = opened(s);
     z.request(2);
     const t2 = z.task();
-    const f2 = fileFrom(tb)(t2);
+    const f2 = fileFrom(s.win, z)(t2);
     z.wrote(t2, f2);
     z.request(3);
-    expect(draw(tb, z)).toEqual([f2.name]);
-    const t3 = z.task();
-    expect(t3).toEqual({ scale: 3, colorsKey: "c1" });
+    expect(z.keep().has(f2.name)).toBe(false);
+    expect(draw(s, s.win, z.keep())).toEqual([f2.name]);
   });
 
-  test("手放した倍率に戻ると、新しい名前で書く", () => {
-    const tb = windowTable();
-    const z = opened(tb);
-    const write = fileFrom(tb);
-    z.request(2);
-    let task = z.task();
-    const f2 = write(task);
-    z.wrote(task, f2);
-    z.loadedImage(f2.name);
-    z.request(3);
-    task = z.task();
-    const f3 = write(task);
-    z.wrote(task, f3);
-    z.loadedImage(f3.name);
-    expect(draw(tb, z)).toEqual(["tok~z1-fit.svg", f2.name]);
-    z.request(2);
-    task = z.task();
-    expect(write(task).name).not.toBe(f2.name);
-  });
-
-  test("本文から借りた絵は、窓の手放す名前に入らない", () => {
-    const tb = windowTable();
-    const z = new ZoomSvg({ shown: { name: "tok-body.svg", path: "tok-body.svg", scale: 1, width: 100, height: 50 }, colorsKey: "c1" });
-    draw(tb, z);
+  test("本文の絵の席で開いた窓では、本文がその絵の席を外しても、窓が外すまで手放さない", () => {
+    const s = seats();
+    const shown = s.body.nameOf("本文の図");
+    s.body.wrote(shown, { ok: true });
+    draw(s, s.body, [shown]);
+    const z = new ZoomSvg({ shown: { name: shown, path: shown, scale: 1, width: 100, height: 50 }, colorsKey: "c1" });
+    draw(s, s.win, z.keep());
+    expect(draw(s, s.body, [])).toEqual([]);
     z.request(2);
     const task = z.task();
-    const file = fileFrom(tb)(task);
+    const file = fileFrom(s.win, z)(task);
     z.wrote(task, file);
     z.loadedImage(file.name);
-    expect(draw(tb, z)).toEqual([]);
+    expect(draw(s, s.win, z.keep())).toEqual([shown]);
   });
 
-  test("間に合って開いた窓に渡した収まる大きさの絵は、タブの手放す名前に入らない", () => {
-    let t = 1_000;
-    const tab = new PictureTable(new PictureNames({ token: "tok", clock: () => t++ }));
-    const fit = new PictureNames({ token: "tok", mark: "z1", clock: () => t++ }).next("svg");
-    tab.add(fit);
-    tab.writing(fit);
-    tab.use("opening", [fit]);
-    tab.wrote(fit);
-    tab.drawn(tab.commit());
-    // 窓に渡して、窓の表に載せる（タブは手放さずに外す）
-    tab.forget([fit]);
-    tab.use("opening", []);
-    tab.drawn(tab.commit());
-    expect(tab.takeReleases(true)).toEqual([]);
+  test("手放した絵の席がまた窓に割り当てられたら、読み込み終えるまで差し替えない", () => {
+    const s = seats();
+    const { z, fit } = opened(s);
+    z.request(2);
+    let task = z.task();
+    const f2 = fileFrom(s.win, z)(task);
+    z.wrote(task, f2);
+    z.loadedImage(f2.name);
+    expect(draw(s, s.win, z.keep())).toEqual([fit]);
+    z.request(3);
+    task = z.task();
+    const f3 = fileFrom(s.win, z)(task);
+    expect(f3.name).toBe(fit);
+    z.wrote(task, f3);
+    expect(z.display().file.name).toBe(f2.name);
+    z.loadedImage(f3.name);
+    expect(z.display().file.name).toBe(fit);
   });
 });

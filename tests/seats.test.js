@@ -229,6 +229,21 @@ describe("窓の置き換え", () => {
   });
 });
 
+describe("閉じた窓のコピーが外す使う場所", () => {
+  test("使う場所を外すのは、その使う場所の今の世代のコピーだけ（新しい窓に替わったあとで閉じた前の窓は、新しい窓の集まりを外さない）", () => {
+    const { table } = ready();
+    const old = own(win1, "g1"), next = own(win1, "g2");
+    startGen(table, old, 0);
+    dropPlace(table, win1);
+    const a = take(table, next, "図A");
+    startGen(table, next, 0);
+    dropPlace(table, win1, old);
+    expect(table.places[win1].names).toEqual([a.name]);
+    dropPlace(table, win1, next);
+    expect(table.places[win1]).toBeUndefined();
+  });
+});
+
 describe("初めて作るとき", () => {
   test("フォルダの一覧から絵の席の名前だけを拾って全部を手放す絵の席にし、初めの数に足りない分を作る", () => {
     const table = ensureTable({}, 0);
