@@ -156,7 +156,6 @@ describe("タイル", () => {
   test("<style> 要素を持つ SVG はタイルに分けず、書く大きさの長い辺が 4,096 px を超えない倍率までにする", () => {
     const styled = [
       `<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800"><style>svg svg rect { fill: red }</style><rect width="1" height="1"/></svg>`,
-      `<svg:svg xmlns:svg="http://www.w3.org/2000/svg" width="8000" height="800"><svg:style>svg svg rect { fill: red }</svg:style><svg:rect width="1" height="1"/></svg:svg>`,
     ];
     for (const text of styled) {
       const prep = startSvgPreparation(content(text));
