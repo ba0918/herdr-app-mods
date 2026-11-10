@@ -303,6 +303,31 @@ describe("失敗したとき", () => {
     expect(view(u).message).not.toBe(before);
   });
 
+  test("開けない案内を出している SVG の中身が変わったら、開くときと同じく、新しい中身を書いて読み込むまで読み込み中を出す", () => {
+    const s = state();
+    s.open(content(svg(100, 100), "前"));
+    s.tick(100, () => 1);
+    s.writeFailed(s.writeTask().name, "書けない", 2);
+    expect(view(s).kind).toBe("error");
+    s.change(content(svg(50, 50), "今"));
+    expect(view(s)).toEqual({ kind: "loading", notices: [] });
+    s.tick(100, () => 3);
+    s.wrote(s.writeTask().name, 3);
+    expect(view(s)).toEqual({ kind: "loading", notices: [] });
+    finish(s, 4);
+    expect(view(s)).toMatchObject({ kind: "picture", part: { source: "今" }, notices: [] });
+
+    const u = state();
+    u.open(content("<html/>", "前"));
+    finish(u);
+    expect(view(u).kind).toBe("error");
+    u.change(content(svg(50, 50), "今"));
+    u.tick(100, () => 2);
+    expect(view(u)).toEqual({ kind: "loading", notices: [] });
+    finish(u, 3);
+    expect(view(u)).toMatchObject({ kind: "picture", part: { source: "今" }, notices: [] });
+  });
+
   test("中身が変わって根の要素で描けないと分かる SVG になったら、開けない案内にする", () => {
     const s = state();
     s.open(content(svg(100, 100), "前"));

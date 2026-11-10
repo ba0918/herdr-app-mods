@@ -32,9 +32,21 @@ export function startSvgPreparation(content) {
 
 const OUTSIDE = () => ({ inRender: false, over: null });
 
+// image viewer の SVG の見え方の決まり。出し方だけが MarkdownState と違う: 開けない案内（開くときの失敗の代わりの整形表示か、
+// app が描けない部分）を出している間に中身が変わったら、開くときと同じく、新しい中身の準備の間は読み込み中にする（前の理由の案内の
+// ままにしない。Markdown と .mmd は、新しい結果が出るまで代わりの整形表示のまま）。
+class SvgFileState extends MarkdownState {
+  display() {
+    const d = super.display();
+    const preparing = this.job !== null && !this.job.restyle && this.job.text === this.text && this.shown?.text !== this.text;
+    if (preparing && (d.kind === "fallback" || (d.kind === "previous" && d.parts[0]?.error))) return { kind: "loading", notices: [] };
+    return d;
+  }
+}
+
 // fileOf: SVG の部分を見た目で書き出すファイル（lib/diagram-files.js の diagramFile）。preloadWait・timeLimit は MarkdownState と同じ。
 export function svgFileState({ fileOf, timeLimit, preloadWait = 0 } = {}) {
-  return new MarkdownState({ start: startSvgPreparation, judge: OUTSIDE, fileOf, preloadWait, keepShown: true, ...(timeLimit ? { timeLimit } : {}) });
+  return new SvgFileState({ start: startSvgPreparation, judge: OUTSIDE, fileOf, preloadWait, keepShown: true, ...(timeLimit ? { timeLimit } : {}) });
 }
 
 // MarkdownState の display() を、image viewer の SVG の出し方にする。
