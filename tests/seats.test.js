@@ -376,6 +376,47 @@ describe("消えた絵の席", () => {
     expect(rewrites(table, body1)).toEqual([]);
   });
 
+  // 仕様: 消えた絵の席を使っていたタブと拡大の窓は、出していた絵をその絵の席に書き直す。どこも使っていなかった絵の席は、ごく小さい絵で作る。
+  test("集まりにある絵の席は、中身の分からないものも、一覧に無いときに作り直して空きにせず、その使う場所に書き直させる", () => {
+    const { table } = ready(2);
+    const owner = own(body1);
+    const r = acquire(table, owner, "図A");
+    wrote(table, r.name, owner, { ok: false });
+    const other = [seatName(0), seatName(1)].find((n) => n !== r.name);
+    const s = scan(table, [other], own(body2));
+    expect(s.create).toEqual([]);
+    expect(rewrites(table, body1)).toEqual([r.name]);
+    expect(takeReleases(table, own(body2))).toEqual([]);
+    expect(acquire(table, own(body2), "図B").name).not.toBe(r.name);
+  });
+
+  test("書き直す前に使う場所がどこも使わなくなった絵の席は、次の確かめでごく小さい絵で作り、鍵を外して空きに戻す", () => {
+    const { table } = ready(2);
+    const a = take(table, own(body1), "図A");
+    const other = [seatName(0), seatName(1)].find((n) => n !== a.name);
+    scan(table, [other], own(body2));
+    expect(rewrites(table, body1)).toEqual([a.name]);
+    dropPlace(table, body1);
+    const s = scan(table, [other], own(body2));
+    expect(s.create).toEqual([a.name]);
+    released(table, s.create, own(body2));
+    expect(acquire(table, own(body1), "図A").write).toBe(true);
+  });
+
+  test("書き直しを受け持ったコピーが書けなかったか止まったら、その絵の席は無くなったまま残り、使う場所が書き直し直す", () => {
+    const { table } = ready(2);
+    const a = take(table, own(body1, "g1"), "図A");
+    scan(table, [], own(body2));
+    expect(claimRewrite(table, a.name, own(body1, "g1"))).toBe(true);
+    wrote(table, a.name, own(body1, "g1"), { ok: false });
+    expect(rewrites(table, body1)).toEqual([a.name]);
+    expect(acquire(table, own(body2), "図A").name).toBe(a.name);
+    expect(claimRewrite(table, a.name, own(body1, "g1"))).toBe(true);
+    startGen(table, own(body1, "g2"), 0);
+    expect(rewrites(table, body1)).toEqual([a.name]);
+    expect(takeReleases(table, own(body1, "g2"))).toEqual([]);
+  });
+
   test("フォルダが無いときは、フォルダを作る指示と、作る絵の席を返す", () => {
     const { table } = ready(2);
     const a = take(table, own(body1), "図A");

@@ -66,8 +66,9 @@ export function ensureTable(holder, now, { poll = 0 } = {}) {
 }
 
 // 状態: free（ごく小さい絵）、writing（owner が鍵の絵を書いている途中）、ready（鍵の絵がある）、releasing（owner がごく小さい絵で
-// 上書きしている途中）、dirty（中身が分からない。使わなくなったら手放す）、lost（ファイルが無くなった。使う場所が書き直す）。
-const seat = (state) => ({ state, key: null, by: null, info: null });
+// 上書きしている途中）、dirty（中身が分からない。使わなくなったら手放す）、lost（ファイルが無くなった。使う場所が書き直す。
+// 書いたことのない中身の分からない絵の席なら鍵は無い）。rewrite: writing のうち、無くなった絵の席の書き直し（書けなければ lost に戻る）。
+const seat = (state) => ({ state, key: null, by: null, info: null, rewrite: false });
 
 export function seatOf(table, name) {
   return table.seats[name];
@@ -157,7 +158,7 @@ export function acquire(table, owner, key) {
     table.growing = { ...owner };
     return { grow: Array.from({ length: GROW_SEATS }, (_, i) => seatName(start + i)) };
   }
-  table.seats[name] = { state: "writing", key, by: { ...owner }, info: null };
+  table.seats[name] = { state: "writing", key, by: { ...owner }, info: null, rewrite: false };
   table.keys[key] = name;
   addName(table, owner.place, name);
   return { name, write: true };
@@ -173,14 +174,21 @@ export function grown(table, names, owner) {
   if (same(table.growing, owner)) table.growing = null;
 }
 
-// owner が name を書き終えた。ok でなければ中身が分からないので鍵を外す（使わなくなったら手放す）。
+// owner が name を書き終えた。ok でなければ中身が分からないので鍵を外す（使わなくなったら手放す）。無くなった絵の席の書き直しが
+// できなかったときは、無くなったままにする（出している所がある絵の席を空きにしない。次の回に書き直し直すか、使う場所が外すまで待つ）。
 export function wrote(table, name, owner, { ok, info = null }) {
   const s = table.seats[name];
   if (!s || s.state !== "writing" || !same(s.by, owner)) return;
   s.by = null;
+  const rewrite = s.rewrite;
+  s.rewrite = false;
   if (ok) {
     s.state = "ready";
     s.info = info;
+    return;
+  }
+  if (rewrite) {
+    s.state = "lost";
     return;
   }
   dropKey(table, name);
@@ -246,12 +254,17 @@ export function released(table, names, owner) {
   }
 }
 
-// 止まった世代の印を外す: 書いている途中だった絵の席は中身が分からないので鍵を外し、手放し中だった絵の席は手放し直す。
+// 止まった世代の印を外す: 書いている途中だった絵の席は中身が分からないので鍵を外し（無くなった絵の席の書き直しなら、無くなったままに
+// して使う場所に書き直させ）、手放し中だった絵の席は手放し直す。
 // 初めての手放しと絵の席を増やすのを受け持っていたら、ほかのコピーが受け持てるようにする。
 function clearMarks(table, stopped) {
   for (const [name, s] of Object.entries(table.seats)) {
     if (!s.by || !stopped(s.by)) continue;
-    if (s.state === "writing" || s.state === "releasing") {
+    if (s.state === "writing" && s.rewrite) {
+      s.state = "lost";
+      s.by = null;
+      s.rewrite = false;
+    } else if (s.state === "writing" || s.state === "releasing") {
       dropKey(table, name);
       s.state = "dirty";
       s.by = null;
@@ -283,8 +296,9 @@ export function watch(table, live, now) {
   for (const g of stale) delete table.gens[g];
 }
 
-// フォルダの一覧（無ければ null）と表を突き合わせる。無い絵の席のうち、どこの集まりにも無いものは owner がごく小さい絵で作り
-// （create。作り終えたら released）、どこかの集まりにあるものは lost にする（その使う場所のコピーが書き直す。rewrites）。
+// フォルダの一覧（無ければ null）と表を突き合わせる。無い絵の席のうち、どこかの集まりにあるものは、鍵の有無（中身の分からない
+// 絵の席も）によらず lost にする（空きに戻さず、その使う場所のコピーが書き直す。rewrites）。どこの集まりにも無いものは、lost のまま
+// 書き直されずに使う場所が外したものも、鍵を外して owner がごく小さい絵で作る（create。作り終えたら released）。
 // 書いている途中と手放し中の絵の席は、書く側がファイルを作るので触らない。
 export function scan(table, listing, owner) {
   if (table.init.state !== "done") return { mkdir: false, create: [] };
@@ -293,8 +307,8 @@ export function scan(table, listing, owner) {
   const create = [];
   for (const name of table.order) {
     const s = table.seats[name];
-    if (have.has(name) || s.state === "writing" || s.state === "releasing" || s.state === "lost") continue;
-    if (used.has(name) && s.key !== null) {
+    if (have.has(name) || s.state === "writing" || s.state === "releasing") continue;
+    if (used.has(name)) {
       s.state = "lost";
       continue;
     }
@@ -317,5 +331,6 @@ export function claimRewrite(table, name, owner) {
   if (!s || s.state !== "lost") return false;
   s.state = "writing";
   s.by = { ...owner };
+  s.rewrite = true;
   return true;
 }
