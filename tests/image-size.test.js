@@ -53,6 +53,14 @@ describe("imageSize", () => {
     expect(imageSize({ svg: '<svg viewBox="0 0 120.5 60" width="100%">' })).toEqual({ width: 120.5, height: 60 });
   });
 
+  test("SVG は書き直しと同じ読み方（単位・文字の大きさ・先頭のコメント）で、書かれた大きさを取る", () => {
+    expect(imageSize({ svg: '<svg width="100mm" height="1in">' }).width).toBeCloseTo(377.95, 2);
+    expect(imageSize({ svg: '<svg font-size="20" width="2em" height="2ex">' })).toEqual({ width: 40, height: 20 });
+    expect(imageSize({ svg: '<!-- <svg width="1" height="1"> --><svg width="3" height="4">' })).toEqual({ width: 3, height: 4 });
+    expect(imageSize({ svg: '<svg width="50%" height="10">' })).toBeNull();
+    expect(imageSize({ svg: '<html width="10" height="10">' })).toBeNull();
+  });
+
   test("壊れたヘッダや読めない形式は null（寸法不明）", () => {
     expect(imageSize({ bytes: png(10, 10).slice(0, 12) })).toBeNull();
     expect(imageSize({ bytes: ascii("hello world, not an image") })).toBeNull();

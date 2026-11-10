@@ -1,5 +1,6 @@
 // 画像の先頭のバイト列（SVG は文字列）からピクセル寸法を読む。読めなければ null。
 // mod の実行環境では Buffer / TextEncoder が当てにならないので、純 JS で扱う。
+import { readSvgRoot } from "./svg-root.js";
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const DECODE = (() => {
@@ -81,24 +82,10 @@ function webp(b) {
   return null;
 }
 
-function attribute(tag, name) {
-  const m = tag.match(new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`));
-  return m ? m[1].trim() : null;
-}
-
-function length(value) {
-  const m = value?.match(/^([0-9]*\.?[0-9]+)\s*(px)?$/);
-  return m ? Number(m[1]) : null;
-}
-
+// SVG の書かれた大きさ（書き直しと同じ読み方。lib/svg-root.js）。決められなければ null。
 function svg(source) {
-  const tag = source.match(/<svg\b[^>]*>/i)?.[0];
-  if (!tag) return null;
-  const width = length(attribute(tag, "width")), height = length(attribute(tag, "height"));
-  if (width && height) return { width, height };
-  const box = attribute(tag, "viewBox")?.split(/[\s,]+/).map(Number);
-  if (box?.length === 4 && box[2] > 0 && box[3] > 0) return { width: box[2], height: box[3] };
-  return null;
+  const root = readSvgRoot(source);
+  return root.kind === "rewrite" ? { width: root.width, height: root.height } : null;
 }
 
 export function imageSize({ bytes, svg: source }) {
