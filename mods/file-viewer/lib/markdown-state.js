@@ -246,17 +246,13 @@ export class MarkdownState {
     this.fail(job.text, { kind: "write", message });
   }
 
-  // 書いたはずの SVG が無くなっていたとき（起動後の掃除で消えたなど）。出している結果の絵なら、書き直すまで書いていない図と同じに待つ。
-  // 書き直す絵の名前は新しくなる（呼ぶ側が使っている絵の表から外してから呼ぶ）。
+  // 書いた絵の席のファイルが外から消されたとき（見張りが見つけて、呼ぶ側が書き直す絵の席を受け持ったとき）。出している結果の絵なら、
+  // 同じ絵の席に書き直し、書いて読み込み終えるまで出している結果を出し続ける（仕様の「描き方」）。名前は変わらない。
   lost(names) {
-    this.memo = null;
-    for (const name of names) this.written.delete(name);
+    for (const name of names) this.fresh(name);
     const shown = this.shown;
-    if (!shown || shown.fallback || !shown.files?.some((f) => f && tilesOf(f).some((t) => names.includes(t.name)))) return;
-    this.shown = null;
-    if (this.job && !this.job.restyle) return;
-    this.job = { text: shown.text, prep: null, parts: shown.parts, inRender: true, restyle: false, elapsed: 0, last: null };
-    this.settle(this.job);
+    if (!shown || shown.fallback || this.job || !shown.files?.some((f) => f && tilesOf(f).some((t) => names.includes(t.name)))) return;
+    this.job = { text: shown.text, prep: null, parts: shown.parts, inRender: false, restyle: true, elapsed: 0, last: null };
   }
 
   // 図の見た目（色と書き出しの大きさ）を渡す（描画のたびに）。変わったら、出している結果を新しい見た目で書き直す

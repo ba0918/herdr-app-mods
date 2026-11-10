@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ensureTable, claimInit, initPlan, initDone, bodyPlace, seatOf, isSeatName, takeReleases, rendered } from "../mods/file-viewer/lib/seats.js";
+import { ensureTable, claimInit, initPlan, initDone, bodyPlace, seatOf, isSeatName, takeReleases, rendered, scan } from "../mods/file-viewer/lib/seats.js";
 import { SeatUser } from "../mods/file-viewer/lib/seat-user.js";
 
 // コピー（タブか拡大の窓）が、絵の席の表を使う形（仕様の「画像の置き場所」の「絵の席の表」）。
@@ -104,6 +104,24 @@ describe("画像のコピーの絵の席を取る", () => {
     const a = user(ensureTable({}, 0));
     expect(a.take("画像A").name).toBeUndefined();
     expect(a.blocked).toEqual({ wait: "init" });
+  });
+});
+
+describe("無くなった絵の席を書き直す", () => {
+  test("このコピーの使う場所にある無くなった絵の席を受け持つと、自分が書く絵の席になり、ほかのコピーは受け持てない", () => {
+    const table = ready(2);
+    const a = user(table), b = user(table, T2);
+    const name = a.nameOf("図A");
+    a.wrote(name, { ok: true });
+    b.nameOf("図A");
+    scan(table, [], a.owner);
+    expect(a.lostSeats()).toEqual([name]);
+    expect(a.claim(name)).toBe(true);
+    expect(a.mustWrite(name)).toBe(true);
+    expect(b.claim(name)).toBe(false);
+    a.wrote(name, { ok: true });
+    expect(seatOf(table, name)).toMatchObject({ state: "ready", key: "図A" });
+    expect(a.lostSeats()).toEqual([]);
   });
 });
 

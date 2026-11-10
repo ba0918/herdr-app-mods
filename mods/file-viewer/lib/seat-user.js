@@ -1,7 +1,7 @@
 // コピー（タブか拡大の窓）が絵の席の表（lib/seats.js）を使う形。表は窓に 1 つのふつうのデータで、これはコピーごとの手元の覚え。
 // 鍵から絵の席の名前を取り（その場で割り当てられなければ仮の名前を返して、待つわけを覚える）、自分が書く絵の席と書いている途中の
 // 絵の席を覚え、今使っている絵の席を表に渡す。
-import { acquire, wrote as seatWrote, use as seatUse, isSeatName } from "./seats.js";
+import { acquire, wrote as seatWrote, use as seatUse, isSeatName, rewrites, claimRewrite } from "./seats.js";
 
 export class SeatUser {
   constructor(table, owner) {
@@ -36,6 +36,18 @@ export class SeatUser {
     }
     if (r.write) this.mine.add(r.name);
     return r;
+  }
+
+  // このコピーの使う場所にある、ファイルが無くなった絵の席（書き直す）。
+  lostSeats() {
+    return rewrites(this.table, this.owner.place);
+  }
+
+  // 無くなった絵の席 name を書き直すのを受け持つ（受け持てたら true で、自分が書く絵の席になる。ほかのコピーが受け持ったら false）。
+  claim(name) {
+    if (!claimRewrite(this.table, name, this.owner)) return false;
+    this.mine.add(name);
+    return true;
   }
 
   // name を書くのはこのコピーか（書く印を受けて、まだ書き終えていない）。

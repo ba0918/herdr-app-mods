@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MarkdownState } from "../mods/file-viewer/lib/markdown-state.js";
 import { prepareAll, startPreparation, fallbackParts } from "../mods/file-viewer/lib/prepare.js";
-import { PictureNames, PictureTable } from "../mods/file-viewer/lib/pictures.js";
 import { ensureTable, claimInit, initPlan, initDone, bodyPlace, rendered, takeReleases, released, seatOf } from "../mods/file-viewer/lib/seats.js";
 import { SeatUser } from "../mods/file-viewer/lib/seat-user.js";
 
@@ -28,35 +27,6 @@ function finish(state, now = clock()) {
   throw new Error("終わらない");
 }
 const partsOf = (text) => prepareAll(text).parts;
-
-// 使っている絵の表（lib/pictures.js）から名前を取る、図のファイル。名前は鍵（図のソースと見た目）を持っている間だけ同じ。
-function pictureTable() {
-  let t = 1_000;
-  return new PictureTable(new PictureNames({ token: "tok", clock: () => t++ }));
-}
-const tableFileOf = (tb) => (part, look) => {
-  const name = tb.name(`${part.source.trim()}@${look.key}`, "svg");
-  return { name, path: `pictures/${name}`, width: 10, height: 5 };
-};
-// 縦に長い図（タイル 2 枚）を、表から名前を取って書き出すファイル。
-const tiledFrom = (tb) => (part, look) => {
-  const base = `${part.source.trim()}@${look.key}`;
-  const tiles = [0, 1].map((i) => { const name = tb.name(`${base}#${i}`, "svg"); return { name, path: `pictures/${name}`, x: 0, y: i * 10, width: 10, height: 10 }; });
-  return { name: tiles[0].name, path: tiles[0].path, width: 10, height: 20, tiles };
-};
-// まだ書いていない SVG を全部書き（表にも書いたことを知らせる）、app がその画像を読み込んだことにする。書いた名前の並び。
-function writeAllTo(tb, s) {
-  const names = [];
-  for (let task; (task = s.writeTask());) { names.push(task.name); tb.writing(task.name); tb.wrote(task.name); s.wrote(task.name, 1); }
-  for (const f of s.preloads()) s.loadedImage(f.name, 1);
-  return names;
-}
-// 描画で使う絵を表に渡し、その描画が済んだことにして、手放す名前を取る（main.js の描画と同じ順）。
-function drawFrame(tb, s) {
-  tb.use("md", s.keep());
-  tb.drawn(tb.commit());
-  return tb.takeReleases(true);
-}
 
 // 絵の席の表（lib/seats.js）と、それを使う本文のコピー（lib/seat-user.js）。初めての手放しは済ませてある。
 function seats(count = 16) {
@@ -661,20 +631,20 @@ describe("図の SVG の書き出し", () => {
     expect(shownFiles(s)).toEqual(["flowchart LR; b1-->b2@c1|w800"]);
   });
 
-  test("出している SVG が無くなっていたら、新しい名前で書き直し、書けるまで書いていない図と同じに待つ", () => {
-    const tb = pictureTable();
-    const s = svgState({ fileOf: tableFileOf(tb) });
+  test("出している図の絵の席が無くなったら、同じ絵の席に書き直し、書き終わるまで出していた結果を出し続ける", () => {
+    const s = svgState();
     s.open(smallD("a"));
     const [before] = writeAll(s);
-    s.toSource();
-    s.enter();
-    tb.lost([before]);
     s.lost([before]);
-    expect(s.display()).toEqual({ kind: "preparing", notices: [] });
-    const [after] = writeAll(s);
-    expect(after).not.toBe(before);
     expect(s.display().kind).toBe("formatted");
-    expect(shownFiles(s)).toEqual([after]);
+    expect(shownFiles(s)).toEqual([before]);
+    expect(s.writeTask().name).toBe(before);
+    s.wrote(before, 1);
+    expect(s.preloads(1).map((t) => t.name)).toEqual([before]);
+    s.loadedImage(before, 1);
+    expect(s.busy).toBe(false);
+    expect(s.display().kind).toBe("formatted");
+    expect(shownFiles(s)).toEqual([before]);
   });
 
   test("出していない SVG が無くなっていても、表示は変えない", () => {
@@ -890,20 +860,17 @@ describe("タイルに分けて書き出す大きな図", () => {
     expect([...s.keep()].sort()).toEqual(["flowchart TD; A-->B@k#0", "flowchart TD; A-->B@k#1"]);
   });
 
-  test("出しているタイルの 1 枚が無くなっていたら、そのタイルだけを新しい名前で書き直すまで待つ", () => {
-    const tb = pictureTable();
-    const s = makeState({ fileOf: tiledFrom(tb) });
+  test("出しているタイルの 1 枚が無くなったら、そのタイルだけを同じ絵の席に書き直し、その間も出していた結果を出す", () => {
+    const s = makeState({ fileOf: tiled });
     s.setLook({ key: "k" });
     s.open(tallDoc);
     const names = [];
     for (let task; (task = s.writeTask());) { names.push(task.name); s.wrote(task.name, 1); }
     for (const t of s.preloads()) s.loadedImage(t.name, 1);
-    tb.lost([names[1]]);
     s.lost([names[1]]);
-    expect(s.display().kind).toBe("loading");
-    const again = s.writeTask().name;
-    expect(again).not.toBe(names[1]);
-    s.wrote(again, 2);
+    expect(s.display().kind).toBe("formatted");
+    expect(s.writeTask().name).toBe(names[1]);
+    s.wrote(names[1], 2);
     expect(s.writeTask()).toBe(null);
   });
 

@@ -17,8 +17,8 @@ import { imageSize, base64ToBytes } from "./lib/image.js";
 import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
 import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, tileView } from "./lib/diagram-files.js";
-import { parsePictureName, sweepTargets, oldCacheNames } from "./lib/pictures.js";
-import { IMAGES_DIR, imageKey, ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace } from "./lib/seats.js";
+import { oldCacheNames } from "./lib/pictures.js";
+import { IMAGES_DIR, imageKey, ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
 import { SeatUser } from "./lib/seat-user.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
@@ -26,7 +26,7 @@ import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, liveViewerTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, pauseForApp } from "./io.js";
-import { writePictureText, listPictures, removePicture, overwriteTiny, listOldCache, removeOldCache, removeOldCacheDir } from "./io.js";
+import { listOldCache, removeOldCache, removeOldCacheDir } from "./io.js";
 import { listSeats, makeSeatsDir, writeSeatText, writeTinySeats } from "./io.js";
 import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, thumbSpan, BAR_MAX, BAR_INSET, BAR_WIDTH } from "./views/markdown.js";
 import { BodyScroll, BodyInput, measuredParts } from "./lib/body-scroll.js";
@@ -42,7 +42,8 @@ const PREPARE_SLICE_MS = 100;
 // 図の拡大の窓の大きさ（タブの窓に対する割合）。
 const OVERLAY_WIDTH = 0.92, OVERLAY_HEIGHT = 0.9;
 // 図の絵の SVG の名前（大きな絵はタイルごと）。
-const tileNames = (f) => (f.tiles ?? [f]).map((t) => t.name);
+const tilesOf = (f) => f.tiles ?? [f];
+const tileNames = (f) => tilesOf(f).map((t) => t.name);
 // 図の拡大（拡大の窓・.mmd）の倍率の上限: 書き出す絵の面積の上限に収まる倍率（lib/diagram-files.js）。
 const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: (width, height) => maxDiagramScale({ width, height }) });
 // 絵の席に書き終えてから、見えない所で読み込ませるまで待つ時間。書いた絵自身の変化の知らせが読み込みのあとに届くと、読み込んだ絵が
@@ -67,8 +68,6 @@ function syntaxColors(t) {
 }
 
 const themeKey = (t) => `${t.background}|${t.foreground}|${t.ansi5}`;
-// 前の名前の絵のファイル（lib/pictures.js）は、もう書かない（見張りが片付けるまで残っているものは手放さない）。
-const oldPictures = async () => false;
 const fileKey = (machine, path) => `${machine ?? null}\n${path}`;
 const message = (e) => String(e?.message ?? e);
 // コピーの世代（init ごとに変わる値。hot reload のあとの新しいコピーを、止まった前のコピーと見分ける。lib/seats.js）。
@@ -183,12 +182,8 @@ export default class FileViewer extends View {
       this.poll(cx);
       if (this.seats) {
         beat(this.seats, this.seatOwner, Date.now());
-        cx.spawn(async () => {
-          await this.initSeats();
-          await this.releaseSeats();
-        });
+        cx.spawn(async (cx) => this.watchSeats(cx));
       }
-      cx.spawn(async () => this.watchPictures());
     });
     // 表示していないタブでも動き続けるので、閉じるときに呼ばれない場合（裏のタブを閉じた、強制終了）も
     // 数秒前までの編集が下書きに残る。
@@ -214,14 +209,97 @@ export default class FileViewer extends View {
       dropPlace(this.seats, this.seatOwner.place);
       await this.releaseSeats();
     }
-    if (!this.token || !(await oldPictures())) return;
-    const mine = (await listPictures()).filter((name) => parsePictureName(name)?.token === this.token);
-    await this.releaseOld(mine.filter((n) => !n.endsWith(".b64")));
   }
 
-  // 前の名前の絵のファイル（画像のコピーと拡大の窓の絵）を、ごく小さい絵で書き換えて手放す。
-  async releaseOld(names) {
-    if (names.length) await overwriteTiny(names);
+  // 見張り（タブのコピーが POLL_MS おきに。表示していなくても、名乗る前でも動く）。初めての手放しがまだなら受け持ち、開いているタブの
+  // どれでもない使う場所と止まった世代の印を外し、窓で POLL_MS に 1 回だけのフォルダの確かめと前の置き場所の片付けをし、自分の使う
+  // 場所の無くなった絵の席を書き直してから、手放す絵の席を手放す。1 つずつ動かす。
+  async watchSeats(cx) {
+    if (this.watchingSeats) return;
+    this.watchingSeats = true;
+    try {
+      await this.initSeats();
+      if (this.seats.init.state !== "done") return;
+      watch(this.seats, liveViewerTokens(), Date.now());
+      await this.seatChores();
+      await this.rewriteLostSeats(cx);
+      await this.releaseSeats();
+    } finally {
+      this.watchingSeats = false;
+    }
+  }
+
+  // 窓で POLL_MS に 1 回だけ（表に最後にした時刻を置き、どれか 1 つのコピーが）: フォルダの一覧を取り、外から消されたフォルダと絵の席の
+  // ファイルを作り直す（どこも使っていない絵の席はごく小さい絵で作り、使っている絵の席は使う場所のコピーが書き直す。lib/seats.js の
+  // scan）。起動して最初の 1 回だけ、前の置き場所 file-viewer-cache/ の file-viewer の名前の形のファイルを消し、空ならフォルダも消す
+  // （mods/ の外なので、消してもメモリは放されない）。
+  async seatChores() {
+    const table = this.seats, chores = table.chores, now = Date.now();
+    if (now - (chores.scanAt ?? 0) < POLL_MS) return;
+    chores.scanAt = now;
+    const r = scan(table, await listSeats(), this.seatOwner);
+    if (r.mkdir) await makeSeatsDir();
+    if (r.create.length) {
+      await writeTinySeats(r.create);
+      released(table, r.create, this.seatOwner);
+    }
+    if (!chores.oldCache) {
+      chores.oldCache = true;
+      const old = await listOldCache();
+      if (old) {
+        for (const name of oldCacheNames(old)) await removeOldCache(name);
+        await removeOldCacheDir();
+      }
+    }
+  }
+
+  // 自分の使う場所の、ファイルが無くなった絵の席を、出していた絵で同じ名前に書き直す（作り直す）。ほかのコピーと共有している絵の席は、
+  // 先に受け持ったコピーが書く。図は見え方の決まりにも知らせ、書いて読み込み終えるまで出している結果を出し続ける。画像はコピーし直す。
+  // 拡大の窓は出している絵を書き直す。
+  async rewriteLostSeats(cx) {
+    const user = this.seatUser;
+    const mine = user.lostSeats().filter((name) => user.claim(name));
+    if (!mine.length) return;
+    this.ensureRecord();
+    const md = this.md, o = this.overlay;
+    if (md) md.lost(mine);
+    for (const name of mine) {
+      try {
+        if (o) await this.rewriteOverlaySeat(name, cx);
+        else if (name === this.file?.picture && this.file.cache) {
+          const r = await copyImage(this.file.path, this.file.machine, name);
+          user.wrote(name, { ok: Boolean(r.cache), info: r.cache ? { size: r.size, base: r.base, header64: r.header64 } : null });
+        } else await this.rewriteDiagramSeat(md, name, cx);
+      } catch {
+        if (user.mustWrite(name)) user.wrote(name, { ok: false });
+      }
+    }
+    cx.notify();
+  }
+
+  // 見え方の決まりが今の見た目で出す図のタイル name を書き直す。見つからなければ（出している結果が前の見た目のものなど）書かない。
+  async rewriteDiagramSeat(md, name, cx) {
+    const parts = md?.job?.parts ?? md?.shown?.parts;
+    const files = parts ? md.filesFor(parts) : [];
+    for (const [i, file] of files.entries()) {
+      const tile = file && tilesOf(file).find((t) => t.name === name);
+      if (!tile) continue;
+      const l = parts[i].layout;
+      await this.writeSeatTile(tile, diagramSvg(l, md.look.colors, { width: l.width, height: l.height }), file, l, cx);
+      md.wrote(name, Date.now());
+      this.awaitPreloads(md, cx);
+      return;
+    }
+    this.seatUser.wrote(name, { ok: false });
+  }
+
+  // 拡大の窓が出している絵のタイル name を書き直す。
+  async rewriteOverlaySeat(name, cx) {
+    const o = this.overlay, file = o.zs?.display().file;
+    const tile = file && tilesOf(file).find((t) => t.name === name);
+    if (!tile) { this.seatUser.wrote(name, { ok: false }); return; }
+    await this.writeSeatTile(tile, await this.overlaySvgText(o.zs.shownColors), { ...file, tiles: tilesOf(file) }, o.size, cx);
+    o.zs.fresh(name);
   }
 
   // ---- 絵の席（lib/seats.js の表。仕様の「画像の置き場所」） ----
@@ -394,7 +472,6 @@ export default class FileViewer extends View {
       pruneRecords();
       cx.spawn(async () => {
         for (const d of expiredDrafts(await listDrafts(), Date.now())) await deleteDraft(d.name);
-        await this.watchPictures();
       });
     }
     cx.notify();
@@ -452,8 +529,7 @@ export default class FileViewer extends View {
     file.sig = await statOf(file.path, file.machine).catch(() => null);
   }
 
-  // 画像は付き添いの mod のフォルダにコピーして表示する（新しい名前で。コピーしている間は使っている絵に入れ、読み込んだ file を
-  // 採るか捨てるときに外す）。付き添いの mod が無ければ、コピーせずに開けないファイルにする（大きさと更新時刻で変化を見る）。
+  // 画像は絵の席にコピーして表示する（copyPicture。コピーしている間は使っている絵に入れ、読み込んだ file を採るか捨てるときに外す）。
   // SVG はソースも読んで Editor に入れる（1 MiB まで）。
   async readImage(file, cx) {
     const r = await this.copyPicture(file, cx);
@@ -529,30 +605,6 @@ export default class FileViewer extends View {
     cx.notify();
     await Promise.race([loaded, cx.sleep(IMAGE_SWAP_WAIT_MS)]);
     if (file.incoming?.done === done) file.incoming = null;
-  }
-
-  // 絵のファイルの見張り（POLL_MS おきと名乗った直後。表示していなくても、名乗る前でも動く）。開いているタブ（名乗り待ちを含む）の
-  // どれの token でもない、名前の時刻から 10 秒以上たった絵のファイルを手放して消す（lib/pictures.js の sweepTargets）。最初の回に、
-  // 前の置き場所（file-viewer-cache/）の file-viewer の名前の形のファイルを消し、空ならフォルダも消す（mods/ の外なので手放せない）。
-  // 1 つずつ動かす。付き添いの mod が無ければ、手放しも消しもしない。
-  async watchPictures() {
-    if (this.watching) return;
-    this.watching = true;
-    try {
-      if (!this.oldSwept) {
-        this.oldSwept = true;
-        const old = await listOldCache();
-        if (old) {
-          for (const name of oldCacheNames(old)) await removeOldCache(name);
-          await removeOldCacheDir();
-        }
-      }
-      if (!(await oldPictures())) return;
-      const { release } = sweepTargets({ names: await listPictures(), openTokens: liveViewerTokens(), now: Date.now() });
-      await this.releaseOld(release);
-    } finally {
-      this.watching = false;
-    }
   }
 
   // UTF-8 でない（読み取り専用にする）か。読んだ内容に U+FFFD があるときだけファイルのバイト列を確かめ、
@@ -1428,7 +1480,10 @@ export default class FileViewer extends View {
     const o = this.overlay;
     if (this.seats) {
       beat(this.seats, this.seatOwner, Date.now());
-      cx.spawn(async () => this.releaseSeats());
+      cx.spawn(async (cx) => {
+        await this.rewriteLostSeats(cx);
+        await this.releaseSeats();
+      });
     }
     if (!o?.zs) return;
     let changed = false;
