@@ -612,7 +612,7 @@ export default class FileViewer extends View {
     file.size = r.size;
     file.view = kind({ path: file.path, size: r.size });
     if (file.view.type === "unopenable") { await this.sign(file); return file; }
-    const readonly = await this.notUtf8(r.text, file.path, file.machine);
+    const readonly = r.utf8 === false || await this.notUtf8(r.text, file.path, file.machine);
     if (file.view.source) this.takeText(file, r.text, readonly);
     file.base = r.base;
     file.zoom = new Zoom();

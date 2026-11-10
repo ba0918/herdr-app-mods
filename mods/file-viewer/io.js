@@ -67,9 +67,10 @@ function psQuote(text) {
   return `'${String(text).replace(/['‘’‚‛]/g, "$&$&")}'`;
 }
 
-// テキストのファイルを読む。{ exists, size, base: { hash, stat, text? }, text }。
+// テキストのファイルを読む。{ exists, size, base: { hash, stat, text? }, text, utf8? }。
 // 上限（limit。既定はテキストの上限）を超えるときは text を読まずに返す（size だけ）。
-// このコンピュータの、テキストの上限（readTextFile の上限）を超えるファイル（1 MiB を超える SVG）は readLarge で読む。
+// このコンピュータの、テキストの上限（readTextFile の上限）を超えるファイル（1 MiB を超える SVG）は readLarge で読む。UTF-8 として
+// 読めなければ、text を空にして utf8: false を返す。
 export async function readText(path, on, { limit = TEXT_LIMIT } = {}) {
   if (!on) {
     const size = await localSize(path);
@@ -93,6 +94,8 @@ export async function readText(path, on, { limit = TEXT_LIMIT } = {}) {
 // このコンピュータの、readTextFile の上限を超えるテキストのファイルを読む。PowerShell でバイト列を app home の一時ファイル
 // （mods/ の外。mods/ の下にファイルを作ると、出している絵が一瞬空白になる）に写し、fs.readFile で文字列にしてから消す。
 // 基準は画像と同じバイト列のハッシュ（変化の確かめを readTextFile で読まないように。checkChanged の bytes）。
+// fs.readFile は UTF-8 として読めないバイト列で例外を投げる（vendor/gpui-kit/crates/shell/src/engine/quickjs/host.rs の read_file）ので、
+// そのときは text を空にして utf8: false を返す（呼ぶ側が UTF-8 でないファイルとして扱う）。ほかの例外は今までどおり投げる。
 async function readLarge(path, size) {
   const dir = `${appHome()}/${READ_DIR}`;
   await fs.mkdir(dir, { recursive: true });
@@ -103,8 +106,15 @@ async function readLarge(path, size) {
     if (r.code === 4) return { exists: false };
     if (r.code !== 0) throw readFailure(r.stderr.trim() || "読み込みに失敗した", size);
     const [[length, hash]] = splitHead(r.stdout.replace(/\r/g, ""), 2);
-    const text = await fs.readFile(temp, "utf8");
-    return { exists: true, size: Number(length), text, base: { hash, stat: null, bytes: true } };
+    const base = { hash, stat: null, bytes: true };
+    let text;
+    try {
+      text = await fs.readFile(temp, "utf8");
+    } catch (e) {
+      if (!/UTF-8/.test(String(e?.message ?? e))) throw e;
+      return { exists: true, size: Number(length), text: "", utf8: false, base };
+    }
+    return { exists: true, size: Number(length), text, base };
   } finally {
     await fs.unlink(temp).catch(() => {});
   }
