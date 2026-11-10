@@ -18,7 +18,7 @@ import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
 import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, tileView } from "./lib/diagram-files.js";
 import { oldCacheNames } from "./lib/pictures.js";
-import { IMAGES_DIR, imageKey, unshare, awaiting, setShown, shownOf, holds, ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
+import { IMAGES_DIR, imageKey, unshare, awaiting, setShown, shownOf, holds, ensureTable, startGen, beat, claimInit, stopInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
 import { SeatUser } from "./lib/seat-user.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
@@ -203,12 +203,14 @@ export default class FileViewer extends View {
   // 閉じるとき（アプリの終了を含む）は、未保存の編集を下書きに書く。止める手段は無いので確認は出さない。
   // タブは本文の、図の拡大の窓は窓の使う場所を絵の席の表から外し、どこも使わなくなった絵の席を手放し始める（閉じた使う場所の描画は
   // 待たない。250 ms で終わらなくてよい。残りはほかのタブの見張りがする。仕様の「画像の置き場所」）。窓は、新しい窓に替わったあとなら
-  // 窓の使う場所を外さない。書き始めていない絵の席の書く印と、始めていない絵の席を増やす受け持ちは外す（ほかのコピーが待たないように）。
+  // 窓の使う場所を外さない。書き始めていない絵の席の書く印と、始めていない絵の席を増やす受け持ちと、初めての手放しの受け持ちは外す
+  // （ほかのコピーが待たないように）。
   async close() {
     if (this.overlay) {
       if (this.seats) {
         this.seatUser.stop();
         dropPlace(this.seats, this.seatOwner.place, this.seatOwner);
+        await this.stopInitSeats();
         await this.releaseSeats();
       }
       return;
@@ -219,6 +221,7 @@ export default class FileViewer extends View {
     if (this.seats) {
       this.seatUser.stop();
       dropPlace(this.seats, this.seatOwner.place);
+      await this.stopInitSeats();
       await this.releaseSeats();
     }
   }
@@ -314,14 +317,28 @@ export default class FileViewer extends View {
   async initSeats() {
     const table = this.seats;
     if (table.init.state === "done" || !claimInit(table, this.seatOwner, Date.now())) return;
+    this.initingSeats = (async () => {
+      try {
+        const plan = initPlan(table, await listSeats());
+        if (plan.mkdir) await makeSeatsDir();
+        initDone(table, this.seatOwner, await writeTinySeats([...plan.overwrite, ...plan.create]));
+      } catch {
+        // 次の POLL_MS の回にやり直す。
+        stopInit(table, this.seatOwner);
+      }
+    })();
     try {
-      const plan = initPlan(table, await listSeats());
-      if (plan.mkdir) await makeSeatsDir();
-      initDone(table, this.seatOwner, await writeTinySeats([...plan.overwrite, ...plan.create]));
-    } catch {
-      // 次の POLL_MS の回にやり直す。
-      if (table.init.by?.gen === this.seatOwner.gen) table.init.by = null;
+      await this.initingSeats;
+    } finally {
+      this.initingSeats = null;
     }
+  }
+
+  // 閉じるときに、受け持った初めての手放しを外す。書いている途中なら、書き終わるのを待ってから外す（途中で外すと、ほかのコピーが
+  // 受け持って表を作り直し、両方が絵の席に書く）。締め切りまでに終わらなければ、ほかのコピーの見張りの回が STALE_GEN_MS のあとに引き継ぐ。
+  async stopInitSeats() {
+    if (this.initingSeats) await this.initingSeats;
+    stopInit(this.seats, this.seatOwner);
   }
 
   // 手放す絵の席（どこも使わなくなり、外した使う場所の描画が進んだもの）を、ごく小さい絵で上書きして手放す。上書きできなかった

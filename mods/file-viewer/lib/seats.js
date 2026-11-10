@@ -77,12 +77,25 @@ export function seatOf(table, name) {
 
 const same = (a, b) => Boolean(a && b) && a.place === b.place && a.gen === b.gen;
 
-// 初めての手放しを owner が受け持てたら true（まだ誰も受け持っていない、始めてよい時刻になった表で）。
+// 初めての手放しを owner が受け持てたら true（まだ誰も受け持っていないか、受け持ったコピーの見張りの回が STALE_GEN_MS より前で
+// 止まった、始めてよい時刻になった表で。受け持ったタブが途中で閉じて止まっても、ほかのコピーの見張りの回が引き継ぐ）。
 export function claimInit(table, owner, now) {
   const init = table.init;
-  if (init.state !== "pending" || init.by || now < init.notBefore) return false;
+  if (init.state !== "pending" || now < init.notBefore) return false;
+  if (init.by && !stoppedGen(table, init.by.gen, now)) return false;
   init.by = { ...owner };
   return true;
+}
+
+// owner が受け持った初めての手放しを、終えずにやめた（閉じる。ほかのコピーが受け持てるようにする）。
+export function stopInit(table, owner) {
+  if (same(table.init.by, owner)) table.init.by = null;
+}
+
+// 世代 gen の最後の見張りの回から STALE_GEN_MS たったか（見張りの回を知らない世代は、止まったと決めない）。
+function stoppedGen(table, gen, now) {
+  const last = table.gens[gen];
+  return last !== undefined && now - last > STALE_GEN_MS;
 }
 
 // 初めての手放しの段取り。listing: フォルダの一覧（無ければ null）。絵の席の名前だけを拾い、見つかったものは上書きし（overwrite）、
@@ -354,7 +367,7 @@ export function beat(table, owner, now) {
 // 見張り: 開いているタブ（live: token の Set）のどれでもない使う場所を外し、最後の回から STALE_GEN_MS たった世代の印を外す。
 export function watch(table, live, now) {
   for (const place of Object.keys(table.places)) if (!live.has(tokenOf(place))) delete table.places[place];
-  const stale = new Set(Object.keys(table.gens).filter((g) => now - table.gens[g] > STALE_GEN_MS));
+  const stale = new Set(Object.keys(table.gens).filter((g) => stoppedGen(table, g, now)));
   if (!stale.size) return;
   clearMarks(table, (by) => stale.has(by.gen));
   for (const g of stale) delete table.gens[g];
@@ -403,3 +416,4 @@ export function claimRewrite(table, name, owner) {
   s.rewrite = true;
   return true;
 }
+

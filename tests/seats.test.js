@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   SEATS_VERSION, INITIAL_SEATS, GROW_SEATS, STALE_GEN_MS, IMAGES_DIR, seatName, isSeatName,
   ensureTable, claimInit, initPlan, initDone, acquire, grown, wrote, use, rendered, dropPlace, takeReleases, released,
-  startGen, watch, scan, rewrites, claimRewrite, imageKey, bodyPlace, windowPlace, seatOf, unshare,
+  startGen, beat, watch, scan, rewrites, claimRewrite, imageKey, bodyPlace, windowPlace, seatOf, unshare, stopInit,
   setShown, shownOf, holds,
 } from "../mods/file-viewer/lib/seats.js";
 import { RENDER_LIMIT } from "../mods/file-viewer/lib/render-size.js";
@@ -388,6 +388,33 @@ describe("初めて作るとき", () => {
     claimInit(table, own(body1, "g1"), 0);
     startGen(table, own(body1, "g2"), 0);
     expect(claimInit(table, own(body1, "g2"), 0)).toBe(true);
+  });
+
+  // 仕様: 片付けを保証するのは見張りと、起動して初めて表を作るときに手放すこと（反例: 受け持ったタブが途中で閉じて止まると、
+  // 初めての手放しが終わらず、どの割り当ても待ち続ける）。
+  test("手放しを受け持った別のタブのコピーが止まって 10 秒たったら、ほかのタブのコピーが受け持って割り当てる", () => {
+    const table = ensureTable({}, 0);
+    const g1 = own(body1, "g1"), g2 = own(body2, "g2");
+    startGen(table, g1, 0);
+    startGen(table, g2, 0);
+    expect(claimInit(table, g1, 0)).toBe(true);
+    beat(table, g2, STALE_GEN_MS);
+    expect(claimInit(table, g2, STALE_GEN_MS)).toBe(false);
+    beat(table, g2, STALE_GEN_MS + 1);
+    expect(claimInit(table, g2, STALE_GEN_MS + 1)).toBe(true);
+    initPlan(table, [], 2);
+    initDone(table, g2);
+    expect(acquire(table, g2, "図A").write).toBe(true);
+  });
+
+  test("手放しを受け持ったコピーが閉じるときに受け持ちを外したら、ほかのコピーがすぐ受け持てる", () => {
+    const table = ensureTable({}, 0);
+    const g1 = own(body1, "g1"), g2 = own(body2, "g2");
+    claimInit(table, g1, 0);
+    stopInit(table, g2);
+    expect(claimInit(table, g2, 0)).toBe(false);
+    stopInit(table, g1);
+    expect(claimInit(table, g2, 0)).toBe(true);
   });
 });
 
