@@ -278,6 +278,31 @@ describe("失敗したとき", () => {
     expect(view(u)).toMatchObject({ kind: "picture", part: { source: "前" }, notices: [{ kind: "restyle-timeout" }] });
   });
 
+  test("開けない案内を出している SVG の中身が変わって、その書き直しが失敗か打ち切りになったら、新しい理由の開けない案内を出し直す", () => {
+    const s = state();
+    s.open(content("<html/>", "前"));
+    finish(s);
+    const before = view(s).message;
+    s.change(content(svg(100, 100), "今"));
+    s.tick(100, () => 2);
+    s.writeFailed(s.writeTask().name, "書けない", 3);
+    expect(view(s)).toMatchObject({ kind: "error", notices: [] });
+    expect(view(s).message).toContain("書けない");
+    expect(view(s).message).not.toBe(before);
+
+    const u = state();
+    const now = clock();
+    u.open(content("<html/>", "前"));
+    finish(u);
+    u.change(content(svg(100, 100), "今"));
+    u.tick(0, now);
+    u.wrote(u.writeTask().name, now());
+    now.skip(10_500);
+    u.tick(0, now);
+    expect(view(u).kind).toBe("error");
+    expect(view(u).message).not.toBe(before);
+  });
+
   test("中身が変わって根の要素で描けないと分かる SVG になったら、開けない案内にする", () => {
     const s = state();
     s.open(content(svg(100, 100), "前"));

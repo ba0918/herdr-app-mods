@@ -20,7 +20,7 @@ export class MarkdownState {
   // fileOf(part, look): 図の部分を見た目 look で書き出すファイル（{ name, path, width, height }。lib/diagram-files.js の diagramFile）。
   // 無ければ図の SVG は書き出さない。preloadWait: 書き終えてから見えない所で読み込ませるまで待つ時間（ms。絵の席に書いた絵自身の
   // 変化の知らせが読み込みのあとに届くと、読み込んだ絵が捨てられて一瞬空白になるので。ガイドの「フォルダの変化の知らせ」）。
-  // keepShown: 出している結果があるとき、中身が変わった準備の失敗も、代わりの整形表示にせず出している結果のまま知らせる
+  // keepShown: 出している結果が書いた絵を持つとき、中身が変わった準備の失敗も、代わりの整形表示にせず出している結果のまま知らせる
   // （image viewer の SVG。仕様の「表示の大きさで書き直す」）。
   constructor({ start = startPreparation, judge = judgeSize, timeLimit = TIME_LIMIT, fileOf = null, preloadWait = 0, keepShown = false } = {}) {
     this.start = start;
@@ -473,10 +473,11 @@ export class MarkdownState {
     return files;
   }
 
-  // 失敗したとき。代わりの整形表示を出して知らせる。keepShown なら、出している結果があればそのまま出して知らせ（書き直しの失敗と
-  // 同じ知らせ）、続きの中身があれば始める。
+  // 失敗したとき。代わりの整形表示を出して知らせる。keepShown なら、出している結果が書いた絵を持っていればそのまま出して知らせ
+  // （書き直しの失敗と同じ知らせ）、続きの中身があれば始める。絵を持たない結果（描けない部分だけ）なら、開くときと同じく代わりの
+  // 整形表示にする。
   fail(text, failure) {
-    if (this.keepShown && this.shown && !this.shown.fallback) {
+    if (this.keepShown && this.shown && !this.shown.fallback && this.shown.files.some(Boolean)) {
       this.failure = failure.kind === "timeout" ? { kind: "restyle-timeout" } : { kind: "restyle-write", message: failure.message };
       this.job = null;
       this.failed = text;
