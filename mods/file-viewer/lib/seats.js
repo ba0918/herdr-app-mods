@@ -11,7 +11,7 @@ import { RENDER_LIMIT } from "./render-size.js";
 export const IMAGES_DIR = "mods/file-viewer-images";
 // 表の形式の版。形を変えるときは、前の版から写す処理を同じ変更に足す（作り直すと、出している絵の席の持ち主が分からなくなる）。
 export const SEATS_VERSION = 1;
-const HOLDER_KEY = "__fileViewerSeats";
+const HOLDER_KEY = "__fileViewerSeatTable";
 // 初めに作る絵の席の数: 上限ちょうどの図の文書でテーマを替える間は前と新しい色の絵の席を両方使うので図の数の 2 倍。そのあと拡大の窓の
 // 2 つ（開いた絵と倍率を替えた絵）を使う。8 は差し替えが重なるときのゆとり。
 export const INITIAL_SEATS = RENDER_LIMIT.diagrams * 2 + 8;
@@ -54,6 +54,7 @@ export function ensureTable(holder, now, { poll = 0 } = {}) {
     version: SEATS_VERSION,
     init: { state: "pending", notBefore: found ? now + poll : 0, by: null },
     growing: null,
+    order: [],   // 絵の席の名前を番号の順に
     seats: {},
     keys: {},
     places: {},
@@ -89,8 +90,10 @@ export function initPlan(table, listing, count = INITIAL_SEATS) {
   const total = Math.max(count, ...found.map((n) => seatIndex(n) + 1));
   const have = new Set(found);
   const create = [];
+  table.order = [];
   for (let i = 0; i < total; i++) {
     const name = seatName(i);
+    table.order.push(name);
     table.seats[name] = seat("releasing");
     if (!have.has(name)) create.push(name);
   }
@@ -107,8 +110,11 @@ function placeOf(table, place) {
   return (table.places[place] ??= { names: [], frame: 0, dropped: {} });
 }
 
-function usedAnywhere(table, name) {
-  return Object.values(table.places).some((p) => p.names.includes(name));
+// どこかの使う場所の集まりにある絵の席の名前。
+function usedNames(table) {
+  const used = new Set();
+  for (const p of Object.values(table.places)) for (const name of p.names) used.add(name);
+  return used;
 }
 
 function addName(table, place, name) {
@@ -117,12 +123,8 @@ function addName(table, place, name) {
   delete p.dropped[name];
 }
 
-function seatNames(table) {
-  return Object.keys(table.seats).sort((a, b) => seatIndex(a) - seatIndex(b));
-}
-
 function freeSeat(table) {
-  return seatNames(table).find((n) => table.seats[n].state === "free");
+  return table.order.find((n) => table.seats[n].state === "free");
 }
 
 // 鍵を外して owner の手放し中にする（上書きか作り直しが終わったら released で空きに戻る）。
@@ -151,7 +153,7 @@ export function acquire(table, owner, key) {
   const name = freeSeat(table);
   if (name === undefined) {
     if (table.growing) return { wait: "grow" };
-    const start = Object.keys(table.seats).length;
+    const start = table.order.length;
     table.growing = { ...owner };
     return { grow: Array.from({ length: GROW_SEATS }, (_, i) => seatName(start + i)) };
   }
@@ -163,7 +165,11 @@ export function acquire(table, owner, key) {
 
 // 増やした絵の席を作り終えた（空きとして載せる）。
 export function grown(table, names, owner) {
-  for (const name of names) table.seats[name] ??= seat("free");
+  for (const name of names) {
+    if (table.seats[name]) continue;
+    table.seats[name] = seat("free");
+    table.order.push(name);
+  }
   if (same(table.growing, owner)) table.growing = null;
 }
 
@@ -191,10 +197,10 @@ function dropKey(table, name) {
 // place が今使っている絵の席の集まり（前に渡したものと置き換える）。外した絵の席には、そのときの描画の回数を覚える。
 export function use(table, place, names) {
   const p = placeOf(table, place);
-  const next = [...new Set(names)];
-  for (const name of p.names) if (!next.includes(name)) p.dropped[name] = p.frame;
+  const next = new Set(names);
+  for (const name of p.names) if (!next.has(name)) p.dropped[name] = p.frame;
   for (const name of next) delete p.dropped[name];
-  p.names = next;
+  p.names = [...next];
 }
 
 // place のコピーが描画した（render のたびに呼ぶ）。
@@ -207,11 +213,10 @@ export function dropPlace(table, place) {
   delete table.places[place];
 }
 
-function releasable(table, name) {
+function releasable(table, name, used) {
   const s = table.seats[name];
-  if (s.state !== "ready" && s.state !== "dirty") return false;
+  if ((s.state !== "ready" && s.state !== "dirty") || used.has(name)) return false;
   for (const p of Object.values(table.places)) {
-    if (p.names.includes(name)) return false;
     if (p.dropped[name] !== undefined && p.frame <= p.dropped[name]) return false;
   }
   return true;
@@ -221,7 +226,8 @@ function releasable(table, name) {
 // owner はそれをごく小さい絵で上書きしてから released を呼ぶ。
 export function takeReleases(table, owner) {
   if (table.init.state !== "done") return [];
-  const out = seatNames(table).filter((n) => releasable(table, n));
+  const used = usedNames(table);
+  const out = table.order.filter((n) => releasable(table, n, used));
   for (const name of out) beginRelease(table, name, owner);
   return out;
 }
@@ -280,11 +286,12 @@ export function watch(table, live, now) {
 export function scan(table, listing, owner) {
   if (table.init.state !== "done") return { mkdir: false, create: [] };
   const have = new Set(listing ?? []);
+  const used = usedNames(table);
   const create = [];
-  for (const name of seatNames(table)) {
+  for (const name of table.order) {
     const s = table.seats[name];
     if (have.has(name) || s.state === "writing" || s.state === "releasing" || s.state === "lost") continue;
-    if (usedAnywhere(table, name) && s.key !== null) {
+    if (used.has(name) && s.key !== null) {
       s.state = "lost";
       continue;
     }
