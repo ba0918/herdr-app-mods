@@ -9,6 +9,8 @@ import { judgeSize } from "./render-size.js";
 
 // 図のファイルの SVG の並び（大きな絵はタイルに分かれる。lib/diagram-files.js）。
 const tilesOf = (f) => f.tiles ?? [f];
+// 絵に書き出す部分の種類: Mermaid の図と、image viewer の SVG（lib/svg-file.js）。
+const WRITTEN = new Set(["mermaid", "svg"]);
 
 // 描画の外の準備が終わらなかったと見なす、準備を動かしている間の時間（ms）。
 const TIME_LIMIT = 10_000;
@@ -18,12 +20,16 @@ export class MarkdownState {
   // fileOf(part, look): 図の部分を見た目 look で書き出すファイル（{ name, path, width, height }。lib/diagram-files.js の diagramFile）。
   // 無ければ図の SVG は書き出さない。preloadWait: 書き終えてから見えない所で読み込ませるまで待つ時間（ms。絵の席に書いた絵自身の
   // 変化の知らせが読み込みのあとに届くと、読み込んだ絵が捨てられて一瞬空白になるので。ガイドの「フォルダの変化の知らせ」）。
-  constructor({ start = startPreparation, judge = judgeSize, timeLimit = TIME_LIMIT, fileOf = null, preloadWait = 0 } = {}) {
+  // keepShown: 出している結果があるとき、中身が変わった準備の失敗も、代わりの整形表示にせず出している結果のまま知らせる
+  // （image viewer の SVG。仕様の「表示の大きさで書き直す」）。
+  constructor({ start = startPreparation, judge = judgeSize, timeLimit = TIME_LIMIT, fileOf = null, preloadWait = 0, keepShown = false } = {}) {
     this.start = start;
     this.judge = judge;
     this.timeLimit = timeLimit;
     this.fileOf = fileOf;
     this.preloadWait = preloadWait;
+    this.keepShown = keepShown;
+    this.failed = null;        // keepShown で、出している結果のまま失敗を知らせた中身（同じ中身では準備し直さない）
     this.look = null;          // 図の見た目（色と書き出しの大きさ。{ key, ... }）
     this.written = new Set();  // 書いた SVG の名前
     this.wroteAt = new Map();  // 書いた SVG の名前 → 書き終えた時刻
@@ -99,7 +105,7 @@ export class MarkdownState {
       return;
     }
     if (this.interrupted) this.begin(text, false);
-    else if (this.mode === "formatted" && !this.job && this.shown?.text !== text) this.begin(text, this.judge(text).inRender);
+    else if (this.mode === "formatted" && !this.job && this.shown?.text !== text && this.failed !== text) this.begin(text, this.judge(text).inRender);
   }
 
   // 中身が変わったとき（ソース表示の打鍵、外部変更の読み直し、下書きの復元）。
@@ -276,9 +282,15 @@ export class MarkdownState {
   // 書く段の途中なら、新しい見た目の図がもう書けて読み込めていればその場で出す（出している見た目に戻ったときは書き直しを終える。
   // 書く・読み込む知らせはもう来ないので、待つと 10 秒で終わらなかったことになる）。出している結果の書き直しの 10 秒は、
   // 最後の見た目から数え直す（倍率や本文の幅を続けて変えても、最後の見た目の書き直しを始める）。
+  // 出している結果のまま失敗を知らせた中身なら（keepShown）、出している結果ではなくその中身を新しい見た目で準備し直す。
   setLook(look) {
     if (this.look?.key === look.key) return;
     this.look = look;
+    if (this.failed !== null && this.failed === this.text && !this.job) {
+      this.failed = null;
+      this.begin(this.text, false);
+      return;
+    }
     if (this.job?.parts) {
       if (this.job.restyle) {
         this.job.elapsed = 0;
@@ -456,12 +468,23 @@ export class MarkdownState {
   filesFor(parts) {
     const key = this.look?.key ?? null;
     if (this.memo?.parts === parts && this.memo.key === key) return this.memo.files;
-    const files = parts.map((p) => (this.fileOf && this.look && p.type === "mermaid" && p.layout ? this.fileOf(p, this.look) : null));
+    const files = parts.map((p) => (this.fileOf && this.look && WRITTEN.has(p.type) && p.layout ? this.fileOf(p, this.look) : null));
     this.memo = { parts, key, files };
     return files;
   }
 
+  // 失敗したとき。代わりの整形表示を出して知らせる。keepShown なら、出している結果があればそのまま出して知らせ（書き直しの失敗と
+  // 同じ知らせ）、続きの中身があれば始める。
   fail(text, failure) {
+    if (this.keepShown && this.shown && !this.shown.fallback) {
+      this.failure = failure.kind === "timeout" ? { kind: "restyle-timeout" } : { kind: "restyle-write", message: failure.message };
+      this.job = null;
+      this.failed = text;
+      const next = this.pending;
+      this.pending = null;
+      if (next !== null && next !== text) this.begin(next, false);
+      return;
+    }
     this.failure = failure;
     this.show({ text, parts: fallbackParts(text), fallback: true, files: [], look: null });
   }
@@ -470,6 +493,7 @@ export class MarkdownState {
   // その場で一度に進めると、止まったときに見張りも 10 秒の上限も効かないので、次の描画（sync）に任せる。
   show(shown) {
     this.shown = shown;
+    this.failed = null;
     this.held = null;
     this.job = null;
     const next = this.pending;
