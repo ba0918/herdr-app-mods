@@ -222,7 +222,7 @@ export function use(table, place, names) {
   p.names = [...next];
 }
 
-// place のコピーが描画した（render のたびに呼ぶ）。
+// place のコピーが描画を組み立て終えた（render が返す直前に呼ぶ。打ち切られた描画は戻らないので数えない）。
 export function rendered(table, place) {
   placeOf(table, place).frame++;
 }

@@ -348,8 +348,8 @@ export default class FileViewer extends View {
     if (this.seats.init.state !== "done" || blocked?.wait === "grow" || blocked?.wait === "release") await cx.sleep(100);
   }
 
-  // このコピーの使う場所が今使っている絵の席（names）を表に渡す。外した絵の席があれば、描き直しを求めて、差し替えた描画が来てから
-  // （1 秒まで待つ）手放す。来なければ（表示していないなど）POLL_MS の回に任せる。
+  // このコピーの使う場所が今使っている絵の席（names）を表に渡す。外した絵の席があれば、描き直しを求めて、外した描画（か、それが
+  // 打ち切られたなら、そのあとの描画）が終わってから（1 秒まで待つ）手放す。来なければ（表示していないなど）POLL_MS の回に任せる。
   trackSeats(cx, names) {
     if (!this.seats) return;
     const place = this.seatOwner.place;
@@ -1000,10 +1000,16 @@ export default class FileViewer extends View {
     run("tab.rename", { id: me.tab, name: title });
   }
 
+  // 描画の回数（lib/seats.js の rendered）は、描画の木を組み立て終えてから進める。打ち切られた描画（interrupted）は戻らないので
+  // 数えない（app は前に描けた画面を出し続けるので、その画面が出している前の絵の席を、回数が進んだことにして手放さないように）。
   render(cx) {
     const t = theme();
+    const tree = this.overlay ? this.renderOverlay(t, cx) : this.renderTab(t, cx);
     if (this.seats) rendered(this.seats, this.seatOwner.place);
-    if (this.overlay) return this.renderOverlay(t, cx);
+    return tree;
+  }
+
+  renderTab(t, cx) {
     const me = this.identify();
     this.me = me;
     if (me && this.pane !== me.pane && this.claiming !== me.pane) {
