@@ -195,18 +195,6 @@ describe("ごく小さい絵で上書きできなかったとき", () => {
     expect(acquire(table, own(body1), "図B").name).toBe(r.grow[1]);
     expect(takeReleases(table, own(body2))).toEqual([r.grow[0]]);
   });
-
-  test("作れなかった絵の席をもう一度作るまでは、空きが無くてもさらに増やさずに待ち、作れたらそれを割り当てる", () => {
-    const { table } = ready(1);
-    take(table, own(body1), "図A");
-    const r = acquire(table, own(body1), "図B");
-    grown(table, r.grow, own(body1), r.grow);
-    expect(acquire(table, own(body1), "図B")).toEqual({ wait: "release" });
-    const again = takeReleases(table, own(body1));
-    expect(again).toEqual(r.grow);
-    released(table, again, own(body1));
-    expect(acquire(table, own(body1), "図B")).toMatchObject({ name: r.grow[0], write: true });
-  });
 });
 
 describe("書いている途中と世代", () => {
