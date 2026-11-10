@@ -519,6 +519,19 @@ describe("消えた絵の席", () => {
     expect(seatOf(table, a.name).state).toBe("free");
   });
 
+  // 仕様: 手放すのは出していない絵の席だけで、外した前の絵の席は、それを使わない描画が済んでから手放す。絵の席が足りなければ増やす。
+  test("ファイルのある無くなった絵の席は、外した使う場所の描画が進むまで手放さず、その間に空きが無ければ絵の席を増やす", () => {
+    const { table } = ready(1);
+    const a = take(table, own(body1), "図A");
+    scan(table, [], own(body2));
+    use(table, body1, []);
+    scan(table, [a.name], own(body2));
+    expect(takeReleases(table, own(body2))).toEqual([]);
+    expect(acquire(table, own(body2), "図B").grow).toHaveLength(GROW_SEATS);
+    rendered(table, body1);
+    expect(takeReleases(table, own(body2))).toEqual([a.name]);
+  });
+
   test("書き直す前に使う場所がどこも使わなくなった絵の席は、次の確かめでごく小さい絵で作り、鍵を外して空きに戻す", () => {
     const { table } = ready(2);
     const a = take(table, own(body1), "図A");
