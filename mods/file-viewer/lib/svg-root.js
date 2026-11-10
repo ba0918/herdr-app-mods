@@ -132,34 +132,57 @@ function side(l, box) {
 // 根の要素の名前の、名前空間の接頭辞を除いた部分。
 const localName = (name) => name.slice(name.indexOf(":") + 1);
 
-// <style> 要素（名前空間の接頭辞つきも）がどこかにあるか。コメントや文字の中のものも数える（タイルに分けない側に倒れるだけ）。
-// style 属性は数えない（書かれた要素にだけ当たり、祖先の関係に左右されず、タイルの外側の svg は何も設定しないので、包んでも当たり方は
-// 変わらない）。全文に正規表現を当てると QuickJS で 6,000,000 文字に 50 ms ほどかかるので、"<style" と ":style" を indexOf で探し、
-// 見つかった所だけ前後を確かめる（ガイドの「SVG の根の読み書きの時間」）。
-function hasStyleElement(text) {
-  for (const mark of ["<style", ":style"]) {
-    for (let i = text.indexOf(mark); i >= 0; i = text.indexOf(mark, i + 1)) {
-      if (styleEnd(text[i + mark.length]) && (mark === "<style" || prefixed(text, i))) return true;
-    }
-  }
-  return false;
+// <style> 要素（名前空間の接頭辞つきも。`<(?:\w[\w.-]*:)?style[\s/>]` の形）がどこかにあるかを、全文を STYLE_SLICE 文字ずつ
+// 確かめるもの。step() で次の区切りを確かめ、done で終わったか、found で見つかったかを返す。コメントや文字の中のものも数える
+// （タイルに分けない側に倒れるだけ）。style 属性は数えない（書かれた要素にだけ当たり、祖先の関係に左右されず、タイルの外側の svg は
+// 何も設定しないので、包んでも当たり方は変わらない）。
+// 6,000,000 文字を 1 度に確かめると、細工した文字列で QuickJS の 1 区間の上限（500 ms）に届くので、呼ぶ側が区切りの間に入出力の
+// await を挟む（ガイドの「SVG の根の読み書きの時間」）。"<" は indexOf で探し、その後ろの名前は 1 文字ずつ読む。名前が区切りを
+// またげば、続きは次の区切りで読む（1 つの区切りで読むのは、その区切りの文字と、見つかった名前の後ろの数文字まで）。
+export const STYLE_SLICE = 250_000;
+
+export function styleScanner(text) {
+  let at = 0;     // 次に読む位置
+  let lt = -1;    // at 以後の最初の "<" の位置（-1: 探していないか、無い）
+  let open = -1;  // 名前を読んでいる途中の "<" の位置
+  const scanner = {
+    done: text.length === 0, found: false,
+    step() {
+      const end = Math.min(text.length, at + STYLE_SLICE);
+      while (!scanner.done && at < end) {
+        if (open < 0) {
+          if (lt < at) lt = text.indexOf("<", at);
+          if (lt < 0 || lt >= end) { at = lt < 0 ? text.length : end; break; }
+          open = lt;
+          at = lt + 1;
+          if (!isWordChar(text.charCodeAt(at))) { open = -1; continue; }
+        }
+        while (at < end && isNameChar(text.charCodeAt(at))) at++;
+        if (at === end && end < text.length) break;
+        scanner.found = isStyle(text, open, at);
+        scanner.done = scanner.found;
+        open = -1;
+      }
+      if (at >= text.length) scanner.done = true;
+    },
+  };
+  return scanner;
 }
 
-// 要素の名前 style の次の文字か（空白・"/"・">"）。見つかった所ごとに呼ぶので、多くの文字は正規表現を当てずに分ける。
-const styleEnd = (c) => c === ">" || c === "/" || (c !== undefined && (c <= " " || c >= "\u00a0") && /\s/.test(c));
-const NAME_START = /\w/;
-const NAME_CHAR = /[\w.-]/;
-
-// i の ":" の前が、"<" に続く名前空間の接頭辞（\w[\w.-]*）か。前へ戻るのは ":" を含まない文字の列の間だけなので、全文で長さに比例する。
-function prefixed(text, i) {
-  let j = i;
-  while (j > 0 && NAME_CHAR.test(text[j - 1])) j--;
-  return j < i && j > 0 && text[j - 1] === "<" && NAME_START.test(text[j]);
+// open の "<" から end の前までの名前が、style か、接頭辞と ":" に続く style で、そのあとが名前の終わり（空白・"/"・">"）か。
+function isStyle(text, open, end) {
+  if (end - open === 6 && text.startsWith("style", open + 1) && styleEnd(text[end])) return true;
+  return text[end] === ":" && text.startsWith("style", end + 1) && styleEnd(text[end + 6]);
 }
 
-// SVG の全文 text の根の要素を読む。
-//   { kind: "rewrite", width, height, styled, ... }: 書かれた大きさ（px）が決まる。表示の大きさで書き直す（rewriteSvg）。styled: <style>
-//   要素を持つか（タイルで包むと CSS の祖先の関係が変わるので、タイルに分けない。lib/diagram-files.js の maxSvgScale）。
+// \w（ASCII の英数字と _）。
+const isWordChar = (c) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
+// [\w.-]
+const isNameChar = (c) => isWordChar(c) || c === 46 || c === 45;
+const styleEnd = (c) => c !== undefined && /[\s/>]/.test(c);
+
+// SVG の全文 text の根の要素を読む。読むのは先頭から根の開始タグまで（<style> 要素の有無は、要るときに styleScanner で区切って確かめる）。
+//   { kind: "rewrite", width, height, ... }: 書かれた大きさ（px）が決まる。表示の大きさで書き直す（rewriteSvg）。
 //   { kind: "asis" }: 書かれた大きさが決められない（width か height が無いか % で、viewBox も無い）。元のままコピーする。
 //   { kind: "unopenable", reason }: app が描けない（根が見つからない・svg でない・書かれた大きさが 0 以下）。
 export function readSvgRoot(text) {
@@ -172,7 +195,7 @@ export function readSvgRoot(text) {
   const width = side(length(a.width, font), box?.width), height = side(length(a.height, font), box?.height);
   if ([width, height].some((v) => v !== null && v <= 0)) return { kind: "unopenable", reason: "書かれた大きさが 0 以下" };
   if (width === null || height === null) return { kind: "asis" };
-  return { kind: "rewrite", width, height, styled: hasStyleElement(text), tag, viewBox: box };
+  return { kind: "rewrite", width, height, tag, viewBox: box };
 }
 
 // 書き換えで替える属性（viewBox が読めればそれは元のまま残す）。タイルで包む元の根は x・y も外す（いちばん外の svg では効かないが、

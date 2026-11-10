@@ -49,8 +49,9 @@ const tileNames = (f) => tilesOf(f).map((t) => t.name);
 // 図の拡大（拡大の窓・.mmd）の倍率の上限: 書き出す絵の面積の上限に収まる倍率（lib/diagram-files.js）。
 const diagramMaxScale = (width, height) => maxDiagramScale({ width, height });
 const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: diagramMaxScale });
-// 書き直す SVG の倍率の上限（<style> 要素を持つ SVG はタイルに分けない上限。file.dims の styled）。
-const svgMaxScale = (file) => (width, height) => maxSvgScale({ width, height, styled: Boolean(file.dims?.styled) });
+// 書き直す SVG の倍率の上限。<style> 要素を持つと分かった SVG（styled が true）はタイルに分けない上限で、まだ確かめていない SVG は
+// タイルに分ける上限（lib/svg-file.js の svgLook と同じ）。
+const svgMaxScale = (styled) => (width, height) => maxSvgScale({ width, height, styled: styled === true });
 // 絵の席に書き終えてから、見えない所で読み込ませるまで待つ時間。書いた絵自身の変化の知らせが読み込みのあとに届くと、読み込んだ絵が
 // 捨てられて一瞬空白になる（ガイドの「フォルダの変化の知らせ」。250 ms 待てば空白が出なかった）。
 const SEAT_SETTLE_MS = 250;
@@ -626,7 +627,7 @@ export default class FileViewer extends View {
   // 決められない・UTF-8 として読めない）は絵の席にコピーして file.cache に置く（hash は copyPicture と同じ）。寸法は書かれた大きさ。
   async routeSvg(file, content, cx, hash = null) {
     const root = readSvgRoot(content.text);
-    file.dims = root.kind === "rewrite" ? { width: root.width, height: root.height, styled: root.styled } : null;
+    file.dims = root.kind === "rewrite" ? { width: root.width, height: root.height } : null;
     if (content.utf8 && root.kind !== "asis") {
       file.svg = { text: content.text, key: svgSource({ machine: file.machine, path: file.path, size: content.size, mtime: content.mtime, hash: content.hash }) };
       file.cache = null;
@@ -1288,10 +1289,12 @@ export default class FileViewer extends View {
       return;
     }
     if (this.showsSource(rec) && file.editor) return;
-    // 図と同じく、書く面積（とタイルの数）の上限に収まる倍率までにする（元のままコピーするコピーから替わったときも）。
-    file.zoom.maxScale = svgMaxScale(file);
+    // 図と同じく、書く面積（とタイルの数）の上限に収まる倍率までにする（元のままコピーするコピーから替わったときも）。上限は、今の中身の
+    // <style> 要素を確かめ終えていれば（見え方の決まりの styledOf）その有無で決める。
+    const styled = this.mdSvg && this.md ? this.md.styledOf(file.svg) : null;
+    file.zoom.maxScale = svgMaxScale(styled);
     const viewport = window.viewport_size();
-    const look = svgLook(file.zoom, file.dims ?? { width: 1, height: 1 }, { width: viewport.width, height: viewport.height });
+    const look = svgLook(file.zoom, { ...(file.dims ?? { width: 1, height: 1 }), styled }, { width: viewport.width, height: viewport.height });
     if (!this.mdSvg || !this.md) {
       let md = null;
       const fileOf = (part, look) => diagramFile((key) => this.seatUser.nameOf(key, (name) => this.freshSeat(md, name)), part, look);

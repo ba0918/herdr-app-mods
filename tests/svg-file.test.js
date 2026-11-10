@@ -26,6 +26,16 @@ function finish(s, t = 1) {
   for (const f of s.preloads()) s.loadedImage(f.name, t);
 }
 const view = (s) => svgFileView(s.display());
+// 開いて、するもの（準備・<style> 要素の確かめ・書き込み・読み込み）が無くなるまで進めた SVG の、出している部分。
+function opened(text) {
+  const s = state();
+  s.open(content(text));
+  for (let i = 0; i < 100 && (s.needsRun || s.busy); i++) {
+    finish(s);
+    if (s.needsRun) s.tick(100, () => 1);
+  }
+  return view(s).part;
+}
 
 describe("SVG の準備", () => {
   test("ファイル全体を部分 1 つにし、配置の大きさは書かれた大きさ", () => {
@@ -61,8 +71,8 @@ describe("開くとき", () => {
 });
 
 describe("書く大きさ", () => {
-  // part: 書かれた大きさ width × height の SVG の部分。zoom: image viewer のズーム（views/zoom.js の Zoom の値）。
-  const part = (width, height) => ({ type: "svg", source: "k", layout: { width, height } });
+  // part: 書かれた大きさ width × height の、<style> 要素を持たない SVG の部分。zoom: image viewer のズーム（views/zoom.js の Zoom の値）。
+  const part = (width, height) => ({ type: "svg", source: "k", layout: { width, height, styled: false } });
   const zoom = (z) => ({ fit: false, scale: 1, view: null, fitMax: 1, ...z });
   const written = (p, z, viewport = { width: 1280, height: 820 }) => {
     const f = diagramFile(names(), p, svgLook(z, p.layout, viewport));
@@ -97,7 +107,7 @@ describe("書く大きさ", () => {
 });
 
 describe("書く面積の上限", () => {
-  const part = (width, height) => ({ type: "svg", source: "k", layout: { width, height } });
+  const part = (width, height) => ({ type: "svg", source: "k", layout: { width, height, styled: false } });
   const zoom = (z) => ({ fit: false, scale: 1, view: null, fitMax: 1, ...z });
   const area = (f) => f.tiles.reduce((sum, t) => sum + t.width * t.height, 0);
 
@@ -115,6 +125,9 @@ describe("書く面積の上限", () => {
     const f = diagramFile(names(), p, svgLook(zoom({ scale: 1 }), p.layout, { width: 1280, height: 820 }));
     expect(f.tiles.length).toBeLessThanOrEqual(MAX_TILES);
     expect(area(f)).toBeLessThanOrEqual(TILE_SIDE * TILE_SIDE);
+    const shown = opened(svg(500_000, 4)).file;
+    expect(shown.tiles.length).toBe(MAX_TILES);
+    expect(area(shown)).toBeLessThanOrEqual(TILE_SIDE * TILE_SIDE);
   });
 
   test("縦横の比が極端な SVG のあいだは倍率を下げず、書ける中身に替わったら今の倍率で書く", () => {
@@ -143,7 +156,7 @@ describe("書く面積の上限", () => {
 
 describe("タイル", () => {
   test("辺が 4,096 を超える大きさ（8,000 × 800 を倍率 1）は、4,096 以下のタイルに分かれ、隙間なく並ぶ", () => {
-    const f = diagramFile(names(), { type: "svg", source: "k", layout: { width: 8000, height: 800 } }, scaleLook(null, 1));
+    const f = diagramFile(names(), { type: "svg", source: "k", layout: { width: 8000, height: 800, styled: false } }, scaleLook(null, 1));
     expect(f).toMatchObject({ width: 8000, height: 800 });
     expect(f.tiles.map(({ x, y, width, height }) => ({ x, y, width, height }))).toEqual([
       { x: 0, y: 0, width: TILE_SIDE, height: 800 },
@@ -152,19 +165,21 @@ describe("タイル", () => {
     expect(new Set(f.tiles.map((t) => t.name)).size).toBe(2);
   });
 
+  // 大きな SVG の本文（<style> 要素が全文の終わり近くにあるものと、style 属性だけのもの）。
+  const filler = `<rect style="fill: red" width="1" height="1"/>`.repeat(30_000);
+
   // タイルは元の根を外側の svg で包むので、<style> 要素の CSS の祖先の関係（svg svg rect など）が変わり、倍率で色などが変わりうる。
   test("<style> 要素を持つ SVG はタイルに分けず、書く大きさの長い辺が 4,096 px を超えない倍率までにする", () => {
     const styled = [
       `<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800"><style>svg svg rect { fill: red }</style><rect width="1" height="1"/></svg>`,
+      `<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800">${filler}<style>svg svg rect { fill: red }</style></svg>`,
     ];
     for (const text of styled) {
-      const prep = startSvgPreparation(content(text));
-      prep.advance(100, () => 0);
-      const p = prep.parts[0];
+      const p = opened(text);
+      expect(p.file.tiles.length).toBe(1);
+      expect(p.file).toMatchObject({ width: TILE_SIDE, height: 410 });
       const z = { fit: false, scale: 1, view: null, fitMax: 1 };
-      const f = diagramFile(names(), p, svgLook(z, p.layout, { width: 1280, height: 820 }));
-      expect(f.tiles.length).toBe(1);
-      expect(f).toMatchObject({ width: TILE_SIDE, height: 410 });
+      svgLook(z, p.layout, { width: 1280, height: 820 });
       expect(z.scale).toBeCloseTo(0.512, 6);
       const most = diagramFile(names(), p, svgLook({ ...z, scale: 1000 }, p.layout, { width: 1280, height: 820 }));
       expect(most.tiles.length).toBe(1);
@@ -178,13 +193,13 @@ describe("タイル", () => {
       svg(8000, 800),
       `<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800"><rect style="fill: red" width="1" height="1"/></svg>`,
       `<svg xmlns="http://www.w3.org/2000/svg" style="fill: red" width="8000" height="800"><rect width="1" height="1"/></svg>`,
+      `<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800">${filler}</svg>`,
     ];
     for (const text of plain) {
-      const prep = startSvgPreparation(content(text));
-      prep.advance(100, () => 0);
+      const p = opened(text);
+      expect(p.file.tiles.length).toBe(2);
       const z = { fit: false, scale: 1, view: null, fitMax: 1 };
-      const f = diagramFile(names(), prep.parts[0], svgLook(z, prep.parts[0].layout, { width: 1280, height: 820 }));
-      expect(f.tiles.length).toBe(2);
+      svgLook(z, p.layout, { width: 1280, height: 820 });
       expect(z.scale).toBe(1);
     }
   });
@@ -405,7 +420,7 @@ describe("書き直さない SVG", () => {
 describe("共有の鍵", () => {
   const file = { machine: "wsl", path: "/repo/a.svg", size: 6_000_000, mtime: "2026-11-11 10:00:00", hash: "abc" };
   // 見た目で書く絵のタイルの鍵（使っている絵の表から名前を取る鍵）。
-  const keys = (source, layout, look) => diagramFile((k) => k, { type: "svg", source, layout }, look).tiles.map((t) => t.key);
+  const keys = (source, layout, look) => diagramFile((k) => k, { type: "svg", source, layout: { styled: false, ...layout } }, look).tiles.map((t) => t.key);
 
   test("同じファイル・同じ中身（大きさ・更新時刻）・同じ書く大きさなら同じになる", () => {
     expect(keys(svgSource(file), { width: 100, height: 100 }, scaleLook(null, 2))).toEqual(keys(svgSource({ ...file }), { width: 100, height: 100 }, scaleLook(null, 2.001)));

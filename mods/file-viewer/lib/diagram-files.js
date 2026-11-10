@@ -44,11 +44,22 @@ export function maxDiagramScale(layout) {
 
 // 書き直す SVG の、倍率の上限。面積が MAX_AREA に、長い辺が MAX_TILES 枚のタイルの長さに収まる倍率（面積が収まれば、長い辺が
 // TILE_SIDE を超えるとき短い辺は TILE_SIDE より短く、タイルは 1 列に並ぶので、長い辺の上限がタイルの数の上限になる）。
-// <style> 要素を持つ SVG（layout.styled）はタイルに分けず、長い辺が TILE_SIDE に収まる倍率まで（タイルは元の根を外側の svg で
-// 包むので、CSS の祖先の関係が変わり、倍率によって当たる CSS が変わりうる。lib/svg-root.js の rewriteSvg）。
+// タイルに分けるのは <style> 要素を持たないと分かった SVG（layout.styled が false）だけ。持つ SVG（true）と、まだ確かめていない SVG
+// （null）はタイルに分けず、長い辺が TILE_SIDE に収まる倍率まで（タイルは元の根を外側の svg で包むので、CSS の祖先の関係が変わり、
+// 倍率によって当たる CSS が変わりうる。lib/svg-root.js の rewriteSvg・styleScanner）。
 export function maxSvgScale(layout) {
-  const side = layout.styled ? TILE_SIDE : MAX_TILES * TILE_SIDE;
+  const side = layout.styled === false ? MAX_TILES * TILE_SIDE : TILE_SIDE;
   return Math.min(maxDiagramScale(layout), side / Math.max(layout.width, layout.height));
+}
+
+// まだ <style> 要素を確かめていない書き直す SVG を look で書くとき、確かめる要があるか: <style> 要素が無ければ、書く大きさの長い辺が
+// TILE_SIDE を超えて（タイルに分けて）書くか、タイルに分けないと書けない（縦横の比が極端）か。
+export function svgStyleWanted(layout, look) {
+  const plain = { ...layout, styled: false };
+  if (!svgDrawable(plain)) return false;
+  if (!svgDrawable({ ...layout, styled: null })) return true;
+  const size = svgExportSize(plain, look);
+  return Math.max(size.width, size.height) > TILE_SIDE;
 }
 
 // 書き直す SVG を、上限の倍率で短い辺が 1 px 以上に書けるか（縦横の比が極端でないか）。
