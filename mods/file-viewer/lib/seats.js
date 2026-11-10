@@ -301,10 +301,12 @@ function releasable(table, name, used) {
   const s = table.seats[name];
   const retry = s.state === "releasing" && !s.by;
   if ((s.state !== "ready" && s.state !== "dirty" && !retry) || used.has(name)) return false;
-  for (const p of Object.values(table.places)) {
-    if (p.dropped[name] !== undefined && p.frame <= p.dropped[name]) return false;
-  }
-  return true;
+  return !awaitsFrame(table, name);
+}
+
+// name を外した使う場所のどれかの描画が、外したときよりまだ進んでいないか（その描画が打ち切られると、前の画面に残っている）。
+function awaitsFrame(table, name) {
+  return Object.values(table.places).some((p) => p.dropped[name] !== undefined && p.frame <= p.dropped[name]);
 }
 
 // 手放す絵の席（どの集まりにも無く、外した使う場所の描画がどれも外したときより進んでいるものと、前にごく小さい絵で上書きできなかった
@@ -375,8 +377,10 @@ export function watch(table, live, now) {
 
 // フォルダの一覧（無ければ null）と表を突き合わせる。無い絵の席のうち、どこかの集まりにあるものは、鍵の有無（中身の分からない
 // 絵の席も）によらず lost にする（空きに戻さず、その使う場所のコピーが書き直す。rewrites）。どこの集まりにも無いものは、lost のまま
-// 書き直されずに使う場所が外したものも、鍵を外して owner がごく小さい絵で作る（create。作り終えたら released）。ファイルのある lost
-// の絵の席（書き直しがファイルを作ってから失敗したものなど）も、どこの集まりにも無ければ、次の手放しでごく小さい絵で上書きする。
+// 書き直されずに使う場所が外したものも、鍵を外して owner がごく小さい絵で作る（create。作り終えたら released）。ただし外した使う場所の
+// 描画をまだ待っているもの（打ち切られた描画の前の画面に残っていうる）は、すぐ作り直して別の絵に使わず、鍵を外して、描画が進んでから
+// 次の手放しでごく小さい絵で作る（上書きはファイルが無ければ作る）。ファイルのある lost の絵の席（書き直しがファイルを作ってから
+// 失敗したものなど）も、どこの集まりにも無ければ、次の手放しでごく小さい絵で上書きする。
 // 書いている途中と手放し中の絵の席は、書く側がファイルを作るので触らない。
 export function scan(table, listing, owner) {
   if (table.init.state !== "done") return { mkdir: false, create: [] };
@@ -392,6 +396,10 @@ export function scan(table, listing, owner) {
     }
     if (have.has(name)) {
       if (s.state === "lost") releaseAgain(table, name);
+      continue;
+    }
+    if (awaitsFrame(table, name)) {
+      releaseAgain(table, name);
       continue;
     }
     beginRelease(table, name, owner);

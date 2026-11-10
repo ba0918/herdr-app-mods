@@ -558,6 +558,23 @@ describe("消えた絵の席", () => {
     expect(takeReleases(table, own(body2))).toEqual([a.name]);
   });
 
+  // 仕様: 外した前の絵の席は、それを使わない描画が済んでから手放す（反例: 差し替えの描画が打ち切られて前の画面が残っている間に、
+  // 外から消された絵の席が作り直されて別の絵に使われ、前の画面に別の絵が出る）。
+  test("外した使う場所の描画を待っている絵の席は、ファイルが消されても描画が進むまで作り直さず、別の鍵にも割り当てない", () => {
+    const { table } = ready(2);
+    const a = take(table, own(body1), "図A");
+    const other = [seatName(0), seatName(1)].find((n) => n !== a.name);
+    use(table, body1, []);
+    expect(scan(table, [other], own(body2)).create).toEqual([]);
+    expect(acquire(table, own(body2), "図B").name).toBe(other);
+    expect(takeReleases(table, own(body2))).toEqual([]);
+    rendered(table, body1);
+    const names = takeReleases(table, own(body2));
+    expect(names).toEqual([a.name]);
+    released(table, names, own(body2));
+    expect(seatOf(table, a.name).state).toBe("free");
+  });
+
   test("書き直す前に使う場所がどこも使わなくなった絵の席は、次の確かめでごく小さい絵で作り、鍵を外して空きに戻す", () => {
     const { table } = ready(2);
     const a = take(table, own(body1), "図A");
