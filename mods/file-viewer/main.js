@@ -239,10 +239,7 @@ export default class FileViewer extends View {
     chores.scanAt = now;
     const r = scan(table, await listSeats(), this.seatOwner);
     if (r.mkdir) await makeSeatsDir();
-    if (r.create.length) {
-      await writeTinySeats(r.create);
-      released(table, r.create, this.seatOwner);
-    }
+    if (r.create.length) released(table, r.create, this.seatOwner, await writeTinySeats(r.create));
     if (!chores.oldCache) {
       chores.oldCache = true;
       const old = await listOldCache();
@@ -308,15 +305,16 @@ export default class FileViewer extends View {
     try {
       const plan = initPlan(table, await listSeats());
       if (plan.mkdir) await makeSeatsDir();
-      await writeTinySeats([...plan.overwrite, ...plan.create]);
-      initDone(table, this.seatOwner);
+      initDone(table, this.seatOwner, await writeTinySeats([...plan.overwrite, ...plan.create]));
     } catch {
       // 次の POLL_MS の回にやり直す。
       if (table.init.by?.gen === this.seatOwner.gen) table.init.by = null;
     }
   }
 
-  // 手放す絵の席（どこも使わなくなり、外した使う場所の描画が進んだもの）を、ごく小さい絵で上書きして手放す。1 つずつ動かす。
+  // 手放す絵の席（どこも使わなくなり、外した使う場所の描画が進んだもの）を、ごく小さい絵で上書きして手放す。上書きできなかった
+  // 絵の席は手放し中のまま残り、次の回にもう一度上書きする（lib/seats.js の released。初めての手放し・増やす・作り直しも同じ）。
+  // 1 つずつ動かす。
   async releaseSeats() {
     if (!this.seats) return;
     if (this.releasingSeats) { this.releaseSeatsAgain = true; return; }
@@ -326,8 +324,7 @@ export default class FileViewer extends View {
         this.releaseSeatsAgain = false;
         const names = takeReleases(this.seats, this.seatOwner);
         if (!names.length) break;
-        await writeTinySeats(names);
-        released(this.seats, names, this.seatOwner);
+        released(this.seats, names, this.seatOwner, await writeTinySeats(names));
       } while (this.releaseSeatsAgain);
     } finally {
       this.releasingSeats = false;
@@ -336,16 +333,17 @@ export default class FileViewer extends View {
 
   // 割り当てを待った・絵の席が足りなかったとき（this.seatUser.blocked）。足りなければ増やす数の絵の席をごく小さい絵で作る（ファイルを
   // 作るので、そのとき出している絵は一瞬空白になりうる）。初めての手放しを待つなら、受け持てれば受け持ち、ほかのコピーがしているなら少し待つ。
+  // ごく小さい絵で上書きできなかった絵の席を待つなら、手放し直してから少し待つ（上書きが続けて失敗しても回り続けないように）。
   async unblockSeats(cx) {
     const blocked = this.seatUser.blocked;
     this.seatUser.blocked = null;
     if (blocked?.grow) {
-      await writeTinySeats(blocked.grow);
-      grown(this.seats, blocked.grow, this.seatOwner);
+      grown(this.seats, blocked.grow, this.seatOwner, await writeTinySeats(blocked.grow));
       return;
     }
     if (blocked?.wait === "init") await this.initSeats();
-    if (this.seats.init.state !== "done" || blocked?.wait === "grow") await cx.sleep(100);
+    if (blocked?.wait === "release") await this.releaseSeats();
+    if (this.seats.init.state !== "done" || blocked?.wait === "grow" || blocked?.wait === "release") await cx.sleep(100);
   }
 
   // このコピーの使う場所が今使っている絵の席（names）を表に渡す。外した絵の席があれば、描き直しを求めて、差し替えた描画が来てから

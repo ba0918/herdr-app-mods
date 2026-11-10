@@ -163,6 +163,51 @@ describe("描画の回数", () => {
   });
 });
 
+describe("ごく小さい絵で上書きできなかったとき", () => {
+  // 仕様: 使っていない絵の席は、ごく小さい絵のファイルとして残る。手放した絵の席は、次の絵に使い直す。
+  test("手放すときに上書きできなかった絵の席は空きに戻さず、次の手放しでもう一度上書きする", () => {
+    const { table } = ready(2);
+    const a = take(table, own(body1), "図A");
+    use(table, body1, []);
+    rendered(table, body1);
+    expect(takeReleases(table, own(body1))).toEqual([a.name]);
+    released(table, [a.name], own(body1), [a.name]);
+    expect(acquire(table, own(body2), "図B").name).not.toBe(a.name);
+    expect(takeReleases(table, own(body2))).toEqual([a.name]);
+  });
+
+  test("初めて作るときに上書きできなかった絵の席は空きにせず、そのあとの手放しでもう一度上書きする", () => {
+    const table = ensureTable({}, 0);
+    const owner = own(body1);
+    claimInit(table, owner, 0);
+    initPlan(table, [seatName(0), seatName(1)], 2);
+    initDone(table, owner, [seatName(0)]);
+    expect(acquire(table, own(body2), "図A").name).toBe(seatName(1));
+    expect(takeReleases(table, own(body2))).toEqual([seatName(0)]);
+  });
+
+  test("増やすときに作れなかった絵の席は空きにせず、そのあとの手放しでもう一度作る", () => {
+    const { table } = ready(1);
+    take(table, own(body1), "図A");
+    const r = acquire(table, own(body1), "図B");
+    grown(table, r.grow, own(body1), [r.grow[0]]);
+    expect(acquire(table, own(body1), "図B").name).toBe(r.grow[1]);
+    expect(takeReleases(table, own(body2))).toEqual([r.grow[0]]);
+  });
+
+  test("作れなかった絵の席をもう一度作るまでは、空きが無くてもさらに増やさずに待ち、作れたらそれを割り当てる", () => {
+    const { table } = ready(1);
+    take(table, own(body1), "図A");
+    const r = acquire(table, own(body1), "図B");
+    grown(table, r.grow, own(body1), r.grow);
+    expect(acquire(table, own(body1), "図B")).toEqual({ wait: "release" });
+    const again = takeReleases(table, own(body1));
+    expect(again).toEqual(r.grow);
+    released(table, again, own(body1));
+    expect(acquire(table, own(body1), "図B")).toMatchObject({ name: r.grow[0], write: true });
+  });
+});
+
 describe("書いている途中と世代", () => {
   test("書き終わるまで手放さず、同じ鍵を求めた別の使う場所には「書いている途中」が返る", () => {
     const { table } = ready();

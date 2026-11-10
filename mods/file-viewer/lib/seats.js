@@ -66,7 +66,7 @@ export function ensureTable(holder, now, { poll = 0 } = {}) {
 }
 
 // 状態: free（ごく小さい絵）、writing（owner が鍵の絵を書いている途中）、ready（鍵の絵がある）、releasing（owner がごく小さい絵で
-// 上書きしている途中）、dirty（中身が分からない。使わなくなったら手放す）、lost（ファイルが無くなった。使う場所が書き直す。
+// 上書きしている途中。by が無ければ、ごく小さい絵で上書きできなかったので、次の手放しでもう一度上書きする）、dirty（中身が分からない。使わなくなったら手放す）、lost（ファイルが無くなった。使う場所が書き直す。
 // 書いたことのない中身の分からない絵の席なら鍵は無い）。rewrite: writing のうち、無くなった絵の席の書き直し（書けなければ lost に戻る）。
 const seat = (state) => ({ state, key: null, by: null, info: null, rewrite: false });
 
@@ -101,9 +101,11 @@ export function initPlan(table, listing, count = INITIAL_SEATS) {
   return { mkdir: listing === null, overwrite: found, create };
 }
 
-export function initDone(table, owner) {
+// owner が初めての手放しを終えた。failed: ごく小さい絵で上書きできなかった絵の席（空きにせず、次の手放しでもう一度上書きする）。
+export function initDone(table, owner, failed = []) {
   if (!same(table.init.by, owner)) return;
-  for (const s of Object.values(table.seats)) if (s.state === "releasing" && !s.by) s.state = "free";
+  const retry = new Set(failed);
+  for (const [name, s] of Object.entries(table.seats)) if (s.state === "releasing" && !s.by && !retry.has(name)) s.state = "free";
   table.init = { state: "done", notBefore: 0, by: null };
 }
 
@@ -141,6 +143,8 @@ function beginRelease(table, name, owner) {
 // { name, write: false, info }: 同じ鍵の絵がある（共有する。書き直さない）。writing: true なら、ほかのコピーが書いている途中で、
 //   書き終わるまで待つ。
 // { wait: "init" | "grow" }: 初めての手放しか、絵の席を増やしている途中。あとでもう一度求める。
+// { wait: "release" }: 空きが無く、ごく小さい絵で上書きできなかった絵の席がある（増やさずに、それを手放し直してから求める。上書きが
+//   続けて失敗しても絵の席を増やし続けないように）。
 // { grow: names }: 空きが無い。owner がその名前の絵の席をごく小さい絵で作り、grown を呼んでから、もう一度求める。
 // どれも、得た絵の席を owner の使う場所の集まりに入れる。
 export function acquire(table, owner, key) {
@@ -154,6 +158,7 @@ export function acquire(table, owner, key) {
   const name = freeSeat(table);
   if (name === undefined) {
     if (table.growing) return { wait: "grow" };
+    if (table.order.some((n) => table.seats[n].state === "releasing" && !table.seats[n].by)) return { wait: "release" };
     const start = table.order.length;
     table.growing = { ...owner };
     return { grow: Array.from({ length: GROW_SEATS }, (_, i) => seatName(start + i)) };
@@ -164,11 +169,12 @@ export function acquire(table, owner, key) {
   return { name, write: true };
 }
 
-// 増やした絵の席を作り終えた（空きとして載せる）。
-export function grown(table, names, owner) {
+// 増やした絵の席を作り終えた（空きとして載せる）。failed: 作れなかった絵の席（空きにせず、次の手放しでもう一度作る）。
+export function grown(table, names, owner, failed = []) {
+  const retry = new Set(failed);
   for (const name of names) {
     if (table.seats[name]) continue;
-    table.seats[name] = seat("free");
+    table.seats[name] = seat(retry.has(name) ? "releasing" : "free");
     table.order.push(name);
   }
   if (same(table.growing, owner)) table.growing = null;
@@ -226,14 +232,16 @@ export function dropPlace(table, place, owner = null) {
 
 function releasable(table, name, used) {
   const s = table.seats[name];
-  if ((s.state !== "ready" && s.state !== "dirty") || used.has(name)) return false;
+  const retry = s.state === "releasing" && !s.by;
+  if ((s.state !== "ready" && s.state !== "dirty" && !retry) || used.has(name)) return false;
   for (const p of Object.values(table.places)) {
     if (p.dropped[name] !== undefined && p.frame <= p.dropped[name]) return false;
   }
   return true;
 }
 
-// 手放す絵の席（どの集まりにも無く、外した使う場所の描画がどれも外したときより進んでいるもの）を、owner が手放し中にして返す。
+// 手放す絵の席（どの集まりにも無く、外した使う場所の描画がどれも外したときより進んでいるものと、前にごく小さい絵で上書きできなかった
+// もの）を、owner が手放し中にして返す。
 // owner はそれをごく小さい絵で上書きしてから released を呼ぶ。
 export function takeReleases(table, owner) {
   if (table.init.state !== "done") return [];
@@ -243,12 +251,14 @@ export function takeReleases(table, owner) {
   return out;
 }
 
-// owner が names をごく小さい絵で上書きし終えた（空きに戻す）。
-export function released(table, names, owner) {
+// owner が names をごく小さい絵で上書きし終えた（空きに戻す）。failed: 上書きできなかった名前（空きに戻さず、手放し中のまま次の
+// 手放しでもう一度上書きする）。
+export function released(table, names, owner, failed = []) {
+  const retry = new Set(failed);
   for (const name of names) {
     const s = table.seats[name];
     if (s && s.state === "releasing" && same(s.by, owner)) {
-      s.state = "free";
+      if (!retry.has(name)) s.state = "free";
       s.by = null;
     }
   }
