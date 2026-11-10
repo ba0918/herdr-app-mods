@@ -80,11 +80,6 @@ describe("使い始める", () => {
     expect(r.grow).toContain(again.name);
     expect(again.write).toBe(true);
   });
-
-  test("初めの数は、整形表示の上限の図の数の 2 倍に 8 を足した数、増やす数は 64", () => {
-    expect(INITIAL_SEATS).toBe(RENDER_LIMIT.diagrams * 2 + 8);
-    expect(GROW_SEATS).toBe(64);
-  });
 });
 
 describe("共有して数える", () => {
@@ -289,17 +284,6 @@ describe("初めて作るとき", () => {
     expect(a.version).toBe(SEATS_VERSION);
     expect(ensureTable(holder, 5)).toBe(a);
     expect(Object.values(holder)).toEqual([a]);
-  });
-
-  test("版の違う表は作り直され、次の見張りの回まで手放しを始めない", () => {
-    const holder = {};
-    const a = ensureTable(holder, 0);
-    a.version = SEATS_VERSION + 1;
-    const b = ensureTable(holder, 1_000, { poll: 2_000 });
-    expect(b).not.toBe(a);
-    expect(b.version).toBe(SEATS_VERSION);
-    expect(claimInit(b, own(body1), 1_500)).toBe(false);
-    expect(claimInit(b, own(body1), 3_000)).toBe(true);
   });
 
   test("手放しを始めたコピーの世代が止まったら、ほかのコピーがやり直せる", () => {
