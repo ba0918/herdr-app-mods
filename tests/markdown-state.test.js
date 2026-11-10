@@ -751,6 +751,29 @@ describe("テーマが変わったとき（図の色の書き直し）", () => {
     expect(shownFiles(s)).toEqual(["flowchart LR; A-->B@new|w800", "flowchart LR; C-->D@new|w800"]);
   });
 
+  // 仕様: 消えた絵の席を使っていたタブは、出していた絵をその絵の席に書き直す。
+  test("前の色の結果を出したまま書き直している間に絵の席が無くなったら、出している前の色の絵も、書いている新しい色の絵も、その色で書き直す", () => {
+    const s = themed();
+    s.setLook(NEW);
+    const old = s.lostTile("flowchart LR; A-->B@old|w800");
+    expect(old.tile.name).toBe("flowchart LR; A-->B@old|w800");
+    expect(old.look).toBe(OLD);
+    expect(old.part.source).toContain("A-->B");
+    expect(s.lostTile("flowchart LR; C-->D@new|w800").look).toBe(NEW);
+    expect(s.lostTile("flowchart LR; E-->F@old|w800")).toBe(null);
+  });
+
+  test("ソース表示から戻って準備している間に、前に出していた結果の絵の席が無くなったら、その結果の色で書き直す", () => {
+    const s = themed();
+    s.toSource();
+    s.setLook(NEW);
+    s.change(twoDiagrams("b"));
+    s.enter();
+    const held = s.lostTile("flowchart LR; A-->B@old|w800");
+    expect(held.look).toBe(OLD);
+    expect(held.part.source).toContain("A-->B");
+  });
+
   test("書き出し直しが失敗したら、前の色の結果のまま「図を書き出せなかった」と知らせ、代わりの整形表示にしない", () => {
     const s = themed();
     s.setLook(NEW);

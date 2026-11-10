@@ -112,6 +112,21 @@ describe("拡大の窓の倍率", () => {
   });
 });
 
+describe("拡大の窓の絵の席が無くなったとき", () => {
+  // 仕様: 消えた絵の席を使っていた拡大の窓は、出していた絵をその絵の席に書き直す。
+  test("出している絵と、書いて読み込みを待っている絵の、どちらの絵の席でも、その絵の倍率と色で書き直す先が分かる", () => {
+    const z = zoomed();
+    z.request(3);
+    z.recolor("c2");
+    const task = z.task();
+    const file = fileAt(task);
+    z.wrote(task, file, 1);
+    expect(z.lostTile("s1-c1")).toEqual({ tile: FIRST, file: FIRST, scale: 1, colorsKey: "c1" });
+    expect(z.lostTile(file.name)).toEqual({ tile: file, file, scale: 3, colorsKey: "c2" });
+    expect(z.lostTile("s2-c1")).toBe(null);
+  });
+});
+
 describe("図を押して拡大の窓を開くとき", () => {
   test("収まる大きさの絵を書いて読み込み終えたら、その絵で開く", () => {
     const o = new DiagramOpening(0);

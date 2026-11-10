@@ -145,6 +145,18 @@ export class ZoomSvg {
   display() {
     return { file: this.shown, notice: this.notice };
   }
+
+  // 無くなった絵の席 name に書き直す絵のタイル { tile, file, scale, colorsKey }（file は絵全体、scale と colorsKey はその絵の倍率と色）。
+  // 出している絵と、書いて読み込みを待っている絵から探す。使っていない名前なら null。
+  lostTile(name) {
+    const pictures = [{ file: this.shown, scale: this.shown.scale, colorsKey: this.shownColors }];
+    if (this.ready) pictures.push({ file: this.ready.file, ...this.ready.task });
+    for (const { file, scale, colorsKey } of pictures) {
+      const tile = tilesOf(file).find((t) => t.name === name);
+      if (tile) return { tile, file, scale, colorsKey };
+    }
+    return null;
+  }
 }
 
 // 図を押して拡大の窓を開くまでの決まり（仕様の「拡大表示」）。窓に収まる大きさの絵を書いて読み込み終えてから開く。

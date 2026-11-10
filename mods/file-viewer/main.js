@@ -255,7 +255,8 @@ export default class FileViewer extends View {
 
   // 自分の使う場所の、ファイルが無くなった絵の席を、出していた絵で同じ名前に書き直す（作り直す）。ほかのコピーと共有している絵の席は、
   // 先に受け持ったコピーが書く。図は見え方の決まりにも知らせ、書いて読み込み終えるまで出している結果を出し続ける。画像はコピーし直す。
-  // 拡大の窓は出している絵を書き直す。
+  // 拡大の窓は出している絵を書き直す。書き直せなかった絵の席は無くなったままになり（lib/seats.js の wrote）、次の回に書き直し直すか、
+  // 使う場所が外すと、見張りがごく小さい絵で作り直す。
   async rewriteLostSeats(cx) {
     const user = this.seatUser;
     const mine = user.lostSeats().filter((name) => user.claim(name));
@@ -277,28 +278,22 @@ export default class FileViewer extends View {
     cx.notify();
   }
 
-  // 見え方の決まりが今の見た目で出す図のタイル name を書き直す。見つからなければ（出している結果が前の見た目のものなど）書かない。
+  // 見え方の決まりが使っている図のタイル name を、その絵を書いた見た目で書き直す（書いている途中の結果の今の見た目の絵と、
+  // 出している前の見た目の絵のどちらも。lib/markdown-state.js の lostTile）。見つからなければ書かない（無くなったままにする）。
   async rewriteDiagramSeat(md, name, cx) {
-    const parts = md?.job?.parts ?? md?.shown?.parts;
-    const files = parts ? md.filesFor(parts) : [];
-    for (const [i, file] of files.entries()) {
-      const tile = file && tilesOf(file).find((t) => t.name === name);
-      if (!tile) continue;
-      const l = parts[i].layout;
-      await this.writeSeatTile(tile, diagramSvg(l, md.look.colors, { width: l.width, height: l.height }), file, l, cx);
-      md.wrote(name, Date.now());
-      this.awaitPreloads(md, cx);
-      return;
-    }
-    this.seatUser.wrote(name, { ok: false });
+    const found = md?.lostTile(name);
+    if (!found) { this.seatUser.wrote(name, { ok: false }); return; }
+    const l = found.part.layout;
+    await this.writeSeatTile(found.tile, diagramSvg(l, found.look.colors, { width: l.width, height: l.height }), found.file, l, cx);
+    md.wrote(name, Date.now());
+    this.awaitPreloads(md, cx);
   }
 
-  // 拡大の窓が出している絵のタイル name を書き直す。
+  // 拡大の窓が使っている絵（出している絵と、書いて読み込みを待っている絵）のタイル name を、その絵の色で書き直す。
   async rewriteOverlaySeat(name, cx) {
-    const o = this.overlay, file = o.zs?.display().file;
-    const tile = file && tilesOf(file).find((t) => t.name === name);
-    if (!tile) { this.seatUser.wrote(name, { ok: false }); return; }
-    await this.writeSeatTile(tile, await this.overlaySvgText(o.zs.shownColors), { ...file, tiles: tilesOf(file) }, o.size, cx);
+    const o = this.overlay, found = o.zs?.lostTile(name);
+    if (!found) { this.seatUser.wrote(name, { ok: false }); return; }
+    await this.writeSeatTile(found.tile, await this.overlaySvgText(found.colorsKey), { ...found.file, tiles: tilesOf(found.file) }, o.size, cx);
     o.zs.fresh(name);
   }
 

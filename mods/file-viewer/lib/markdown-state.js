@@ -33,8 +33,9 @@ export class MarkdownState {
     this.mode = "formatted"; // "formatted" | "source"（出しているのは整形表示の場所か、ソース表示か）
     this.userSource = false; // 利用者がソース表示を選んだか（上限で移したソース表示は含めない）
     this.over = null;        // 整形表示の上限を超えていれば judgeSize の over
-    this.shown = null;       // 出している整形表示 { text, parts, fallback, files }（files は図の部分ごとのファイルか null）
-    // 整形表示に入るときに捨てた、前に出していた結果の files。次の結果を出すまで、その SVG を使っている名前に残す
+    // 出している整形表示 { text, parts, fallback, files, look }（files は図の部分ごとのファイルか null。look はその files の見た目）
+    this.shown = null;
+    // 整形表示に入るときに捨てた、前に出していた結果（shown と同じ形）。次の結果を出すまで、その SVG を使っている名前に残す
     // （準備の結果が出るまで、中身の変わらない図の SVG を消して書き直さないように）。
     this.held = null;
     // 進めている準備 { text, prep, parts, inRender, restyle, elapsed, last }。prep を最後まで進めると parts が入り、図の SVG を書く段になる。
@@ -255,6 +256,21 @@ export class MarkdownState {
     this.job = { text: shown.text, prep: null, parts: shown.parts, inRender: false, restyle: true, elapsed: 0, last: null };
   }
 
+  // 無くなった絵の席 name に書き直す図のタイル { tile, file, part, look }（file は図のファイル全体、look はその絵の見た目）。
+  // 書いている途中の結果の今の見た目の絵、出している結果の絵、整形表示に入るときに捨てた前の結果の絵の順に探す（出している結果が
+  // 前の見た目のままのこともある）。使っていない名前なら null。
+  lostTile(name) {
+    const results = [this.job?.parts && { parts: this.job.parts, files: this.filesFor(this.job.parts), look: this.look }, this.shown, this.held];
+    for (const r of results) {
+      if (!r?.files || !r.look) continue;
+      for (const [i, file] of r.files.entries()) {
+        const tile = file && tilesOf(file).find((t) => t.name === name);
+        if (tile) return { tile, file, part: r.parts[i], look: r.look };
+      }
+    }
+    return null;
+  }
+
   // 図の見た目（色と書き出しの大きさ）を渡す（描画のたびに）。変わったら、出している結果を新しい見た目で書き直す
   // （書き終えるまで前の見た目の絵を出す）。名前が変わらない図だけなら、そのまま替える。準備の途中なら、新しい見た目で書く。
   // 書く段の途中なら、新しい見た目の図がもう書けて読み込めていればその場で出す（出している見た目に戻ったときは書き直しを終える。
@@ -275,7 +291,7 @@ export class MarkdownState {
     if (!shown || shown.fallback || this.job) return;
     const files = this.filesFor(shown.parts);
     if (this.allWritten(files)) {
-      this.shown = { ...shown, files };
+      this.shown = { ...shown, files, look };
       return;
     }
     this.job = { text: shown.text, prep: null, parts: shown.parts, inRender: false, restyle: true, elapsed: 0, last: null };
@@ -287,7 +303,7 @@ export class MarkdownState {
   keep() {
     const names = new Set();
     if (this.over) return names;
-    for (const f of [...(this.shown?.files ?? []), ...(this.held ?? [])]) if (f) for (const t of tilesOf(f)) names.add(t.name);
+    for (const f of [...(this.shown?.files ?? []), ...(this.held?.files ?? [])]) if (f) for (const t of tilesOf(f)) names.add(t.name);
     if (this.job?.parts) for (const f of this.filesFor(this.job.parts)) if (f) for (const t of tilesOf(f)) names.add(t.name);
     return names;
   }
@@ -369,7 +385,7 @@ export class MarkdownState {
     this.mode = "formatted";
     this.pending = null;
     if (this.shown && this.shown.text !== this.text) {
-      this.held = this.shown.files;
+      this.held = this.shown;
       this.shown = null;
     }
     if (this.job && this.job.text !== this.text) this.job = null;
@@ -419,7 +435,7 @@ export class MarkdownState {
     const files = this.filesFor(job.parts);
     if (!this.allWritten(files)) return;
     this.failure = null;
-    this.show({ text: job.text, parts: job.parts, fallback: false, files });
+    this.show({ text: job.text, parts: job.parts, fallback: false, files, look: this.look });
   }
 
   // 10 秒で終わらなかったとき。出している結果の書き直しなら、前の見た目の絵のまま知らせる。
@@ -447,7 +463,7 @@ export class MarkdownState {
 
   fail(text, failure) {
     this.failure = failure;
-    this.show({ text, parts: fallbackParts(text), fallback: true, files: [] });
+    this.show({ text, parts: fallbackParts(text), fallback: true, files: [], look: null });
   }
 
   // 結果を出し、続きの中身があればやり直す。続きは区間の続き（tick）や見張りの中で始まり、描画の中で済む大きさの中身を
