@@ -11,6 +11,7 @@ import { createDraftStore } from "./lib/draft-store.js";
 import { utf8Checker } from "./lib/utf8.js";
 
 import { IMAGES_DIR, OLD_CACHE_DIR, companionInstalled, tinyPicture } from "./lib/pictures.js";
+import { IMAGES_DIR as SEATS_DIR, TINY_SVG } from "./lib/seats.js";
 
 export const DRAFTS_DIR = "file-viewer-drafts";
 const HEADER_BYTES = 256 * 1024;
@@ -244,6 +245,32 @@ export async function removeOldCache(name) {
 // 前の置き場所のフォルダが空なら消す。
 export async function removeOldCacheDir() {
   if ((await listOldCache())?.length === 0) await fs.rmdir(oldCacheDir()).catch(() => {});
+}
+
+// ---- 絵の席（mods/file-viewer-images/ の決まった名前のファイル。どれを使うかは lib/seats.js の表） ----
+
+const seatsDir = () => `${appHome()}/${SEATS_DIR}`;
+const seatPath = (name) => `${seatsDir()}/${name}`;
+
+// 絵の席のフォルダのファイルの名前。フォルダが無ければ null。
+export async function listSeats() {
+  return fs.readdir(seatsDir()).catch(() => null);
+}
+
+export async function makeSeatsDir() {
+  await fs.mkdir(seatsDir(), { recursive: true });
+}
+
+// 絵の席に文字列の絵（図の SVG）を上書きで書く（すでにあるファイルをその場で書き換えるので、フォルダの変化の知らせが出ない）。
+export async function writeSeatText(name, text) {
+  await fs.writeFile(seatPath(name), text);
+}
+
+// 絵の席をごく小さい絵で上書きする（手放す。無い絵の席は作る）。失敗した名前を返す。
+export async function writeTinySeats(names) {
+  const failed = [];
+  for (const name of names) await fs.writeFile(seatPath(name), TINY_SVG).catch(() => failed.push(name));
+  return failed;
 }
 
 // ---- 絵のファイル（付き添いの mod のフォルダ mods/file-viewer-images/。名前と選び方は lib/pictures.js） ----

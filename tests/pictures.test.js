@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { PictureNames, PictureTable, ReleaseQueue, parsePictureName, sweepTargets, ownStale, oldCacheNames, companionInstalled, tinyPicture, IMAGES_DIR } from "../mods/file-viewer/lib/pictures.js";
-import { diagramLayout } from "../mods/file-viewer/lib/prepare.js";
 
 // 仕様の「画像の置き場所」の確かめ方: 名前の決め方は単体テストで確かめる。
 const TOKEN = "3f2b9c1e-8a7d-4e6f-9b0c-1d2e3f4a5b6c";
@@ -287,20 +286,6 @@ describe("付き添いの mod", () => {
     expect(companionInstalled({ main: true, mod: true })).toBe(true);
     expect(companionInstalled({ main: true, mod: false })).toBe(false);
     expect(companionInstalled({ main: false, mod: true })).toBe(false);
-  });
-
-  test("入っていないとき、書き出す前に決まる理由の無い図は「付き添いの mod が入っていない」", () => {
-    expect(diagramLayout("flowchart LR\nA-->B", 3, { companion: false })).toEqual({ error: { kind: "companion", message: "付き添いの mod が入っていない" } });
-  });
-
-  test("入っていないときも、書き出す前に決まる理由（未対応の種類・未対応の書き方・文法エラー）のある図はその理由", () => {
-    expect(diagramLayout("classDiagram\n  A <|-- B", 1, { companion: false }).error.message).toBe("未対応の種類: classDiagram");
-    expect(diagramLayout("flowchart LR\nA-->B\nclick A href", 41, { companion: false }).error.message).toBe("未対応の書き方: click（43 行目）");
-    expect(diagramLayout("flowchart LR\nA-->", 10, { companion: false }).error.kind).toBe("syntax");
-  });
-
-  test("入っているときは、今までどおり配置する", () => {
-    expect(diagramLayout("flowchart LR\nA-->B", 1, { companion: true }).layout).toBeDefined();
   });
 });
 

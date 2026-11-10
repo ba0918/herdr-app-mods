@@ -5,20 +5,17 @@
 import { blocksIn, addDefinitions, blockRewriter, splitMermaidBlocks } from "./markdown.js";
 import { parseMermaid } from "./mermaid/parse.js";
 import { layoutFlowchart, layoutSequence } from "./mermaid/layout.js";
-import { COMPANION_MISSING } from "./pictures.js";
 
 // 図の解析と配置。{ layout } か { error }。firstLine は図の中身の 1 行目のファイル全体での行番号。
 export function layoutMermaid(source, firstLine) {
   return diagramLayout(source, firstLine);
 }
 
-// 図の解析と配置。companion: 付き添いの mod が入っているか。入っていなければ、解析だけをして、書き出す前に決まる理由（未対応の
-// 種類・未対応の書き方・文法エラー）が無ければ「付き添いの mod が入っていない」にする（描かない図を配置しない。仕様の「描けない図」）。
-export function diagramLayout(source, firstLine, { companion = true } = {}) {
+// 図の解析と配置。{ layout } か { error }。
+export function diagramLayout(source, firstLine) {
   try {
     const r = parseMermaid(source, firstLine);
     if (r.error) return { error: r.error };
-    if (!companion) return { error: COMPANION_MISSING };
     return { layout: r.diagram.type === "flowchart" ? layoutFlowchart(r.diagram) : layoutSequence(r.diagram) };
   } catch {
     // 解析で断れなかった配置できない図。どの行かは分からないので、図の 1 行目を指す。
@@ -30,9 +27,8 @@ export function diagramLayout(source, firstLine, { companion = true } = {}) {
 // 終わったら true。終わると parts に、文章の部分（{ type: "markdown", text: 書き換えた Markdown }）と
 // 図の部分（{ type: "mermaid", source, firstLine, fence, layout | error }）の並びが入る。
 // 画像の書き換えが例外を投げたら、advance からそのまま投げ、failed にして以後は進めない。
-// rewriter: かたまりの書き換えを作るもの（既定は blockRewriter）。companion: 付き添いの mod が入っているか（入っていなければ図を
-// 配置しない。diagramLayout）。
-export function startPreparation(text, { rewriter = blockRewriter, companion = true } = {}) {
+// rewriter: かたまりの書き換えを作るもの（既定は blockRewriter）。
+export function startPreparation(text, { rewriter = blockRewriter } = {}) {
   const definitions = new Map();
   const parts = [];
   let blocks = blocksIn(text);
@@ -51,7 +47,7 @@ export function startPreparation(text, { rewriter = blockRewriter, companion = t
     }
     const part = split[index];
     if (part.type === "mermaid") {
-      parts.push({ ...part, ...diagramLayout(part.source, part.firstLine, { companion }) });
+      parts.push({ ...part, ...diagramLayout(part.source, part.firstLine) });
       index++;
       return index >= split.length;
     }

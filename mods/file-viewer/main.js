@@ -17,14 +17,17 @@ import { imageSize } from "./lib/image.js";
 import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
 import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, tileView } from "./lib/diagram-files.js";
-import { PictureNames, PictureTable, ReleaseQueue, parsePictureName, ownStale, sweepTargets, oldCacheNames } from "./lib/pictures.js";
+import { PictureNames, PictureTable, ReleaseQueue, parsePictureName, sweepTargets, oldCacheNames } from "./lib/pictures.js";
+import { ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace } from "./lib/seats.js";
+import { SeatUser } from "./lib/seat-user.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
 import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, liveViewerTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, pauseForApp } from "./io.js";
-import { companionPresent, writePictureText, pictureExists, listPictures, removePicture, overwriteTiny, listOldCache, removeOldCache, removeOldCacheDir } from "./io.js";
+import { companionPresent, writePictureText, listPictures, removePicture, overwriteTiny, listOldCache, removeOldCache, removeOldCacheDir } from "./io.js";
+import { listSeats, makeSeatsDir, writeSeatText, writeTinySeats } from "./io.js";
 import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, thumbSpan, BAR_MAX, BAR_INSET, BAR_WIDTH } from "./views/markdown.js";
 import { BodyScroll, BodyInput, measuredParts } from "./lib/body-scroll.js";
 import { imageBody, imageInfo } from "./views/image.js";
@@ -42,6 +45,11 @@ const OVERLAY_WIDTH = 0.92, OVERLAY_HEIGHT = 0.9;
 const tileNames = (f) => (f.tiles ?? [f]).map((t) => t.name);
 // 図の拡大（拡大の窓・.mmd）の倍率の上限: 書き出す絵の面積の上限に収まる倍率（lib/diagram-files.js）。
 const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: (width, height) => maxDiagramScale({ width, height }) });
+// 絵の席に書き終えてから、見えない所で読み込ませるまで待つ時間。書いた絵自身の変化の知らせが読み込みのあとに届くと、読み込んだ絵が
+// 捨てられて一瞬空白になる（ガイドの「フォルダの変化の知らせ」。250 ms 待てば空白が出なかった）。
+const SEAT_SETTLE_MS = 250;
+// 差し替えたあと、差し替えた描画が来るのを待つ上限（来なければ POLL_MS の回に手放す）。
+const FRAME_WAIT_MS = 1000;
 // 図の拡大の窓で、配置が止まっていないかを見る間隔。
 const OVERLAY_WATCH_MS = 1000;
 // 整形表示の部品が中身を描くのを待つ上限（何も描かない部分は高さが来ないので）。縮んでから数える（lib/body-scroll.js）。
@@ -125,12 +133,19 @@ export default class FileViewer extends View {
       return;
     }
     this.token = p.token ?? null;
-    // このコピーの始まり（再起動で復元したタブが、前のコピーの書いた自分の絵を片付ける境目）。
-    this.startedAt = Date.now();
-    // 使っている絵の表（lib/pictures.js）と、手放してから消すのを待つファイル。companion: 最後に確かめた、付き添いの mod があるか。
+    // 絵の席の表（lib/seats.js。窓の globalThis に 1 つ）と、このコピーの本文の使う場所。gen はこのコピーの世代（hot reload のあとの
+    // 新しいコピーを、止まった前のコピーと見分ける）。
+    if (this.token) {
+      this.seats = ensureTable(globalThis, Date.now(), { poll: POLL_MS });
+      this.seatOwner = { place: bodyPlace(this.token), gen: `${Date.now().toString(36)}-${randomUUID()}` };
+      startGen(this.seats, this.seatOwner, Date.now());
+      this.seatUser = new SeatUser(this.seats, this.seatOwner);
+      // 絵の席の名前を新しく使い始めた回数（見えない所で読み込ませる要素の id に入れ、前に同じ名前で読み込んだ要素と分ける）。
+      this.seatTurns = new Map();
+      cx.spawn(async () => this.initSeats());
+    }
+    // 使っている絵の表（lib/pictures.js。画像のコピーと拡大の窓の絵）。
     this.pictures = this.token ? new PictureTable(new PictureNames({ token: this.token })) : null;
-    this.releases = new ReleaseQueue();
-    this.companion = true;
     // コピーしている途中の画像の名前（読み込んだ file を採るか捨てるまで、使っている絵に入れる）。
     this.copying = new Set();
     // init の時点の spaces() はまだ開く前の状態で、各 space で選ばれていたタブを指す。
@@ -177,10 +192,12 @@ export default class FileViewer extends View {
       this.watchPreparation(cx);
       this.poll(cx);
       this.checkLent(cx);
-      // 始めの回に、前のコピー（再起動の前）が書いた自分の絵を片付ける。表示していない復元タブは名乗らないので、名乗るのを待たない。
-      if (this.token && !this.ownSwept) {
-        this.ownSwept = true;
-        cx.spawn(async () => this.sweepOwnStale());
+      if (this.seats) {
+        beat(this.seats, this.seatOwner, Date.now());
+        cx.spawn(async () => {
+          await this.initSeats();
+          await this.releaseSeats();
+        });
       }
       cx.spawn(async () => this.watchPictures());
     });
@@ -190,9 +207,9 @@ export default class FileViewer extends View {
   }
 
   // 閉じるとき（アプリの終了を含む）は、未保存の編集を下書きに書く。止める手段は無いので確認は出さない。
-  // 図の拡大の窓は、自分が書いた SVG（窓の印の付いたもの）を消す。
-  // タブは、自分の絵のファイル（拡大の窓が書いたものも）を手放し始める（250 ms で終わらなくてよい。残りはほかのタブか次に開いた
-  // タブの見張りが片付ける。仕様の「画像の置き場所」）。
+  // 図の拡大の窓は、自分が書いた SVG（窓の印の付いたもの）を手放す。
+  // タブは、本文の使う場所を絵の席の表から外し、どこも使わなくなった絵の席を手放し始める（閉じた使う場所の描画は待たない。250 ms で
+  // 終わらなくてよい。残りはほかのタブの見張りがする。仕様の「画像の置き場所」）。
   async close() {
     const o = this.overlay;
     if (o) {
@@ -207,34 +224,100 @@ export default class FileViewer extends View {
     const file = this.file;
     if (file?.dirty && file.editor) await writeDraft(this.draftOf(file)).catch(() => {});
     file?.editor?.release();
+    if (this.seats) {
+      dropPlace(this.seats, this.seatOwner.place);
+      await this.releaseSeats();
+    }
     if (!this.token || !(await companionPresent())) return;
     const mine = (await listPictures()).filter((name) => parsePictureName(name)?.token === this.token);
-    const svgFirst = [...mine.filter((n) => n.endsWith(".svg")), ...mine.filter((n) => !n.endsWith(".svg"))];
-    await this.releaseAndRemove(svgFirst.filter((n) => !n.endsWith(".b64")), svgFirst.filter((n) => n.endsWith(".b64")));
+    await this.releaseOld(mine.filter((n) => !n.endsWith(".b64")));
   }
 
-  // 絵のファイルを手放してから消す（release）、消すだけ（remove。.b64 は絵ではない）。手放してから消すまでの待ちは ReleaseQueue。
-  async releaseAndRemove(release, remove = []) {
-    if (release.length) {
-      await overwriteTiny(release);
-      this.releases.released(release, Date.now());
+  // 前の名前の絵のファイル（画像のコピーと拡大の窓の絵）を、ごく小さい絵で書き換えて手放す。
+  async releaseOld(names) {
+    if (names.length) await overwriteTiny(names);
+  }
+
+  // ---- 絵の席（lib/seats.js の表。仕様の「画像の置き場所」） ----
+
+  // その起動で初めて表を作ったとき（か、版の違う表を作り直して POLL_MS たったとき）、フォルダの絵の席を全部ごく小さい絵で上書きして
+  // 手放し、初めの数に足りない絵の席を作る（フォルダが無ければ作る）。一度に 1 つのコピーだけがし、ほかのコピーはそれまで絵の席を
+  // 割り当てずに待つ。
+  async initSeats() {
+    const table = this.seats;
+    if (table.init.state === "done" || !claimInit(table, this.seatOwner, Date.now())) return;
+    try {
+      const plan = initPlan(table, await listSeats());
+      if (plan.mkdir) await makeSeatsDir();
+      await writeTinySeats([...plan.overwrite, ...plan.create]);
+      initDone(table, this.seatOwner);
+    } catch {
+      // 次の POLL_MS の回にやり直す。
+      if (table.init.by?.gen === this.seatOwner.gen) table.init.by = null;
     }
-    for (const name of remove) await removePicture(name);
-    for (const name of this.releases.due(Date.now())) await removePicture(name);
   }
 
-  // 前のコピー（再起動の前）が書いた自分の token の絵（拡大の窓が書いたものも）を手放して消す（lib/pictures.js の ownStale）。
-  async sweepOwnStale() {
-    if (!(await companionPresent())) return;
-    const { release, remove } = ownStale({ names: await listPictures(), token: this.token, startedAt: this.startedAt });
-    await this.releaseAndRemove(release, remove);
+  // 手放す絵の席（どこも使わなくなり、外した使う場所の描画が進んだもの）を、ごく小さい絵で上書きして手放す。1 つずつ動かす。
+  async releaseSeats() {
+    if (!this.seats) return;
+    if (this.releasingSeats) { this.releaseSeatsAgain = true; return; }
+    this.releasingSeats = true;
+    try {
+      do {
+        this.releaseSeatsAgain = false;
+        const names = takeReleases(this.seats, this.seatOwner);
+        if (!names.length) break;
+        await writeTinySeats(names);
+        released(this.seats, names, this.seatOwner);
+      } while (this.releaseSeatsAgain);
+    } finally {
+      this.releasingSeats = false;
+    }
+  }
+
+  // 割り当てを待った・絵の席が足りなかったとき（this.seatUser.blocked）。足りなければ増やす数の絵の席をごく小さい絵で作る（ファイルを
+  // 作るので、そのとき出している絵は一瞬空白になりうる）。初めての手放しを待つなら、受け持てれば受け持ち、ほかのコピーがしているなら少し待つ。
+  async unblockSeats(cx) {
+    const blocked = this.seatUser.blocked;
+    this.seatUser.blocked = null;
+    if (blocked?.grow) {
+      await writeTinySeats(blocked.grow);
+      grown(this.seats, blocked.grow, this.seatOwner);
+      return;
+    }
+    if (blocked?.wait === "init") await this.initSeats();
+    if (this.seats.init.state !== "done" || blocked?.wait === "grow") await cx.sleep(100);
+  }
+
+  // 本文が今使っている絵の席を表に渡す。外した絵の席があれば、描き直しを求めて、差し替えた描画が来てから（1 秒まで待つ）手放す。
+  // 来なければ（表示していないなど）POLL_MS の回に任せる。
+  trackSeats(cx) {
+    if (!this.seats) return;
+    const place = this.seatOwner.place;
+    const before = this.seats.places[place]?.names ?? [];
+    this.seatUser.use([...(this.md?.keep() ?? []), ...(this.lent ?? [])]);
+    const now = new Set(this.seats.places[place].names);
+    if (!before.some((name) => !now.has(name)) || this.awaitingFrame) return;
+    this.awaitingFrame = true;
+    const frame = this.seats.places[place].frame;
+    cx.spawn(async (cx) => {
+      try {
+        await pauseForApp();
+        cx.notify();
+        const until = Date.now() + FRAME_WAIT_MS;
+        while ((this.seats.places[place]?.frame ?? Infinity) <= frame && Date.now() < until) await cx.sleep(4);
+      } finally {
+        this.awaitingFrame = false;
+      }
+      await this.releaseSeats();
+    });
   }
 
   // 描画で使っている絵を表に渡す。使わなくなった絵は、その描画が済んでから手放す（新しい絵を画面で差し替えてから前の絵を手放す）。
   trackPictures(cx) {
+    this.trackSeats(cx);
     const tb = this.pictures;
     if (!tb) return;
-    tb.use("md", this.md?.keep() ?? []);
     // 拡大の窓に貸した本文の絵（窓が出している間は、本文が使わなくなっても手放さない）。
     tb.use("lent", this.lent ?? []);
     // 拡大の窓を開く前に書いている、収まる大きさの絵。
@@ -258,7 +341,7 @@ export default class FileViewer extends View {
       do {
         this.releaseAgain = false;
         const present = await companionPresent();
-        await this.releaseAndRemove(this.pictures.takeReleases(present));
+        await this.releaseOld(this.pictures.takeReleases(present));
       } while (this.releaseAgain);
     } finally {
       this.releasing = false;
@@ -344,12 +427,9 @@ export default class FileViewer extends View {
     this.file = { path: target.path, machine: target.machine ?? null, loading: true };
     cx.spawn(async (cx) => {
       const file = await this.read(target.path, target.machine ?? null);
-      // 付き添いの mod が無いと分かっていれば、整形の準備で図を配置しない（仕様の「描けない図」）。
-      const companion = await companionPresent();
       this.copying.delete(file.picture);
       // 古い読み込みのコピーは誰も使わないので、描画が来なくても使っている絵の表を更新して手放す（表示していないタブは描画されない）。
       if (this.loads !== gen) { file.editor?.release(); this.trackPictures(cx); return; }
-      this.companion = companion;
       this.file = file;
       this.setDirty(false);
       cx.notify();
@@ -462,27 +542,11 @@ export default class FileViewer extends View {
         }
       }
       if (!(await companionPresent())) return;
-      const { release, remove } = sweepTargets({ names: await listPictures(), openTokens: liveViewerTokens(), now: Date.now() });
-      await this.releaseAndRemove(release, remove);
+      const { release } = sweepTargets({ names: await listPictures(), openTokens: liveViewerTokens(), now: Date.now() });
+      await this.releaseOld(release);
     } finally {
       this.watching = false;
     }
-  }
-
-  // 出している図の SVG があるかを確かめ、無くなっていれば新しい名前で書き直させる（整形表示に入るときと、表示に戻ったとき）。
-  // 付き添いの mod が無ければ書き直さず、出している絵をそのまま出す（app はファイルが消えても絵を覚えている）。
-  checkSvgs(cx) {
-    const md = this.md;
-    const files = (md?.shown?.files ?? []).filter(Boolean);
-    if (!files.length) return;
-    cx.spawn(async (cx) => {
-      const missing = [];
-      for (const name of files.flatMap(tileNames)) if (!(await pictureExists(name))) missing.push(name);
-      if (!missing.length || this.md !== md || !(await companionPresent())) return;
-      this.pictures.lost(missing);
-      md.lost(missing);
-      cx.notify();
-    });
   }
 
   // UTF-8 でない（読み取り専用にする）か。読んだ内容に U+FFFD があるときだけファイルのバイト列を確かめ、
@@ -886,6 +950,7 @@ export default class FileViewer extends View {
   render(cx) {
     const t = theme();
     if (this.overlay) return this.renderOverlay(t, cx);
+    if (this.seats) rendered(this.seats, this.seatOwner.place);
     const me = this.identify();
     this.me = me;
     if (me && this.pane !== me.pane && this.claiming !== me.pane) {
@@ -912,10 +977,8 @@ export default class FileViewer extends View {
         this.rebuildEditor(cx);
       });
     }
-    // 表示に戻ったら、出している図の SVG があるかを確かめる（表示していない間に掃除で消えていれば書き直す）。
     const shownNow = this.visible();
     const returned = shownNow && !this.wasVisible;
-    if (returned) this.checkSvgs(cx);
     this.wasVisible = shownNow;
     this.syncMarkdown(rec, t, cx);
     this.trackPictures(cx);
@@ -1000,7 +1063,6 @@ export default class FileViewer extends View {
     if (md) {
       if (md.display().kind === "source") {
         md.enter();
-        this.checkSvgs(cx);
       } else md.toSource();
       putRecord(this.token, { mode: md.userSource ? "source" : null });
     } else {
@@ -1022,9 +1084,11 @@ export default class FileViewer extends View {
     const text = file.editor.value();
     const look = type === "markdown" ? this.bodyLook(t) : this.mmdLook(t);
     if (!this.md) {
-      const fileOf = (part, look) => diagramFile((key) => this.pictures.name(key, "svg"), part, look);
-      this.md = type === "markdown" ? new MarkdownState({ fileOf }) : diagramFileState({ fileOf });
-      this.md.companionChecked(this.companion);
+      // 図の絵は絵の席に書く。名前は絵の席の表から取り、このタブが新しく使い始めた絵の席は、書いた・読み込んだことを忘れさせる
+      // （手放したあとに同じ絵の席が別の絵に使われるので）。
+      let md = null;
+      const fileOf = (part, look) => diagramFile((key) => this.seatUser.nameOf(key, (name) => this.freshSeat(md, name)), part, look);
+      md = this.md = type === "markdown" ? new MarkdownState({ fileOf, preloadWait: SEAT_SETTLE_MS }) : diagramFileState({ fileOf, preloadWait: SEAT_SETTLE_MS });
       this.md.setLook(look);
       this.md.open(text, { userSource: rec?.mode === "source" });
     } else {
@@ -1032,6 +1096,11 @@ export default class FileViewer extends View {
       this.md.sync(text);
     }
     if (this.md.needsRun && !this.preparing && this.visible()) this.runPreparation(cx);
+  }
+
+  freshSeat(md, name) {
+    md?.fresh(name);
+    this.seatTurns.set(name, (this.seatTurns.get(name) ?? 0) + 1);
   }
 
   // 整形の準備の決まり（this.md）で出すファイルの種類（"markdown" | "mermaid"）。ほかは null。
@@ -1079,12 +1148,8 @@ export default class FileViewer extends View {
           const me = this.identify();
           if (!(me?.space.active && me.tabInfo?.active)) { md.pause(); break; }
           const shown = md.shown, failure = md.failure;
-          const check = md.needsCheck;
-          const task = check ? null : md.writeTask();
-          if (check) {
-            this.companion = await companionPresent();
-            md.companionChecked(this.companion);
-          } else if (task) await this.writeSvg(md, task);
+          const task = md.writeTask();
+          if (task) await this.writeSvg(md, task, cx);
           else md.tick(PREPARE_SLICE_MS, Date.now);
           // 書いた SVG を読み込ませる（見えない所に置く）ための描き直しは、書き終えたときと、書く間はときどきにする（大きな整形表示の
           // 描き直しは重い）。
@@ -1093,9 +1158,26 @@ export default class FileViewer extends View {
             notified = Date.now();
             cx.notify();
           }
+          if (task) this.awaitPreloads(md, cx);
         }
       } finally {
         if (this.preparing === run) this.preparing = null;
+      }
+    });
+  }
+
+  // 書いた絵を見えない所で読み込ませてよくなる時刻（書き終えてから SEAT_SETTLE_MS）に描き直す。
+  awaitPreloads(md, cx) {
+    if (this.preloadTimer === md || md.preloadDue(Date.now()) === null) return;
+    this.preloadTimer = md;
+    cx.spawn(async (cx) => {
+      try {
+        for (let due; this.md === md && (due = md.preloadDue(Date.now())) !== null;) {
+          await cx.sleep(Math.max(1, due - Date.now()));
+          if (this.md === md) cx.notify();
+        }
+      } finally {
+        if (this.preloadTimer === md) this.preloadTimer = null;
       }
     });
   }
@@ -1114,33 +1196,44 @@ export default class FileViewer extends View {
     return preloadImages({ id: "fv-image-preload", files: [{ name: incoming.picture, path: incoming.cache }], onLoaded: () => incoming.done() });
   }
 
-  // 書いたがまだ読み込んでいない図の SVG を、見えない所で読み込ませる要素。無ければ null。
+  // 書いたがまだ読み込んでいない図の SVG を、見えない所で読み込ませる要素。無ければ null。要素の id には、その絵の席を新しく
+  // 使い始めた回数を入れる（前に同じ絵の席で読み込んだ要素と分ける）。
   preloadsOf(md) {
-    const files = md.preloads();
+    const files = md.preloads(Date.now()).map((f) => ({ ...f, id: `${f.name}.${this.seatTurns?.get(f.name) ?? 0}` }));
     if (!files.length) return null;
     return preloadImages({ id: "fv-preload", files, onLoaded: (name, cx) => { if (md.loadedImage(name, Date.now())) cx.notify(); } });
   }
 
-  // 図の SVG（タイル 1 枚）を書く。書く間の時間も、準備を動かしている時間に数える。書く直前に、自分の記録があることと、付き添いの
-  // mod があることを確かめる（無ければ書かず、まだ書いていない図を「付き添いの mod が入っていない」の描けない図にする）。
-  // 書いている途中の名前は、書き終わるまで手放さない（確かめる await の間に使わなくなっても）。
-  async writeSvg(md, task) {
+  // 図の SVG（タイル 1 枚）を絵の席に書く。書く間の時間も、準備を動かしている時間に数える。書く前に、自分の記録があることを確かめる
+  // （無ければ作る。記録の無いタブの使う場所は、ほかのタブの見張りが外すので）。
+  // 絵の席の割り当てを待っていた（仮の名前）なら、待つわけを片付けてから名前を取り直す。ほかのコピーが書く絵の席を共有したなら、
+  // 書き終わるのを待つ（その絵の席の鍵が外れたら、名前を取り直す）。
+  async writeSvg(md, task, cx) {
+    const name = task.name, user = this.seatUser;
+    if (!isSeatName(name)) {
+      await this.unblockSeats(cx);
+      md.refresh();
+      return;
+    }
+    if (!user.mustWrite(name)) {
+      const key = seatOf(this.seats, name)?.key;
+      const until = Date.now() + 10_000;
+      while (seatOf(this.seats, name)?.state === "writing" && seatOf(this.seats, name).key === key && Date.now() < until) await cx.sleep(50);
+      const seat = seatOf(this.seats, name);
+      if (seat?.state === "ready" && seat.key === key) md.wrote(name, Date.now());
+      else md.refresh();
+      return;
+    }
     const colors = md.look.colors, l = task.part.layout;
-    const tb = this.pictures;
-    tb.writing(task.name);
+    user.writing(name);
     try {
       this.ensureRecord();
-      this.companion = await companionPresent();
-      if (!this.companion) {
-        md.companionChecked(false);
-        return;
-      }
-      await writePictureText(task.name, diagramSvg(l, colors, { width: task.width, height: task.height, view: tileView(task.file, task, l) }));
-      md.wrote(task.name, Date.now());
+      await writeSeatText(name, diagramSvg(l, colors, { width: task.width, height: task.height, view: tileView(task.file, task, l) }));
+      user.wrote(name, { ok: true });
+      md.wrote(name, Date.now());
     } catch (e) {
-      md.writeFailed(task.name, message(e), Date.now());
-    } finally {
-      tb.wrote(task.name);
+      user.wrote(name, { ok: false });
+      md.writeFailed(name, message(e), Date.now());
     }
   }
 
@@ -1240,7 +1333,7 @@ export default class FileViewer extends View {
   async releaseWindowPictures(mark) {
     if (!(await companionPresent())) return;
     const names = (await listPictures()).filter((name) => { const p = parsePictureName(name); return p?.token === this.token && p.mark === mark; });
-    await this.releaseAndRemove(names.filter((n) => !n.endsWith(".b64")), names.filter((n) => n.endsWith(".b64")));
+    await this.releaseOld(names.filter((n) => !n.endsWith(".b64")));
   }
 
   // 拡大の窓に本文の絵を貸しているとき、窓が自分の絵に替えたか閉じたら（記録の window が、渡した印で借りている形でなくなったら）、

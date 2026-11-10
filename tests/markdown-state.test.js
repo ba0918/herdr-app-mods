@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { MarkdownState } from "../mods/file-viewer/lib/markdown-state.js";
 import { prepareAll, startPreparation, fallbackParts } from "../mods/file-viewer/lib/prepare.js";
-import { PictureNames, PictureTable, COMPANION_MISSING } from "../mods/file-viewer/lib/pictures.js";
+import { PictureNames, PictureTable } from "../mods/file-viewer/lib/pictures.js";
+import { ensureTable, claimInit, initPlan, initDone, bodyPlace, rendered, takeReleases, released, seatOf } from "../mods/file-viewer/lib/seats.js";
+import { SeatUser } from "../mods/file-viewer/lib/seat-user.js";
 
 // 大きさの判定の代わり: "small" で始まる文書は描画の中で準備し、"OVER" を含む文書は整形表示の上限を超える。
 const OVER = { kind: "bytes", limit: 10, size: 20 };
@@ -50,10 +52,49 @@ function writeAllTo(tb, s) {
   return names;
 }
 // 描画で使う絵を表に渡し、その描画が済んだことにして、手放す名前を取る（main.js の描画と同じ順）。
-function drawFrame(tb, s, companion = true) {
+function drawFrame(tb, s) {
   tb.use("md", s.keep());
   tb.drawn(tb.commit());
-  return tb.takeReleases(companion);
+  return tb.takeReleases(true);
+}
+
+// 絵の席の表（lib/seats.js）と、それを使う本文のコピー（lib/seat-user.js）。初めての手放しは済ませてある。
+function seats(count = 16) {
+  const table = ensureTable({}, 0);
+  const owner = { place: bodyPlace("tok"), gen: "g1" };
+  claimInit(table, owner, 0);
+  initPlan(table, [], count);
+  initDone(table, owner);
+  return { table, owner, user: new SeatUser(table, owner) };
+}
+// 絵の席から名前を取る見え方の決まり（main.js と同じく、新しく使い始めた名前は書いた・読み込んだことを忘れさせる）。
+function seatState(seat, options = {}) {
+  let s = null;
+  const fileOf = (part, look) => {
+    const name = seat.user.nameOf(`${part.source.trim()}@${look.key}`, (n) => s.fresh(n));
+    return { name, path: `mods/file-viewer-images/${name}`, width: 10, height: 5 };
+  };
+  s = makeState({ fileOf, ...options });
+  return s;
+}
+// まだ書いていない絵を全部書き（自分が書く絵の席だけ表に書いたことを知らせる）、app がその画像を読み込んだことにする。
+function writeSeats(seat, s, now = 1) {
+  const names = [];
+  for (let task; (task = s.writeTask());) {
+    names.push(task.name);
+    if (seat.user.mustWrite(task.name)) seat.user.wrote(task.name, { ok: true });
+    s.wrote(task.name, now);
+  }
+  for (const f of s.preloads(now)) s.loadedImage(f.name, now);
+  return names;
+}
+// 描画で使う絵の席を表に渡して次の描画が来たことにし、手放す絵の席を手放す（main.js の描画と同じ順）。手放した絵の席。
+function seatFrame(seat, s) {
+  seat.user.use(s.keep());
+  rendered(seat.table, seat.owner.place);
+  const out = takeReleases(seat.table, seat.owner);
+  released(seat.table, out, seat.owner);
+  return out;
 }
 
 // 区間から戻らなくなる準備（実機では、await を挟まずに約 0.5 秒を超えた非同期処理を QuickJS が黙って止める。
@@ -876,8 +917,8 @@ describe("タイルに分けて書き出す大きな図", () => {
   });
 });
 
-// 仕様の「画像の置き場所」と「描けない図」。付き添いの mod が無いとき、手放す絵の持ち方。
-describe("付き添いの mod と使っている絵", () => {
+// 仕様の「画像の置き場所」。手放す絵の持ち方。
+describe("使っている絵", () => {
   const LOOK = { key: "c1|w800" };
   const withDiagram = (head, name) => `${head}\n\n\`\`\`mermaid\nflowchart LR; ${name}1-->${name}2\n\`\`\`\n`;
   const smallD = (name, above = "") => withDiagram(`small ${above}`, name);
@@ -895,74 +936,6 @@ describe("付き添いの mod と使っている絵", () => {
     return names;
   }
   const mermaidParts = (s) => s.display().parts.filter((p) => p.type === "mermaid");
-
-  test("書き出しの前に付き添いの mod が無いと分かったら、理由の無い図は「付き添いの mod が入っていない」の描けない図になり、ほかの部分は整形表示のまま", () => {
-    const s = svgState();
-    s.open(smallD("a"));
-    s.companionChecked(false);
-    expect(s.display().kind).toBe("formatted");
-    expect(s.display().notices).toEqual([]);
-    expect(s.display().parts[0].type).toBe("markdown");
-    expect(mermaidParts(s)).toEqual([expect.objectContaining({ error: COMPANION_MISSING, fence: expect.stringContaining("a1-->a2") })]);
-    expect(s.writeTask()).toBe(null);
-    expect(s.busy).toBe(false);
-  });
-
-  test("準備を始めるときに付き添いの mod が無いと分かっていれば、図を配置せず、確かめ直してから出す", () => {
-    const s = svgState();
-    s.companionChecked(false);
-    s.open(smallD("a"));
-    expect(s.display().kind).toBe("loading");
-    expect(s.needsCheck).toBe(true);
-    expect(s.writeTask()).toBe(null);
-    s.companionChecked(false);
-    expect(mermaidParts(s)).toEqual([expect.objectContaining({ error: COMPANION_MISSING })]);
-    expect(mermaidParts(s)[0].layout).toBeUndefined();
-  });
-
-  test("付き添いの mod を入れたあとは、次に中身が変わったときから普通に図を書く", () => {
-    const s = svgState();
-    s.companionChecked(false);
-    s.open(smallD("a"));
-    s.companionChecked(false);
-    s.change(smallD("a", "上の行を足した"));
-    s.companionChecked(true);
-    const now = clock();
-    for (let i = 0; i < 100 && !s.writeTask() && s.busy; i++) s.tick(0, now);
-    expect(writeAll(s)).toEqual(["flowchart LR; a1-->a2@c1|w800"]);
-    expect(mermaidParts(s)[0].file.name).toBe("flowchart LR; a1-->a2@c1|w800");
-  });
-
-  test("付き添いの mod が無くても、文法エラーの図は文法エラーのまま", () => {
-    const s = svgState();
-    s.companionChecked(false);
-    s.open("small 誤り\n\n```mermaid\nflowchart LR\nA-->\n```\n");
-    s.companionChecked(false);
-    expect(mermaidParts(s)[0].error.kind).toBe("syntax");
-  });
-
-  test("出している途中で付き添いの mod が無くなり、テーマが変わったら、差し替えで「付き添いの mod が入っていない」の描けない図になり、色の書き出しの失敗は知らせない", () => {
-    const s = svgState();
-    s.open(smallD("a"));
-    writeAll(s);
-    s.setLook({ key: "c2|w800" });
-    s.companionChecked(false);
-    expect(s.display().kind).toBe("formatted");
-    expect(s.display().notices).toEqual([]);
-    expect(mermaidParts(s)).toEqual([expect.objectContaining({ error: COMPANION_MISSING })]);
-    expect(s.busy).toBe(false);
-  });
-
-  test("付き添いの mod が無いときは、出している絵のファイルが無くなったと知らされても書き直さず、そのまま出す", () => {
-    const s = svgState();
-    s.open(smallD("a"));
-    writeAll(s);
-    s.companionChecked(false);
-    s.lost(["flowchart LR; a1-->a2@c1|w800"]);
-    expect(s.display().kind).toBe("formatted");
-    expect(mermaidParts(s)[0].file.name).toBe("flowchart LR; a1-->a2@c1|w800");
-    expect(s.writeTask()).toBe(null);
-  });
 
   test("上限で移ったソース表示の間は、前の絵を使っている名前に含まない", () => {
     const s = svgState();
@@ -984,55 +957,132 @@ describe("付き添いの mod と使っている絵", () => {
     expect([...u.keep()]).toEqual([]);
   });
 
-  test("利用者が選んだソース表示の間は前の絵を含み、その間に中身が上限を超えたら含まなくなる", () => {
-    const tb = pictureTable();
-    const s = svgState({ fileOf: tableFileOf(tb) });
+  test("利用者が選んだソース表示の間は前の絵の席を含み、その間に中身が変わっても整形表示に戻って新しい絵に替えるまで含む", () => {
+    const seat = seats();
+    const s = seatState(seat);
+    s.setLook(LOOK);
     s.open(smallD("a"));
-    const [a] = writeAllTo(tb, s);
+    const [a] = writeSeats(seat, s);
     s.toSource();
     s.change(smallD("b"));
+    expect(seatFrame(seat, s)).toEqual([]);
     expect([...s.keep()]).toEqual([a]);
+    s.enter();
+    expect(s.keep().has(a)).toBe(true);
+    const [b] = writeSeats(seat, s);
+    expect([...s.keep()]).toEqual([b]);
+    expect(seatFrame(seat, s)).toEqual([a]);
+  });
+
+  test("利用者が選んだソース表示の間に中身が上限を超えたら、そのときに前の絵の席を含まなくなり、戻ったら使っていない絵の席に書き直す", () => {
+    const seat = seats();
+    const s = seatState(seat);
+    s.setLook(LOOK);
+    s.open(smallD("a"));
+    const [a] = writeSeats(seat, s);
+    s.toSource();
     s.change(smallD("b", "OVER"));
     expect([...s.keep()]).toEqual([]);
-    expect(drawFrame(tb, s)).toEqual([a]);
-    // 上限を下回って前と同じ中身で整形表示に戻っても、手放した絵は出さず、新しい名前で書く
+    expect(seatFrame(seat, s)).toEqual([a]);
     s.change(smallD("a"));
     s.enter();
     expect(s.display().kind).not.toBe("formatted");
-    expect(writeAllTo(tb, s)).not.toEqual([a]);
+    expect(seat.user.mustWrite(s.writeTask().name)).toBe(true);
   });
 
-  test("テーマを A → B → A と替えると、A に戻ったときは新しい名前で書く（B に替えたときに A の絵を手放している）", () => {
-    const tb = pictureTable();
-    const s = makeState({ fileOf: tableFileOf(tb) });
+  test("テーマを A → B と替えると、B の絵がそろってから替わり、その描画のあとに A の絵の席を手放す", () => {
+    const seat = seats();
+    const s = seatState(seat);
     s.setLook({ key: "A" });
     s.open(smallD("a"));
-    const [a1] = writeAllTo(tb, s);
-    expect(drawFrame(tb, s)).toEqual([]);
+    const [a] = writeSeats(seat, s);
+    expect(seatFrame(seat, s)).toEqual([]);
     s.setLook({ key: "B" });
-    writeAllTo(tb, s);
-    expect(drawFrame(tb, s)).toEqual([a1]);
-    s.setLook({ key: "A" });
-    const [a2] = writeAllTo(tb, s);
-    expect(a2).not.toBe(a1);
-    expect(mermaidParts(s)[0].file.name).toBe(a2);
+    const task = s.writeTask();
+    seat.user.wrote(task.name, { ok: true });
+    s.wrote(task.name, 1);
+    expect(mermaidParts(s)[0].file.name).toBe(a);
+    expect(seatFrame(seat, s)).toEqual([]);
+    s.loadedImage(task.name, 1);
+    expect(mermaidParts(s)[0].file.name).toBe(task.name);
+    expect(seatFrame(seat, s)).toEqual([a]);
   });
 
-  test("替える途中で A に戻り、A の絵をまだ持っていれば、書き直さずに替わる", () => {
-    const tb = pictureTable();
-    const s = makeState({ fileOf: tableFileOf(tb) });
+  test("A の絵の席を手放したあとに A に戻ると、使っていない絵の席に書き直す", () => {
+    const seat = seats();
+    const s = seatState(seat);
     s.setLook({ key: "A" });
     s.open(smallD("a"));
-    const [a1] = writeAllTo(tb, s);
-    drawFrame(tb, s);
+    const [a1] = writeSeats(seat, s);
+    s.setLook({ key: "B" });
+    writeSeats(seat, s);
+    expect(seatFrame(seat, s)).toEqual([a1]);
+    s.setLook({ key: "A" });
+    const task = s.writeTask();
+    expect(task).not.toBe(null);
+    expect(seat.user.mustWrite(task.name)).toBe(true);
+    writeSeats(seat, s);
+    expect(mermaidParts(s)[0].file.name).toBe(task.name);
+  });
+
+  test("B の絵がそろう前に A に戻ると、A の絵の席をそのまま使い、書き直さない", () => {
+    const seat = seats();
+    const s = seatState(seat);
+    s.setLook({ key: "A" });
+    s.open(smallD("a"));
+    const [a1] = writeSeats(seat, s);
+    seatFrame(seat, s);
     s.setLook({ key: "B" });
     const b = s.writeTask();
-    drawFrame(tb, s);
+    seatFrame(seat, s);
     s.setLook({ key: "A" });
     expect(s.writeTask()).toBe(null);
     expect(s.busy).toBe(false);
     expect(mermaidParts(s)[0].file.name).toBe(a1);
-    expect(drawFrame(tb, s)).toEqual([]); // B は書いていないので、手放さずに外すだけ
-    expect(tb.has(b.name)).toBe(false);
+    // B は書き始めていないので、書かずに手放す絵の席になる。
+    expect(seatFrame(seat, s)).toEqual([b.name]);
+    expect(seatOf(seat.table, b.name).state).toBe("free");
+  });
+});
+
+describe("絵の席に書いた絵の読み込み", () => {
+  const withDiagram = (head, name) => `${head}\n\n\`\`\`mermaid\nflowchart LR; ${name}1-->${name}2\n\`\`\`\n`;
+  const fileOf = (part, look) => ({ name: `${part.source.trim()}@${look.key}`, path: `p/${part.source.trim()}@${look.key}`, width: 10, height: 5 });
+
+  test("書き終えてから preloadWait たつまで、その絵を見えない所で読み込ませない（書いた絵自身の知らせが、読み込みのあとに届かないように）", () => {
+    const s = makeState({ fileOf, preloadWait: 250 });
+    s.setLook({ key: "A" });
+    s.open(withDiagram("small", "a"));
+    const task = s.writeTask();
+    s.wrote(task.name, 1_000);
+    expect(s.preloads(1_100)).toEqual([]);
+    expect(s.preloadDue(1_100)).toBe(1_250);
+    expect(s.preloads(1_250).map((t) => t.name)).toEqual([task.name]);
+    expect(s.preloadDue(1_250)).toBe(null);
+  });
+
+  test("絵の席の割り当てを待ったあとで取り直すと、仮の名前でなく割り当てた名前で書く", () => {
+    let names = ["仮の名前"];
+    const s = makeState({ fileOf: (part, look) => ({ name: names[0], path: `p/${names[0]}`, width: 10, height: 5 }) });
+    s.setLook({ key: "A" });
+    s.open(withDiagram("small", "a"));
+    expect(s.writeTask().name).toBe("仮の名前");
+    names = ["seat-00001.img"];
+    s.refresh();
+    expect(s.writeTask().name).toBe("seat-00001.img");
+  });
+
+  test("新しく使い始めた名前を知らせると、その名前の絵を書いた・読み込んだことを忘れて、もう一度書く", () => {
+    const s = makeState({ fileOf });
+    s.setLook({ key: "A" });
+    s.open(withDiagram("small", "a"));
+    const task = s.writeTask();
+    s.wrote(task.name, 1);
+    s.loadedImage(task.name, 1);
+    expect(s.display().kind).toBe("formatted");
+    s.fresh(task.name);
+    s.setLook({ key: "B" });
+    s.setLook({ key: "A" });
+    expect(s.writeTask()?.name).toBe(task.name);
   });
 });

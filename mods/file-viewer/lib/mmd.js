@@ -4,13 +4,13 @@
 import { MarkdownState } from "./markdown-state.js";
 import { diagramLayout } from "./prepare.js";
 
-// text の図の準備。1 単位（図 1 個の解析と配置）で終わる。parts は図の部分 1 つ。companion: 付き添いの mod が入っているか。
-export function startDiagramPreparation(text, { companion = true } = {}) {
+// text の図の準備。1 単位（図 1 個の解析と配置）で終わる。parts は図の部分 1 つ。
+export function startDiagramPreparation(text) {
   const prep = {
     parts: [], done: false, failed: false,
     advance() {
       if (!prep.done) {
-        prep.parts.push({ type: "mermaid", source: text, firstLine: 1, fence: "```\n" + text + "\n```", ...diagramLayout(text, 1, { companion }) });
+        prep.parts.push({ type: "mermaid", source: text, firstLine: 1, fence: "```\n" + text + "\n```", ...diagramLayout(text, 1) });
         prep.done = true;
       }
       return true;
@@ -21,9 +21,9 @@ export function startDiagramPreparation(text, { companion = true } = {}) {
 
 const OUTSIDE = () => ({ inRender: false, over: null });
 
-// fileOf: 図の部分を見た目で書き出すファイル（lib/diagram-files.js の diagramFile）。
-export function diagramFileState({ fileOf, timeLimit } = {}) {
-  return new MarkdownState({ start: startDiagramPreparation, judge: OUTSIDE, fileOf, ...(timeLimit ? { timeLimit } : {}) });
+// fileOf: 図の部分を見た目で書き出すファイル（lib/diagram-files.js の diagramFile）。preloadWait は MarkdownState と同じ。
+export function diagramFileState({ fileOf, timeLimit, preloadWait = 0 } = {}) {
+  return new MarkdownState({ start: startDiagramPreparation, judge: OUTSIDE, fileOf, preloadWait, ...(timeLimit ? { timeLimit } : {}) });
 }
 
 function reason(failure) {

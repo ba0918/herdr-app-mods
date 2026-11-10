@@ -6,17 +6,9 @@
 // 見えない所に置いて読み込ませた画像（preloads）が読み込み終えたことを loadedImage で知らせる。
 import { startPreparation, fallbackParts } from "./prepare.js";
 import { judgeSize } from "./render-size.js";
-import { COMPANION_MISSING } from "./pictures.js";
 
 // 図のファイルの SVG の並び（大きな絵はタイルに分かれる。lib/diagram-files.js）。
 const tilesOf = (f) => f.tiles ?? [f];
-// 付き添いの mod が入っていないので描かない図の部分か。
-const missingCompanion = (p) => p.type === "mermaid" && p.error?.kind === COMPANION_MISSING.kind;
-// 図の部分を「付き添いの mod が入っていない」の描けない図にする（仕様の「描けない図」）。
-function withoutCompanion(part) {
-  const { layout, ...rest } = part;
-  return { ...rest, error: COMPANION_MISSING };
-}
 
 // 描画の外の準備が終わらなかったと見なす、準備を動かしている間の時間（ms）。
 const TIME_LIMIT = 10_000;
@@ -24,14 +16,17 @@ const TIME_LIMIT = 10_000;
 export class MarkdownState {
   // start: 準備を始めるもの（startPreparation）。judge: 大きさの判定（judgeSize）。
   // fileOf(part, look): 図の部分を見た目 look で書き出すファイル（{ name, path, width, height }。lib/diagram-files.js の diagramFile）。
-  // 無ければ図の SVG は書き出さない。
-  constructor({ start = startPreparation, judge = judgeSize, timeLimit = TIME_LIMIT, fileOf = null } = {}) {
+  // 無ければ図の SVG は書き出さない。preloadWait: 書き終えてから見えない所で読み込ませるまで待つ時間（ms。絵の席に書いた絵自身の
+  // 変化の知らせが読み込みのあとに届くと、読み込んだ絵が捨てられて一瞬空白になるので。ガイドの「フォルダの変化の知らせ」）。
+  constructor({ start = startPreparation, judge = judgeSize, timeLimit = TIME_LIMIT, fileOf = null, preloadWait = 0 } = {}) {
     this.start = start;
     this.judge = judge;
     this.timeLimit = timeLimit;
     this.fileOf = fileOf;
+    this.preloadWait = preloadWait;
     this.look = null;          // 図の見た目（色と書き出しの大きさ。{ key, ... }）
     this.written = new Set();  // 書いた SVG の名前
+    this.wroteAt = new Map();  // 書いた SVG の名前 → 書き終えた時刻
     this.loaded = new Set();   // app が画像として読み込み終えた SVG の名前（読み込む前に出すと、図の場所が空いて見える）
     this.entry = "prepare";    // 整形表示に入った形: "load"（開く・プレビュータブの入れ替え）| "prepare"（ソース表示から戻る）
     this.text = null;        // 今の中身
@@ -51,8 +46,6 @@ export class MarkdownState {
     this.failure = null;
     this.slice = null;       // 区間を進めている準備（区間から戻らなければ残る）
     this.trying = null;      // 描画の中で準備している中身（描画が打ち切られて戻らなければ残る）
-    // 付き添いの mod が入っているか（最後に確かめた結果。companionChecked）。入っていないと分かっていれば、準備で図を配置しない。
-    this.companion = true;
   }
 
   // 描画の外で進める準備があるか。
@@ -168,10 +161,10 @@ export class MarkdownState {
   }
 
   // 次に書く図の SVG（タイル 1 枚。{ name, path, x, y, width, height, file, part }。file は図のファイル全体）。
-  // 書く段でなければ、書き終えていれば、付き添いの mod を確かめ直すのを待っていれば null。
+  // 書く段でなければ、書き終えていれば null。
   writeTask() {
     const job = this.job;
-    if (!job?.parts || this.needsCheck) return null;
+    if (!job?.parts) return null;
     const files = this.filesFor(job.parts);
     for (const [i, f] of files.entries()) {
       if (!f) continue;
@@ -181,49 +174,39 @@ export class MarkdownState {
     return null;
   }
 
-  // 描画の外で進める処理（準備の区間か、付き添いの mod の確かめ直しか、SVG の書き込み）があるか。画像の読み込みだけを待っているときは false。
+  // 描画の外で進める処理（準備の区間か、SVG の書き込み）があるか。画像の読み込みだけを待っているときは false。
   get needsRun() {
     const job = this.job;
-    return job !== null && (!job.parts || this.needsCheck || this.writeTask() !== null);
+    return job !== null && (!job.parts || this.writeTask() !== null);
   }
 
-  // 付き添いの mod が無いと分かっていて配置しなかった図がある準備で、出す前に付き添いの mod を確かめ直すのを待っているか
-  // （入れたあとは、次に書き出すときから普通に出す。仕様の「画像の置き場所」）。
-  get needsCheck() {
-    const job = this.job;
-    return Boolean(job?.parts && !job.checked && job.parts.some(missingCompanion));
+  // 書いて preloadWait たったが、app がまだ画像として読み込んでいない SVG（見えない所に置いて読み込ませる）。now: 今の時刻。
+  preloads(now = Infinity) {
+    return this.unloaded().filter((t) => now - this.wroteAt.get(t.name) >= this.preloadWait);
   }
 
-  // 付き添いの mod を確かめた（書き出しに入るとき、絵を 1 つ書く直前、図を配置しなかった準備を出す前）。present: 入っているか。
-  // 入っていれば、配置しなかった図のある準備を、図を配置してやり直す。入っていなければ、今の準備でまだ書いて読み込めていない絵が要る
-  // 図を「付き添いの mod が入っていない」の描けない図にして出す（書き出しの失敗にも、代わりの整形表示にもしない）。
-  companionChecked(present) {
-    this.companion = present;
-    const job = this.job;
-    if (!job?.parts) return;
-    job.checked = true;
-    if (present) {
-      if (!job.parts.some(missingCompanion)) return;
-      job.prep = this.start(job.text, { companion: true });
-      job.parts = null;
-      job.inRender = false;
-      job.restyle = false;
-      return;
-    }
-    const files = this.filesFor(job.parts);
-    if (files.every((f) => !f || this.allWritten([f]))) {
-      this.settle(job);
-      return;
-    }
-    job.parts = job.parts.map((p, i) => (files[i] && !this.allWritten([files[i]]) ? withoutCompanion(p) : p));
-    this.settle(job);
+  // 書いたがまだ preloadWait たっていない SVG が、読み込ませてよくなる最初の時刻。無ければ null。
+  preloadDue(now) {
+    const due = this.unloaded().map((t) => this.wroteAt.get(t.name) + this.preloadWait).filter((at) => at > now);
+    return due.length ? Math.min(...due) : null;
   }
 
-  // 書いたが、app がまだ画像として読み込んでいない SVG（見えない所に置いて読み込ませる）。
-  preloads() {
+  unloaded() {
     const job = this.job;
     if (!job?.parts) return [];
     return this.filesFor(job.parts).flatMap((f) => (f ? tilesOf(f) : [])).filter((t) => this.written.has(t.name) && !this.loaded.has(t.name));
+  }
+
+  // 図のファイルの名前を取り直す（絵の席の割り当てを待っていて、仮の名前を受け取っていたとき）。
+  refresh() {
+    this.memo = null;
+  }
+
+  // 絵の席の名前を新しく使い始めた（手放したあとに同じ名前が別の絵に使われるので、その名前の絵を書いた・読み込んだことを忘れる）。
+  fresh(name) {
+    this.written.delete(name);
+    this.wroteAt.delete(name);
+    this.loaded.delete(name);
   }
 
   // app が SVG を画像として読み込み終えたとき。t: 今の時刻。出すものが変わったら true。
@@ -241,6 +224,7 @@ export class MarkdownState {
   // 図の SVG を書いた（または、もうあった）とき。t: 今の時刻。書くのにかかった時間も、準備を動かしている時間に数える。
   wrote(name, t) {
     this.written.add(name);
+    this.wroteAt.set(name, t);
     const job = this.job;
     if (!job?.parts) return;
     this.count(job, t);
@@ -263,10 +247,8 @@ export class MarkdownState {
   }
 
   // 書いたはずの SVG が無くなっていたとき（起動後の掃除で消えたなど）。出している結果の絵なら、書き直すまで書いていない図と同じに待つ。
-  // 書き直す絵の名前は新しくなる（呼ぶ側が使っている絵の表から外してから呼ぶ）。付き添いの mod が無いと分かっていれば、書き直さずに
-  // 出している絵をそのまま出す（app はファイルが消えても絵を覚えている）。
+  // 書き直す絵の名前は新しくなる（呼ぶ側が使っている絵の表から外してから呼ぶ）。
   lost(names) {
-    if (!this.companion) return;
     this.memo = null;
     for (const name of names) this.written.delete(name);
     const shown = this.shown;
@@ -296,8 +278,7 @@ export class MarkdownState {
     const shown = this.shown;
     if (!shown || shown.fallback || this.job) return;
     const files = this.filesFor(shown.parts);
-    // 付き添いの mod が無くて描かなかった図があれば、確かめ直して、入っていれば描く（次に書き出すときから普通に出す）。
-    if (this.allWritten(files) && !shown.parts.some(missingCompanion)) {
+    if (this.allWritten(files)) {
       this.shown = { ...shown, files };
       return;
     }
@@ -338,7 +319,7 @@ export class MarkdownState {
       this.fail(job.text, { kind: "timeout" });
       return true;
     }
-    job.prep = this.start(job.text, { companion: this.companion });
+    job.prep = this.start(job.text);
     return true;
   }
 
@@ -409,12 +390,12 @@ export class MarkdownState {
   begin(text, inRender) {
     this.trying = null;
     if (!inRender) {
-      this.job = { text, prep: this.start(text, { companion: this.companion }), parts: null, inRender: false, restyle: false, elapsed: 0, last: null };
+      this.job = { text, prep: this.start(text), parts: null, inRender: false, restyle: false, elapsed: 0, last: null };
       return;
     }
     this.job = null;
     this.trying = text;
-    const prep = this.start(text, { companion: this.companion });
+    const prep = this.start(text);
     try {
       prep.advance(Infinity, () => 0);
     } catch (e) {
@@ -433,14 +414,12 @@ export class MarkdownState {
     job.last = t;
   }
 
-  // 書く段の準備: 時間を超えていれば終わらなかったことにし、図を全部書き終えていれば結果を出す（付き添いの mod を確かめ直すのを
-  // 待っていれば、まだ出さない）。
+  // 書く段の準備: 時間を超えていれば終わらなかったことにし、図を全部書き終えていれば結果を出す。
   settle(job) {
     if (job.elapsed > this.timeLimit) {
       this.timeout(job);
       return;
     }
-    if (this.needsCheck) return;
     const files = this.filesFor(job.parts);
     if (!this.allWritten(files)) return;
     this.failure = null;

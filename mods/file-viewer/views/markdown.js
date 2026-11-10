@@ -123,7 +123,7 @@ export function waitingLabel(el, { loading, t }) {
 // files: { name, path } の並び。onLoaded(name, cx): 読み込み終えたとき。
 export function preloadImages({ id, files, onLoaded }) {
   return div().id(id).absolute().top(0).left(0).w(1).h(1).overflow_hidden()
-    .children(files.map((f) => div().id(`${id}-${f.name}`).flex_none()
+    .children(files.map((f) => div().id(`${id}-${f.id ?? f.name}`).flex_none()
       .on_size_change((size, cx) => { if (size.height > 0) onLoaded(f.name, cx); })
       .child(image(f.path))));
 }

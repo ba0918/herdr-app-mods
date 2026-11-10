@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { diagramFileState, diagramFileView, startDiagramPreparation } from "../mods/file-viewer/lib/mmd.js";
-import { PictureNames, PictureTable } from "../mods/file-viewer/lib/pictures.js";
+import { ensureTable, claimInit, initPlan, initDone, bodyPlace, rendered, takeReleases } from "../mods/file-viewer/lib/seats.js";
+import { SeatUser } from "../mods/file-viewer/lib/seat-user.js";
 
 const fileOf = (part, look) => ({ name: `${part.source.trim()}@${look.key}`, path: "p", width: 10, height: 5 });
 const FLOW = "flowchart LR\n  A-->B\n";
@@ -135,13 +136,15 @@ describe(".mmd の図の準備", () => {
   });
 });
 
-describe(".mmd の付き添いの mod と使っている絵", () => {
-  test("付き添いの mod が無いとき、描けない図の「付き添いの mod が入っていない」になる", () => {
-    const s = state();
+describe(".mmd の使っている絵", () => {
+  test("書き終えてから見えない所で読み込ませるまでの待ちを、Markdown と同じに渡せる", () => {
+    const s = diagramFileState({ fileOf: (part, look) => ({ name: `${look.key}`, path: "p", width: 10, height: 5 }), preloadWait: 250 });
+    s.setLook({ key: "s1" });
     s.open(FLOW);
     s.tick(100, () => 1);
-    s.companionChecked(false);
-    expect(view(s, FLOW)).toEqual({ kind: "error", message: "付き添いの mod が入っていない", fence: "```\n" + FLOW + "\n```", notices: [] });
+    s.wrote(s.writeTask().name, 1_000);
+    expect(s.preloads(1_100)).toEqual([]);
+    expect(s.preloads(1_250).length).toBe(1);
   });
 
   test("利用者が選んだソース表示の間は、前の絵を使っている名前に含む", () => {
@@ -152,10 +155,15 @@ describe(".mmd の付き添いの mod と使っている絵", () => {
     expect([...s.keep()]).toEqual([`${FLOW.trim()}@c1|s1`]);
   });
 
-  test("倍率を続けて変えて途中の絵が要らなくなったら、その絵は使っている名前から外れる", () => {
-    let t = 1_000;
-    const tb = new PictureTable(new PictureNames({ token: "tok", clock: () => t++ }));
-    const s = diagramFileState({ fileOf: (part, look) => { const name = tb.name(`${part.source}@${look.key}`, "svg"); return { name, path: name, width: 10, height: 5 }; } });
+  test("倍率を続けて変えて途中の絵が要らなくなったら、その絵の席は使っている名前から外れ、手放す絵の席になる", () => {
+    const table = ensureTable({}, 0);
+    const owner = { place: bodyPlace("tok"), gen: "g1" };
+    claimInit(table, owner, 0);
+    initPlan(table, [], 8);
+    initDone(table, owner);
+    const user = new SeatUser(table, owner);
+    let s = null;
+    s = diagramFileState({ fileOf: (part, look) => { const name = user.nameOf(`${part.source}@${look.key}`, (n) => s.fresh(n)); return { name, path: name, width: 10, height: 5 }; } });
     s.setLook({ key: "s1" });
     s.open(FLOW);
     finish(s);
@@ -166,5 +174,8 @@ describe(".mmd の付き添いの mod と使っている絵", () => {
     s.setLook({ key: "s3" });
     expect(s.keep().has(middle)).toBe(false);
     expect(s.keep().has(shown)).toBe(true);
+    user.use(s.keep());
+    rendered(table, owner.place);
+    expect(takeReleases(table, owner)).toEqual([middle]);
   });
 });

@@ -235,8 +235,6 @@ export function companionInstalled({ main, mod }) {
   return Boolean(main && mod);
 }
 
-// 付き添いの mod が入っていないので描けない図の理由（仕様の「描けない図」）。
-export const COMPANION_MISSING = { kind: "companion", message: "付き添いの mod が入っていない" };
 
 // 手放すときに書く、ごく小さい同じ形式の絵（1 × 1）。SVG は文字列 { text }、ほかは base64 { base64 }（mod からはバイナリを書けないので、
 // PowerShell でバイト列に戻して書く）。png・jpg・gif・bmp・ico（png を包んだもの）・webp は ffmpeg で作り、どれも書き換えると

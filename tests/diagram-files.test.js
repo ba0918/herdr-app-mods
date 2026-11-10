@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { diagramFile, exportSize, bodyLook, scaleLook, fitLook, maxDiagramScale, tileView, TILE_SIDE } from "../mods/file-viewer/lib/diagram-files.js";
 
-// 名前を見た目の鍵そのものにする表の代わり（使っている絵の表は、持っている間は同じ鍵に同じ名前を返す。lib/pictures.js）。
+// 名前を見た目の鍵そのものにする表の代わり（絵の席の表は、持っている間は同じ鍵に同じ絵の席を返す。lib/seats.js）。
 const key = (k) => k;
 
 const COLORS = { background: "#101112", foreground: "#e1e2e3", muted: "#909192", raised: "#2a2b2c", surface: "#1a1b1c", border: "#3a3b3c" };
@@ -10,10 +10,10 @@ const part = (source, firstLine = 3, width = 300, height = 120) => ({ type: "mer
 describe("SVG の名前（使っている絵の表から、見た目の鍵で取る）", () => {
   const look = bodyLook(COLORS, 800);
 
-  test("付き添いの mod のフォルダに置く", () => {
-    const f = diagramFile(() => "tok-1-000000001-0.svg", part("flowchart LR; A-->B"), look);
-    expect(f.name).toBe("tok-1-000000001-0.svg");
-    expect(f.path).toBe("mods/file-viewer-images/tok-1-000000001-0.svg");
+  test("絵の席のフォルダに置く", () => {
+    const f = diagramFile(() => "seat-00001.img", part("flowchart LR; A-->B"), look);
+    expect(f.name).toBe("seat-00001.img");
+    expect(f.path).toBe("mods/file-viewer-images/seat-00001.img");
   });
 
   test("図のソースが変わると鍵が変わる", () => {
@@ -102,7 +102,7 @@ describe("大きな絵（引き伸ばさない）", () => {
     expect(f.tiles).toEqual([{ name: f.name, path: f.path, x: 0, y: 0, width: 300, height: 120 }]);
   });
 
-  test("タイルは 1 枚ずつ別の鍵で名前を取り、付き添いの mod のフォルダに置く", () => {
+  test("タイルは 1 枚ずつ別の鍵で名前を取り、絵の席のフォルダに置く", () => {
     const f = diagramFile(key, part("big", 1, 1500, 9000), scaleLook(COLORS, 1));
     expect(new Set(f.tiles.map((t) => t.name)).size).toBe(f.tiles.length);
     for (const t of f.tiles) expect(t.path).toBe(`mods/file-viewer-images/${t.name}`);
