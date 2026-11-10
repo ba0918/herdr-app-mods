@@ -41,12 +41,21 @@ const OUTSIDE = () => ({ inRender: false, over: null });
 // <style> 要素の有無（タイルに分けるか）は、出している今の中身の絵がタイルに分けたい大きさのとき（svgStyleWanted）だけ、描画の外で
 // 区切りごとに 1 区間で確かめる（tick。区切りの間は呼ぶ側が入出力の await を挟む）。確かめ終えるまでは、タイルに分けない 1 枚で書いた
 // 絵を出す。確かめ終えたら、分かった有無で今の中身を準備し直す（書き終えて読み込むまで、出している絵のまま）。
+// 確かめにも準備の区間と同じ見張りと 10 秒の上限を当てる（区切りの前に slice の印を置く。watch）。上限を超えたら、<style> 要素を
+// 持つとみなす（タイルに分けない側に倒す）。
 class SvgFileState extends MarkdownState {
   constructor(options) {
     super(options);
     this.start = (content) => startSvgPreparation(content, this.styledOf(content));
     this.checked = null;   // <style> 要素を確かめ終えた中身 { content, styled }
-    this.checking = null;  // 確かめている中身 { content, scanner }
+    // 確かめている中身 { content, scanner, elapsed, last }。elapsed は確かめを動かした時間（区切りの時間と、区切りから戻らなかった
+    // 時間。区切りの間は数えない: 確かめが要らなくなって止めている間もあるので）、last は今の区切りを始めた時刻。
+    this.checking = null;
+  }
+
+  // 準備の見張りに加えて、<style> 要素の確かめの区切りから戻っていないか。
+  get watched() {
+    return super.watched || this.slice !== null;
   }
 
   // 中身 content が <style> 要素を持つか。確かめていなければ null。
@@ -76,15 +85,40 @@ class SvgFileState extends MarkdownState {
 
   tick(budget, now) {
     if (this.job || !this.styleWanted) return super.tick(budget, now);
-    if (this.checking?.content !== this.text) this.checking = { content: this.text, scanner: styleScanner(this.text.text) };
-    const { content, scanner } = this.checking;
-    scanner.step();
-    if (scanner.done) {
-      this.checking = null;
-      this.checked = { content, styled: scanner.found };
-      this.begin(content, false);
-    }
+    if (this.checking?.content !== this.text) this.checking = { content: this.text, scanner: styleScanner(this.text.text), elapsed: 0, last: null };
+    const check = this.checking;
+    const begun = now();
+    check.last = begun;
+    this.slice = check;
+    check.scanner.step();
+    const ended = now();
+    this.slice = null;
+    check.elapsed += ended - begun;
+    if (check.scanner.done) this.checkedAs(check.scanner.found);
+    else if (check.elapsed > this.timeLimit) this.checkedAs(true);
     return true;
+  }
+
+  // 確かめの区切りから戻らない非同期処理の見張り（MarkdownState の watch と同じ決まり）。止まった確かめが今の確かめなら、区切りを
+  // 始めてから気づくまでを表示している間だけ数え、上限を超えていれば <style> 要素を持つとみなし、超えていなければ確かめを始めから
+  // やり直す（止まった区切りの途中までの読み位置を使わない）。ほかは準備の見張り（slice の印が scanner を持たない準備の job か、印が無い）。
+  watch(now, visible) {
+    const check = this.slice;
+    if (this.interrupted || !check?.scanner) return super.watch(now, visible);
+    this.slice = null;
+    if (check !== this.checking) return true;
+    if (visible) this.count(check, now());
+    if (check.elapsed > this.timeLimit) this.checkedAs(true);
+    else check.scanner = styleScanner(check.content.text);
+    return true;
+  }
+
+  // 確かめている中身の <style> 要素の有無が決まった。その有無で今の中身を準備し直す。
+  checkedAs(styled) {
+    const { content } = this.checking;
+    this.checking = null;
+    this.checked = { content, styled };
+    this.begin(content, false);
   }
 
   display() {

@@ -205,6 +205,82 @@ describe("タイル", () => {
   });
 });
 
+// <style> 要素の確かめも、整形の準備と同じく区切りごとに 1 区間で動かすので、区間から戻らずに止まった非同期処理を見張りが手放し、
+// 表示している間の時間で 10 秒を数える。
+describe("<style> 要素の確かめの見張りと 10 秒", () => {
+  // タイルに分けたい大きさ（8,000 × 800 を倍率 1）の、CSS を持たない SVG を開き、タイルに分けない 1 枚の絵を出して確かめを待つ所まで進める。
+  function waiting(text = svg(8000, 800)) {
+    const s = state();
+    s.open(content(text));
+    finish(s);
+    expect(view(s).part.file.tiles.length).toBe(1);
+    expect(s.needsRun).toBe(true);
+    return s;
+  }
+  // 確かめが 1 区切りでは終わらない長さ（25 万文字を超える）の、CSS を持たない SVG。
+  const long = `<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800">${`<rect width="1" height="1"/>`.repeat(50_000)}</svg>`;
+  // 確かめの 1 区切りを動かし、区切りから戻らなかったことにする（区切りのあとの時刻を読む所で非同期処理が止まる）。
+  function stall(s, t) {
+    expect(() => s.tick(100, () => { if (s.watched) throw new Error("止まった"); return t; })).toThrow("止まった");
+  }
+  // するものが無くなるまで、確かめ・準備・書き込み・読み込みを進める。
+  function settle(s, t) {
+    for (let i = 0; i < 100 && (s.needsRun || s.busy); i++) {
+      finish(s, t);
+      if (s.needsRun) s.tick(100, () => t);
+    }
+  }
+
+  test("見張りが手放し、確かめを始めからやり直して、<style> 要素が無ければタイルに分ける", () => {
+    const s = waiting();
+    stall(s, 10);
+    expect(s.watch(() => 2_010, true)).toBe(true);
+    settle(s, 2_011);
+    expect(view(s).part.file.tiles.length).toBe(2);
+  });
+
+  test("戻らないことが続き、表示している間の時間で 10 秒を超えたら、<style> 要素を持つとみなしてタイルに分けない（表示していない間は数えない）", () => {
+    const s = waiting();
+    stall(s, 10);
+    expect(s.watch(() => 6_010, true)).toBe(true);
+    expect(view(s).part.file.tiles.length).toBe(1);
+    stall(s, 6_010);
+    expect(s.watch(() => 60_000, false)).toBe(true);
+    expect(s.needsRun).toBe(true);
+    stall(s, 60_000);
+    expect(s.watch(() => 64_001, true)).toBe(true);
+    settle(s, 64_002);
+    expect(s.needsRun).toBe(false);
+    expect(view(s).part.file).toMatchObject({ width: TILE_SIDE, height: 410 });
+    expect(view(s).part.file.tiles.length).toBe(1);
+  });
+
+  test("戻らなかった時間と区切りの時間を合わせて 10 秒を超えたら、区切りが戻っても打ち切る", () => {
+    const s = waiting(long);
+    stall(s, 10);
+    expect(s.watch(() => 10_009, true)).toBe(true);
+    let t = 10_009;
+    s.tick(100, () => (t += 2));
+    settle(s, t);
+    expect(view(s).part.file.tiles.length).toBe(1);
+  });
+
+  // 確かめが要らなくなっている（収まる大きさで、タイルに分けない大きさで書く）間は、確かめを動かしていない。
+  test("確かめの途中で要らなくなり、また要るようになったら、その間の時間を数えずに確かめを続ける", () => {
+    const s = waiting(long);
+    s.tick(100, () => 10);
+    expect(s.needsRun).toBe(true);
+    s.setLook(fitLook(null, { width: 1000, height: 100, max: 1 }));
+    finish(s, 11);
+    expect(s.needsRun).toBe(false);
+    s.setLook(scaleLook(null, 1));
+    finish(s, 30_000);
+    expect(s.needsRun).toBe(true);
+    settle(s, 30_000);
+    expect(view(s).part.file.tiles.length).toBe(2);
+  });
+});
+
 describe("倍率を変えたとき", () => {
   const fit = (width, height) => fitLook(null, { width, height, max: 1 });
 
