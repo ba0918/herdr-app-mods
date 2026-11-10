@@ -169,6 +169,11 @@ export function acquire(table, owner, key) {
   return { name, write: true };
 }
 
+// owner が受け持った絵の席を増やすのを、始めずにやめた（ほかのコピーが受け持てるようにする）。
+export function stopGrowing(table, owner) {
+  if (same(table.growing, owner)) table.growing = null;
+}
+
 // 増やした絵の席を作り終えた（空きとして載せる）。failed: 作れなかった絵の席（空きにせず、次の手放しでもう一度作る）。
 export function grown(table, names, owner, failed = []) {
   const retry = new Set(failed);

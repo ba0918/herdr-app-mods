@@ -193,10 +193,11 @@ export default class FileViewer extends View {
   // 閉じるとき（アプリの終了を含む）は、未保存の編集を下書きに書く。止める手段は無いので確認は出さない。
   // タブは本文の、図の拡大の窓は窓の使う場所を絵の席の表から外し、どこも使わなくなった絵の席を手放し始める（閉じた使う場所の描画は
   // 待たない。250 ms で終わらなくてよい。残りはほかのタブの見張りがする。仕様の「画像の置き場所」）。窓は、新しい窓に替わったあとなら
-  // 窓の使う場所を外さない。
+  // 窓の使う場所を外さない。書き始めていない絵の席の書く印と、始めていない絵の席を増やす受け持ちは外す（ほかのコピーが待たないように）。
   async close() {
     if (this.overlay) {
       if (this.seats) {
+        this.seatUser.stop();
         dropPlace(this.seats, this.seatOwner.place, this.seatOwner);
         await this.releaseSeats();
       }
@@ -206,6 +207,7 @@ export default class FileViewer extends View {
     if (file?.dirty && file.editor) await writeDraft(this.draftOf(file)).catch(() => {});
     file?.editor?.release();
     if (this.seats) {
+      this.seatUser.stop();
       dropPlace(this.seats, this.seatOwner.place);
       await this.releaseSeats();
     }
@@ -1182,7 +1184,9 @@ export default class FileViewer extends View {
   }
 
   // 描画の外の整形の準備を、1 区間ずつ入出力の await で区切って進める。区間ごとに自分のタブを表示しているかを取り直し
-  // （this.me は描画の中でしか取り直さない）、表示していなければ止める（表示に戻った描画で続きを始める）。
+  // （this.me は描画の中でしか取り直さない）、表示していなければ止める（表示に戻った描画で続きを始める）。止めるときは、書き始めていない
+  // 絵の席の書く印と、始めていない絵の席を増やす受け持ちを外す（同じ図を共有した表示しているタブが、書かれない絵の席を待たないように。
+  // 戻ったら名前を取り直して書く）。
   // 描き直しは、出すものが変わったときだけ求める（大きな整形表示の描き直しは重い。ガイドの「制約」）。
   // 印を外されたら（読み込み直した、見張りが手放した）、その非同期処理は進めずに終える。
   runPreparation(cx) {
@@ -1197,7 +1201,7 @@ export default class FileViewer extends View {
           await pauseForApp();
           if (this.preparing !== run || !md.needsRun) break;
           const me = this.identify();
-          if (!(me?.space.active && me.tabInfo?.active)) { md.pause(); break; }
+          if (!(me?.space.active && me.tabInfo?.active)) { md.pause(); this.seatUser?.stop(); break; }
           const shown = md.shown, failure = md.failure;
           const task = md.writeTask();
           if (task) await this.writeSvg(md, task, cx);

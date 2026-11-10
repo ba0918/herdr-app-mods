@@ -1,7 +1,7 @@
 // コピー（タブか拡大の窓）が絵の席の表（lib/seats.js）を使う形。表は窓に 1 つのふつうのデータで、これはコピーごとの手元の覚え。
 // 鍵から絵の席の名前を取り（その場で割り当てられなければ仮の名前を返して、待つわけを覚える）、自分が書く絵の席と書いている途中の
 // 絵の席を覚え、今使っている絵の席を表に渡す。
-import { acquire, wrote as seatWrote, use as seatUse, isSeatName, rewrites, claimRewrite } from "./seats.js";
+import { acquire, wrote as seatWrote, use as seatUse, isSeatName, rewrites, claimRewrite, stopGrowing } from "./seats.js";
 
 export class SeatUser {
   constructor(table, owner) {
@@ -64,6 +64,18 @@ export class SeatUser {
     this.inflight.delete(name);
     this.mine.delete(name);
     seatWrote(this.table, name, this.owner, { ok, info });
+  }
+
+  // このコピーが書くのを止める（表示しなくなって描画の外の準備を止めた、閉じた）。書く印を受けて書き始めていない絵の席は、書かずに
+  // 印を外し（中身の分からない絵の席になって鍵が外れ、同じ鍵を求めたほかのコピーは使っていない絵の席に自分で書く。無くなった絵の席の
+  // 書き直しなら無くなったままにする）、受け持った絵の席を増やす指示をまだ始めていなければ、受け持ちを外す。書いている途中の絵の席は、
+  // 書き終わるまで印を残す。
+  stop() {
+    for (const name of [...this.mine]) if (!this.inflight.has(name)) this.wrote(name, { ok: false });
+    if (this.blocked?.grow) {
+      this.blocked = null;
+      stopGrowing(this.table, this.owner);
+    }
   }
 
   // 今使っている絵の席（仮の名前は除く）を表に渡す。書く印を受けたが書き始めずに使わなくなった絵の席は、書かずに印を外す

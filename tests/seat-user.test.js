@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ensureTable, claimInit, initPlan, initDone, bodyPlace, seatOf, isSeatName, takeReleases, rendered, scan } from "../mods/file-viewer/lib/seats.js";
+import { ensureTable, claimInit, initPlan, initDone, bodyPlace, seatOf, isSeatName, takeReleases, rendered, scan, acquire, wrote } from "../mods/file-viewer/lib/seats.js";
 import { SeatUser } from "../mods/file-viewer/lib/seat-user.js";
 
 // コピー（タブか拡大の窓）が、絵の席の表を使う形（仕様の「画像の置き場所」の「絵の席の表」）。
@@ -85,6 +85,49 @@ describe("使っている絵の席を渡す", () => {
     b.use([]);
     b.nameOf("図A", (n) => seen.push(n));
     expect(seen).toEqual([name, name]);
+  });
+});
+
+describe("書かずに止まるとき", () => {
+  // 仕様: 同じ図は 1 つの絵の席を共有する。整形の準備は表示しているときだけ動かし、10 秒は表示している間だけ数える。
+  // 表示しなくなって止まったコピーの書く印が残ると、表示している共有した側が書けないまま 10 秒を数える。
+  test("書く印を受けて書き始めずに止まったら印を外し、同じ鍵を求めたほかのコピーが自分で書く", () => {
+    const table = ready();
+    const a = user(table), b = user(table, T2);
+    const name = a.nameOf("図A");
+    expect(b.nameOf("図A")).toBe(name);
+    a.stop();
+    expect(a.mustWrite(name)).toBe(false);
+    const again = b.take("図A");
+    expect(again.write).toBe(true);
+    expect(b.mustWrite(again.name)).toBe(true);
+  });
+
+  test("書いている途中の絵の席は、止まっても書き終わるまで印を残す", () => {
+    const table = ready();
+    const a = user(table);
+    const name = a.nameOf("図A");
+    a.writing(name);
+    a.stop();
+    expect(seatOf(table, name).state).toBe("writing");
+    a.wrote(name, { ok: true });
+    expect(seatOf(table, name)).toMatchObject({ state: "ready", key: "図A" });
+  });
+
+  test("絵の席を増やす指示を受けて始めずに止まったら受け持ちを外し、ほかのコピーが増やせる", () => {
+    const table = ready(1);
+    const a = user(table), b = user(table, T2);
+    const first = acquire(table, a.owner, "図A");
+    wrote(table, first.name, a.owner, { ok: true });
+    a.take("図B");
+    expect(a.blocked.grow).toBeDefined();
+    expect(b.take("図C").name).toBeUndefined();
+    expect(b.blocked).toEqual({ wait: "grow" });
+    a.stop();
+    expect(a.blocked).toBe(null);
+    b.blocked = null;
+    b.take("図C");
+    expect(b.blocked.grow).toBeDefined();
   });
 });
 
