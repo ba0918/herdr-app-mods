@@ -277,6 +277,8 @@ export default class FileViewer extends View {
     const md = this.md, o = this.overlay;
     if (md) md.lost(mine);
     for (const name of mine) {
+      // 書いている間に止まって（表示しなくなった）受け持ちが外れた名前は、書かずに飛ばす（次の見張りの回にまた受け持つ）。
+      if (!user.mustWrite(name)) continue;
       try {
         if (o) await this.rewriteOverlaySeat(name, cx);
         else if (name === this.file?.picture && this.file.cache) {
