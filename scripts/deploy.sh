@@ -2,7 +2,6 @@
 # リポジトリの mod / layout を、Windows 側で動く herdr-app の app home に反映して確かめる。
 #
 #   scripts/deploy.sh <mod名>   mods/<mod名>/ を app home の mods/<mod名>/ にコピーし、herdr-app check を通す
-#                               （file-viewer-images は main.js と mod.json だけを写し、フォルダの中のほかのファイルを残す）
 #   scripts/deploy.sh layout    layouts/main-viewer.json をコピーし、herdr-app status の errors が空かを見る
 #
 # 生成物（gpui-kit.d.ts / jsconfig.json）はコピーしない。シンボリックリンクは指す先の中身をコピーする
@@ -67,11 +66,5 @@ if [ ! -f "$src/main.js" ]; then
 fi
 dest="$apphome/mods/$target"
 mkdir -p "$dest"
-if [ "$target" = file-viewer-images ]; then
-  # 付き添いの mod のフォルダには file-viewer が書いた絵のファイルがあり、消すと表示中の絵の場所が空く。main.js と mod.json だけを、
-  # 中身が同じなら書き直さずに写す（書き換えると app が読み直す）。ほかのファイルには触らない。
-  rsync -L --checksum "$src/main.js" "$src/mod.json" "$dest/"
-else
-  rsync -rL --delete --exclude gpui-kit.d.ts --exclude jsconfig.json "$src/" "$dest/"
-fi
+rsync -rL --delete --exclude gpui-kit.d.ts --exclude jsconfig.json "$src/" "$dest/"
 "$app" check "$(wslpath -w "$dest")"

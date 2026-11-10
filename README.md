@@ -9,7 +9,6 @@ herdr-app の公式のものではない。
 | 名前 | 種類 | 内容 |
 |---|---|---|
 | `file-viewer` | mod | ファイルをメイン領域のタブで表示・編集する viewer。code / Markdown（Mermaid 図を含む）/ 画像 / SVG を扱う。保存、外で書き換えられたときの追従、未保存の編集の下書きもある |
-| `file-viewer-images` | mod | `file-viewer` の付き添い。画像のコピーと図の絵を置く場所で、何も表示しない |
 | `file-tree` | mod | 同梱 Files の複製。押したファイルを `file-viewer` のタブで開く |
 | `main-viewer` | layout | 同梱 `main` layout の複製。右パネルの Files を `file-tree` に差し替えたもの |
 
@@ -25,13 +24,12 @@ WSL で clone して、mod と layout を herdr-app の設定フォルダ（app 
 ```sh
 git clone https://github.com/ba0918/herdr-app-mods.git
 cd herdr-app-mods
-scripts/deploy.sh file-viewer-images
 scripts/deploy.sh file-viewer
 scripts/deploy.sh file-tree
 scripts/deploy.sh layout
 ```
 
-`file-viewer-images` は、`file-viewer` が画像のコピーと図の絵を置くための、何も表示しない mod。入れ直しても、中の絵のファイルは消えない。
+画像のコピーと図の絵は、`file-viewer` が app home の `mods/file-viewer-images/` に置く（mod ではないただのフォルダで、`file-viewer` が絵を書くときに無ければ作る）。入れる必要は無い。
 
 `scripts/deploy.sh` はコピーしたあと、mod なら `herdr-app check`（mod の読み込みの確認）で、layout なら `herdr-app status` で、エラーが無いかを確かめる。
 
