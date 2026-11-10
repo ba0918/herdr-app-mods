@@ -68,6 +68,12 @@ class SvgFileState extends MarkdownState {
     return super.needsRun || this.styleWanted;
   }
 
+  // 中身が変わったら、前の中身の確かめを忘れる（中身は読むたびに別のものになり、前の中身はもう聞かれない。前の 6 MB の全文を持ち続けない）。
+  change(text) {
+    if (text !== this.text) this.checked = this.checking = null;
+    super.change(text);
+  }
+
   tick(budget, now) {
     if (this.job || !this.styleWanted) return super.tick(budget, now);
     if (this.checking?.content !== this.text) this.checking = { content: this.text, scanner: styleScanner(this.text.text) };
