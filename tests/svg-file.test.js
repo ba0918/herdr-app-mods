@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { startSvgPreparation, svgFileState, svgFileView, svgLook, svgSource } from "../mods/file-viewer/lib/svg-file.js";
 import { imageKey } from "../mods/file-viewer/lib/seats.js";
-import { diagramFile, scaleLook, fitLook, TILE_SIDE } from "../mods/file-viewer/lib/diagram-files.js";
+import { diagramFile, scaleLook, fitLook, TILE_SIDE, MAX_TILES } from "../mods/file-viewer/lib/diagram-files.js";
 
 // 仕様の「表示の大きさで書き直す」: image viewer の SVG を、.mmd と同じ作り（lib/markdown-state.js）で、ファイル全体を部分 1 つの
 // 文書として書き直す。中身は { text, key }（key は同じファイルの同じ中身を見分ける鍵の元）。
@@ -93,6 +93,51 @@ describe("書く大きさ", () => {
     expect(z.scale).toBe(2);
     expect(written(part(4000, 4000), z)).toEqual({ width: 4096, height: 4096 });
     expect(z.scale).toBeCloseTo(1.024, 6);
+  });
+});
+
+describe("書く面積の上限", () => {
+  const part = (width, height) => ({ type: "svg", source: "k", layout: { width, height } });
+  const zoom = (z) => ({ fit: false, scale: 1, view: null, fitMax: 1, ...z });
+  const area = (f) => f.tiles.reduce((sum, t) => sum + t.width * t.height, 0);
+
+  test("一番拡大しても、整数に丸めた書く大きさの面積（全部のタイルの合計）は 4,096² まで", () => {
+    for (const [w, h] of [[1000, 800], [333.3, 111.1], [8000, 8000], [7001, 3]]) {
+      const p = part(w, h);
+      const f = diagramFile(names(), p, svgLook(zoom({ scale: 1000 }), p.layout, { width: 1280, height: 820 }));
+      expect(f.width * f.height).toBeLessThanOrEqual(TILE_SIDE * TILE_SIDE);
+      expect(area(f)).toBeLessThanOrEqual(TILE_SIDE * TILE_SIDE);
+    }
+  });
+
+  test("細長い SVG も、タイルの数は上限まで", () => {
+    const p = part(500_000, 4);
+    const f = diagramFile(names(), p, svgLook(zoom({ scale: 1 }), p.layout, { width: 1280, height: 820 }));
+    expect(f.tiles.length).toBeLessThanOrEqual(MAX_TILES);
+    expect(area(f)).toBeLessThanOrEqual(TILE_SIDE * TILE_SIDE);
+  });
+
+  test("縦横の比が極端な SVG のあいだは倍率を下げず、書ける中身に替わったら今の倍率で書く", () => {
+    const z = zoom({ scale: 2 });
+    svgLook(z, { width: 1e20, height: 1 }, { width: 1280, height: 820 });
+    expect(z.scale).toBe(2);
+    const p = part(100, 100);
+    const f = diagramFile(names(), p, svgLook(z, p.layout, { width: 1280, height: 820 }));
+    expect(f).toMatchObject({ width: 200, height: 200 });
+  });
+
+  test("上限の中で短い辺が 1 px に満たないほど縦横の比が極端な SVG は、書かずに開けない案内にする", () => {
+    for (const text of [svg("1e20", 1), svg(1, "1e20"), svg("1e400", 10)]) {
+      const prep = startSvgPreparation(content(text));
+      prep.advance(100, () => 0);
+      expect(prep.parts[0].layout).toBeUndefined();
+      expect(prep.parts[0].error.message).toBeTruthy();
+      const s = state();
+      s.open(content(text));
+      s.tick(100, () => 1);
+      expect(s.writeTask()).toBeNull();
+      expect(view(s).kind).toBe("error");
+    }
   });
 });
 

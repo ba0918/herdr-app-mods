@@ -16,7 +16,7 @@ import { normalizePath } from "./lib/path.js";
 import { imageSize, base64ToBytes } from "./lib/image.js";
 import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
-import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, tileView } from "./lib/diagram-files.js";
+import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, maxSvgScale, tileView } from "./lib/diagram-files.js";
 import { oldCacheNames } from "./lib/pictures.js";
 import { IMAGES_DIR, imageKey, unshare, awaiting, setShown, shownOf, holds, ensureTable, startGen, beat, claimInit, stopInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
 import { SeatUser } from "./lib/seat-user.js";
@@ -49,6 +49,7 @@ const tileNames = (f) => tilesOf(f).map((t) => t.name);
 // 図の拡大（拡大の窓・.mmd）の倍率の上限: 書き出す絵の面積の上限に収まる倍率（lib/diagram-files.js）。
 const diagramMaxScale = (width, height) => maxDiagramScale({ width, height });
 const diagramZoom = (options = {}) => new Zoom({ ...options, maxScale: diagramMaxScale });
+const svgMaxScale = (width, height) => maxSvgScale({ width, height });
 // 絵の席に書き終えてから、見えない所で読み込ませるまで待つ時間。書いた絵自身の変化の知らせが読み込みのあとに届くと、読み込んだ絵が
 // 捨てられて一瞬空白になる（ガイドの「フォルダの変化の知らせ」。250 ms 待てば空白が出なかった）。
 const SEAT_SETTLE_MS = 250;
@@ -1285,8 +1286,8 @@ export default class FileViewer extends View {
       return;
     }
     if (this.showsSource(rec) && file.editor) return;
-    // 図と同じく、書く面積の上限に収まる倍率までにする（元のままコピーするコピーから替わったときも）。
-    file.zoom.maxScale = diagramMaxScale;
+    // 図と同じく、書く面積（とタイルの数）の上限に収まる倍率までにする（元のままコピーするコピーから替わったときも）。
+    file.zoom.maxScale = svgMaxScale;
     const viewport = window.viewport_size();
     const look = svgLook(file.zoom, file.dims ?? { width: 1, height: 1 }, { width: viewport.width, height: viewport.height });
     if (!this.mdSvg || !this.md) {

@@ -4,11 +4,11 @@
 // 部分の配置の大きさは書かれた大きさで、書き出しは根の要素を書き換えた全文（lib/svg-root.js の rewriteSvg。main.js が書く）。
 import { readSvgRoot } from "./svg-root.js";
 import { MarkdownState } from "./markdown-state.js";
-import { scaleLook, fitLook, maxDiagramScale } from "./diagram-files.js";
+import { scaleLook, fitLook, maxSvgScale, svgDrawable } from "./diagram-files.js";
 
 // content の準備。1 単位（根の要素を読む）で終わる。parts は SVG の部分 1 つ: { type: "svg", source, text, root, layout }。
-// layout の無い部分は書き直さない: 書かれた大きさが決められない SVG は asis（元のままコピーする）、app が描けない SVG は error
-// （{ message }）を持つ。
+// layout の無い部分は書き直さない: 書かれた大きさが決められない SVG は asis（元のままコピーする）、app が描けない SVG と、書く大きさの
+// 上限の中で短い辺が 1 px に満たないほど縦横の比が極端な SVG は error（{ message }）を持つ。
 export function startSvgPreparation(content) {
   const prep = {
     parts: [], done: false, failed: false,
@@ -16,7 +16,9 @@ export function startSvgPreparation(content) {
       if (!prep.done) {
         const root = readSvgRoot(content.text);
         const part = { type: "svg", source: content.key, text: content.text, root };
-        if (root.kind === "rewrite") part.layout = { width: root.width, height: root.height };
+        const layout = root.kind === "rewrite" ? { width: root.width, height: root.height } : null;
+        if (layout && svgDrawable(layout)) part.layout = layout;
+        else if (layout) part.error = { message: "縦横の比が極端で表示できない" };
         else if (root.kind === "asis") part.asis = true;
         else part.error = { message: root.reason };
         prep.parts.push(part);
@@ -56,11 +58,12 @@ function reason(failure) {
 
 // SVG を書く見た目（.mmd の mmdLook と同じ形）: 倍率か、枠に収める倍率（上限は zoom.fitMax）。枠がまだ測れなければ viewport（窓の
 // 描ける大きさ）で見積もる。SVG は色に関わらないので、色は決まった値（null）。zoom: image viewer のズーム（views/zoom.js の Zoom）。
-// 倍率が書かれた大きさ layout の上限（書く面積が上限に収まる倍率）を超えていれば（中身が変わって書かれた大きさが大きくなった）、
-// zoom の倍率を上限に下げる。
+// 倍率が書かれた大きさ layout の上限（書く面積とタイルの数が上限に収まる倍率。maxSvgScale）を超えていれば（中身が変わって書かれた
+// 大きさが大きくなった）、zoom の倍率を上限に下げる。縦横の比が極端で書けない layout（開けない案内を出す）では下げない（次に中身が
+// 書ける SVG に替わったとき、倍率がごく小さいまま残らないように）。
 export function svgLook(zoom, layout, viewport) {
   if (!zoom.fit) {
-    zoom.scale = Math.min(zoom.scale, maxDiagramScale(layout));
+    if (svgDrawable(layout)) zoom.scale = Math.min(zoom.scale, maxSvgScale(layout));
     return scaleLook(null, zoom.scale);
   }
   const view = zoom.view ?? viewport;

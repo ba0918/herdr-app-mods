@@ -34,9 +34,23 @@ export function fitLook(colors, frame) {
   return { colors, fit: frame, key: `${colorsKey(colors)}|f${Math.round(frame.width)}x${Math.round(frame.height)}x${frame.max}` };
 }
 
+// 書き直す SVG（image viewer）のタイルの数の上限。細長い SVG で、面積は上限に収まってもタイルを作りすぎないように。
+export const MAX_TILES = 64;
+
 // 倍率で書き出す絵の、拡大の倍率の上限（面積が MAX_AREA に収まる倍率）。
 export function maxDiagramScale(layout) {
   return Math.sqrt(MAX_AREA / (layout.width * layout.height));
+}
+
+// 書き直す SVG の、倍率の上限。面積が MAX_AREA に、長い辺が MAX_TILES 枚のタイルの長さに収まる倍率（面積が収まれば、長い辺が
+// TILE_SIDE を超えるとき短い辺は TILE_SIDE より短く、タイルは 1 列に並ぶので、長い辺の上限がタイルの数の上限になる）。
+export function maxSvgScale(layout) {
+  return Math.min(maxDiagramScale(layout), (MAX_TILES * TILE_SIDE) / Math.max(layout.width, layout.height));
+}
+
+// 書き直す SVG を、上限の倍率で短い辺が 1 px 以上に書けるか（縦横の比が極端でないか）。
+export function svgDrawable(layout) {
+  return Math.min(layout.width, layout.height) * maxSvgScale(layout) >= 1;
 }
 
 // 配置の大きさ { width, height } を、見た目で書き出す大きさ（整数の px）。倍率で書き出す絵（拡大の窓・.mmd）は拡大の上限まで。
@@ -48,8 +62,18 @@ export function exportSize(layout, look) {
   return scaled(layout, Math.min(asked, maxDiagramScale(layout)));
 }
 
-function scaled(layout, scale) {
-  return { width: Math.max(1, Math.round(layout.width * scale)), height: Math.max(1, Math.round(layout.height * scale)) };
+function scaled(layout, scale, round = Math.round) {
+  return { width: Math.max(1, round(layout.width * scale)), height: Math.max(1, round(layout.height * scale)) };
+}
+
+// 書き直す SVG の書く大きさ（整数の px）。倍率は maxSvgScale まで。丸めて面積が MAX_AREA を超えたら切り捨てる（切り捨てた大きさは
+// 上限の倍率の大きさ以下なので、面積もタイルの数も上限に収まる。短い辺が 1 px 以上に書けること（svgDrawable）は、呼ぶ側が先に確かめる）。
+function svgExportSize(layout, look) {
+  const f = look.fit;
+  const asked = look.scale ?? Math.min(f.max, f.width / layout.width, f.height / layout.height);
+  const scale = Math.min(asked, maxSvgScale(layout));
+  const size = scaled(layout, scale);
+  return size.width * size.height > MAX_AREA ? scaled(layout, scale, Math.floor) : size;
 }
 
 // nameOf(key): 見た目の鍵の絵の名前（使っている絵の表から取る）。part: 整形の準備の図の部分（source と layout を持つ）。
@@ -57,7 +81,7 @@ function scaled(layout, scale) {
 // tiles: 書き出す SVG の並び { name, key, path, x, y, width, height }（key は名前を取った見た目の鍵。x から height は出す絵の中の位置と
 // 大きさ）。上限以下の絵は 1 枚で、name と path はその 1 枚のもの。
 export function diagramFile(nameOf, part, look) {
-  const size = exportSize(part.layout, look);
+  const size = part.type === "svg" ? svgExportSize(part.layout, look) : exportSize(part.layout, look);
   const base = `${part.source}\n${colorsKey(look.colors)}\n${size.width}x${size.height}`;
   const tiles = [];
   for (let y = 0; y < size.height; y += TILE_SIDE) {
