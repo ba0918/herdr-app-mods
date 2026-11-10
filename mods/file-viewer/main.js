@@ -1305,6 +1305,11 @@ export default class FileViewer extends View {
     if (this.md.needsRun && !this.preparing && this.visible()) this.runPreparation(cx);
   }
 
+  // 書き直す SVG のタブがソース表示を出しているか（その間は書き直さない。syncSvg・runPreparation・watchPreparation）。
+  svgSourceShown() {
+    return Boolean(this.mdSvg && this.file?.editor && this.showsSource(record(this.token)));
+  }
+
   // 書き直す SVG の出し方（lib/svg-file.js の svgFileView）。書き直す SVG でなければ null。
   svgView() {
     return this.file?.svg && this.mdSvg && this.md ? svgFileView(this.md.display()) : null;
@@ -1358,7 +1363,7 @@ export default class FileViewer extends View {
           if (!(me?.space.active && me.tabInfo?.active)) { md.pause(); this.seatUser?.stop(); break; }
           // 書き直す SVG は、ソース表示の間は次の書き込みを始めない（始めていた分は書き終えている）。止め方は表示していないときと同じで、
           // 画像表示に戻った描画（syncSvg）で続きを始める。
-          if (this.mdSvg && this.md === md && this.showsSource(record(this.token)) && this.file?.editor) { md.pause(); this.seatUser?.stop(); break; }
+          if (this.md === md && this.svgSourceShown()) { md.pause(); this.seatUser?.stop(); break; }
           const shown = md.shown, failure = md.failure;
           const task = md.writeTask();
           if (task) await this.writeSvg(md, task, cx);
@@ -1451,10 +1456,11 @@ export default class FileViewer extends View {
   // 描画の外の準備の区間が戻らないまま止まっていないか、描画の中の準備が打ち切られたままでないかを見張る（lib/markdown-state.js の
   // watch）。止まっても打ち切られても描き直しが起きるとは限らないので、描画ではなくタイマーから見る。止まった非同期処理の finally が
   // 動いて印が外れていても見られるよう、印の有無では絞らない。手放したら、描き直しで代わりの整形表示を出すか、次の準備を始める。
+  // 書き直す SVG のソース表示の間は、表示していないときと同じく 10 秒を数えない（その間は書き直さないので）。
   watchPreparation(cx) {
     if (!this.md?.watched) return;
     const me = this.identify();
-    if (!this.md.watch(Date.now, Boolean(me?.space.active && me.tabInfo?.active))) return;
+    if (!this.md.watch(Date.now, Boolean(me?.space.active && me.tabInfo?.active) && !this.svgSourceShown())) return;
     this.preparing = null;
     cx.spawn(async (cx) => {
       await pauseForApp();
