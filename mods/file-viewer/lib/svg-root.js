@@ -121,15 +121,6 @@ function viewBox(value) {
   return { x: n[0], y: n[1], width: n[2], height: n[3] };
 }
 
-// preserveAspectRatio の { x, y, slice }（x / y: 枠の余りのどこに置くか 0・0.5・1。none なら null）。読めなければ既定（xMidYMid meet）。
-function aspect(value) {
-  const m = value?.trim().match(/^(?:defer\s+)?(none|x(Min|Mid|Max)Y(Min|Mid|Max))(?:\s+(meet|slice))?$/);
-  if (!m) return { x: 0.5, y: 0.5, slice: false };
-  if (m[1] === "none") return null;
-  const at = { Min: 0, Mid: 0.5, Max: 1 };
-  return { x: at[m[2]], y: at[m[3]], slice: m[4] === "slice" };
-}
-
 // 一方の側の書かれた大きさ（px）。無い側と読めない値の側は 100% として、% は viewBox のその側の割合。viewBox が無ければ決められない（null）。
 function side(l, box) {
   if (l?.px !== undefined) return l.px;
@@ -153,39 +144,32 @@ export function readSvgRoot(text) {
   const width = side(length(a.width, font), box?.width), height = side(length(a.height, font), box?.height);
   if ([width, height].some((v) => v !== null && v <= 0)) return { kind: "unopenable", reason: "書かれた大きさが 0 以下" };
   if (width === null || height === null) return { kind: "asis" };
-  return { kind: "rewrite", width, height, tag, viewBox: box, aspect: aspect(a.preserveAspectRatio) };
+  return { kind: "rewrite", width, height, tag, viewBox: box };
 }
 
-// 書き換えで替える属性（viewBox が読めればそれは元のまま残す。タイルは preserveAspectRatio も替える）。
+// 書き換えで替える属性（viewBox が読めればそれは元のまま残す）。タイルで包む元の根は x・y も外す（いちばん外の svg では効かないが、
+// 包まれると絵をずらす）。
 const SIZE = new Set(["width", "height"]);
 const RESIZED = new Set([...SIZE, "viewBox"]);
-const TILED = new Set([...RESIZED, "preserveAspectRatio"]);
+const PLACED = ["x", "y"];
+
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 // root（readSvgRoot の "rewrite"）の SVG の全文を、width × height の絵として描く全文にする。根の要素の width・height を書き換え、
-// viewBox は元のまま（無いか読めなければ書かれた大きさで足す）。tile（{ x, y, width, height }。width × height の絵の中の範囲）を渡したら、
-// その範囲だけを描くタイルにする（width・height はタイルの大きさ、viewBox はその範囲に描かれる中身の範囲）。ほかの属性と根の外の
-// 文字は変えない。開始タグの前・新しい開始タグ・後ろをつなぐ 1 回で作る。
+// viewBox は元のまま（無いか読めなければ書かれた大きさで足す）。ほかの属性と根の外の文字は変えない。開始タグの前・新しい開始タグ・
+// 後ろをつなぐ 1 回で作る。
+// tile（{ x, y, width, height }。width × height の絵の中の範囲）を渡したら、その範囲だけを描くタイルにする: 書き換えた根を、タイルの
+// 大きさで viewBox がその範囲の外側の svg で包む（根の前の XML 宣言・DOCTYPE は先頭のまま、閉じるタグは文書の終わり）。元の根の
+// 大きさと viewBox は全体のままなので、中の % の長さの基準も変わらない。
 export function rewriteSvg(text, root, { width, height, tile = null }) {
-  const tag = root.tag, box = root.viewBox ?? { x: 0, y: 0, width: root.width, height: root.height };
-  const drop = tile ? TILED : root.viewBox ? SIZE : RESIZED;
-  let head = ` width="${tile?.width ?? width}" height="${tile?.height ?? height}"`;
-  if (tile) {
-    const v = tileBox(box, root.aspect, { width, height }, tile);
-    head += ` viewBox="${v.x} ${v.y} ${v.width} ${v.height}" preserveAspectRatio="none"`;
-  } else if (!root.viewBox) head += ` viewBox="${box.x} ${box.y} ${box.width} ${box.height}"`;
+  const tag = root.tag;
+  const drop = new Set([...(root.viewBox ? SIZE : RESIZED), ...(tile ? PLACED : [])]);
+  let head = ` width="${width}" height="${height}"`;
+  if (!root.viewBox) head += ` viewBox="0 0 ${root.width} ${root.height}"`;
   const kept = tag.attrs.filter((a) => !drop.has(a.name)).map((a) => text.slice(a.start, a.end)).join("");
   const tail = text.slice(tag.attrs.length ? tag.attrs[tag.attrs.length - 1].end : tag.start + 1 + tag.name.length, tag.end);
-  return text.slice(0, tag.start) + `<${tag.name}${head}${kept}${tail}` + text.slice(tag.end);
-}
-
-// 枠 frame（{ width, height }）に box（viewBox）を aspect（preserveAspectRatio）で置いたとき、枠の中の範囲 rect に描かれる中身の範囲。
-function tileBox(box, aspect, frame, rect) {
-  let sx = frame.width / box.width, sy = frame.height / box.height, tx = -box.x * sx, ty = -box.y * sy;
-  if (aspect) {
-    const s = aspect.slice ? Math.max(sx, sy) : Math.min(sx, sy);
-    sx = sy = s;
-    tx = -box.x * s + aspect.x * (frame.width - box.width * s);
-    ty = -box.y * s + aspect.y * (frame.height - box.height * s);
-  }
-  return { x: (rect.x - tx) / sx, y: (rect.y - ty) / sy, width: rect.width / sx, height: rect.height / sy };
+  const resized = `<${tag.name}${head}${kept}${tail}`;
+  if (!tile) return text.slice(0, tag.start) + resized + text.slice(tag.end);
+  const outer = `<svg xmlns="${SVG_NS}" width="${tile.width}" height="${tile.height}" viewBox="${tile.x} ${tile.y} ${tile.width} ${tile.height}">`;
+  return text.slice(0, tag.start) + outer + resized + text.slice(tag.end) + "</svg>";
 }

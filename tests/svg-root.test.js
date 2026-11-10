@@ -97,22 +97,40 @@ describe("書き換えた全文", () => {
     expect(out.after).toBe("");
   });
 
-  test("タイルは、出す絵の中のその範囲を描く viewBox の切れ端になる", () => {
-    const text = '<svg width="400" height="200" viewBox="0 0 400 200"/>';
-    const out = root(rewriteSvg(text, readSvgRoot(text), { width: 800, height: 400, tile: { x: 400, y: 0, width: 400, height: 400 } }));
-    expect(out).toMatchObject({ width: 400, height: 400 });
-    expect(out.attrs.viewBox.split(/\s+/).map(Number)).toEqual([200, 0, 200, 200]);
+  // タイル: 外側の svg（タイルの大きさで、viewBox は出す絵の中のタイルの範囲）が、出す絵の全体の大きさに書き換えた元の根を包む。
+  const tiled = (text, size, tile) => {
+    const out = rewriteSvg(text, readSvgRoot(text), { ...size, tile });
+    const outer = root(out);
+    const inner = root(out.slice(outer.tag.end));
+    return { out, outer, inner };
+  };
+
+  test("タイルは、出す絵の中のその範囲を描く外側の svg で、全体の大きさに書き換えた元の根を包む", () => {
+    const text = '<?xml version="1.0"?>\n<!DOCTYPE svg>\n<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200"><circle cx="50%" cy="50%" r="10"/></svg>\n<!-- 尾 -->';
+    const { out, outer, inner } = tiled(text, { width: 800, height: 400 }, { x: 400, y: 0, width: 400, height: 400 });
+    expect(outer).toMatchObject({ width: 400, height: 400 });
+    expect(outer.attrs.viewBox.split(/\s+/).map(Number)).toEqual([400, 0, 400, 400]);
+    expect(outer.before).toBe(root(text).before);
+    // 元の根は全体の大きさのまま（% の長さの基準も元のまま）で、中身と根の後ろの文字はその後ろに続く。
+    expect(inner).toMatchObject({ width: 800, height: 400 });
+    expect(inner.attrs.viewBox).toBe("0 0 400 200");
+    expect(inner.after.startsWith(root(text).after)).toBe(true);
+    expect(readSvgRoot(out).kind).toBe("rewrite");
   });
 
-  test("タイルの切れ端は、書かれた大きさと viewBox の縦横の比が違うときの preserveAspectRatio の置き方も写す", () => {
-    // 200 × 100 の枠に 100 × 100 の viewBox を、既定（xMidYMid meet）で真ん中に置く: 枠の左端は viewBox の x = -50。
-    const text = '<svg width="200" height="100" viewBox="0 0 100 100"/>';
-    const tile = { x: 0, y: 0, width: 100, height: 100 };
-    const out = root(rewriteSvg(text, readSvgRoot(text), { width: 200, height: 100, tile }));
-    expect(out.attrs.viewBox.split(/\s+/).map(Number)).toEqual([-50, 0, 100, 100]);
-    const none = '<svg width="200" height="100" viewBox="0 0 100 100" preserveAspectRatio="none"/>';
-    const stretched = root(rewriteSvg(none, readSvgRoot(none), { width: 200, height: 100, tile }));
-    expect(stretched.attrs.viewBox.split(/\s+/).map(Number)).toEqual([0, 0, 50, 100]);
-    expect(stretched.attrs.preserveAspectRatio).toBe("none");
+  test("タイルでも、元の根の viewBox・preserveAspectRatio とほかの属性は元のまま（無い viewBox は書かれた大きさで足す）", () => {
+    const text = '<svg id="a" width="200" height="100" viewBox="0 0 100 100" preserveAspectRatio="xMinYMax slice"/>';
+    const { inner } = tiled(text, { width: 400, height: 200 }, { x: 0, y: 0, width: 200, height: 200 });
+    expect(inner.attrs).toMatchObject({ id: "a", width: "400", height: "200", viewBox: "0 0 100 100", preserveAspectRatio: "xMinYMax slice" });
+    const bare = '<svg width="2in" height="1in"/>';
+    const added = tiled(bare, { width: 384, height: 192 }, { x: 0, y: 0, width: 192, height: 192 }).inner;
+    expect(added.attrs.viewBox.split(/\s+/).map(Number)).toEqual([0, 0, 192, 96]);
+  });
+
+  test("タイルの元の根の x・y は外す（いちばん外の svg では効かないので、包んだときに絵をずらさない）", () => {
+    const text = '<svg x="10" y="20" width="200" height="100"/>';
+    const { inner } = tiled(text, { width: 200, height: 100 }, { x: 0, y: 0, width: 100, height: 100 });
+    expect(inner.attrs.x).toBeUndefined();
+    expect(inner.attrs.y).toBeUndefined();
   });
 });
