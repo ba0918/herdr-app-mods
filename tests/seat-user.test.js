@@ -129,6 +129,48 @@ describe("書かずに止まるとき", () => {
     b.take("図C");
     expect(b.blocked.grow).toBeDefined();
   });
+
+  // 仕様: 絵の席が足りなくなったら、まとめて増やす（反例: 待つわけを先に覚えたコピーが、あとで受けた増やす指示を捨てると、
+  // 増やす受け持ちが残ったまま誰も増やさず、その窓のどこも絵の席を取れない）。
+  test("ほかのコピーが増やすのを待っている間に増やす指示を受けたら、待つわけより増やす指示を覚える", () => {
+    const table = ready(1);
+    const a = user(table), b = user(table, T2);
+    const first = acquire(table, a.owner, "図A");
+    wrote(table, first.name, a.owner, { ok: true });
+    a.take("図B");
+    b.take("図C");
+    expect(b.blocked).toEqual({ wait: "grow" });
+    a.stop();
+    b.take("図C");
+    expect(b.blocked.grow).toBeDefined();
+  });
+
+  // 仕様: 手放すのは出していない絵の席だけ（反例: 増やしている途中に受けた同じ増やす指示でもう一度作ると、その書き込みが、先に
+  // 作り終えて絵を書いた絵の席をごく小さい絵で上書きしうる）。
+  test("増やしている途中にもう一度増やす指示を受けても同じ絵の席を二度作らず、止まっても増やす受け持ちを外さない", async () => {
+    const table = ready(1);
+    const a = user(table), b = user(table, T2);
+    const first = acquire(table, a.owner, "図A");
+    wrote(table, first.name, a.owner, { ok: true });
+    a.take("図B");
+    const names = a.blocked.grow;
+    a.blocked = null;
+    const writes = [];
+    let finish;
+    const gate = new Promise((resolve) => { finish = resolve; });
+    const write = async (list) => { writes.push(list); await gate; return []; };
+    const growing = a.grow(names, write);
+    a.take("図C");
+    expect(a.blocked).toEqual({ grow: names });
+    a.stop();
+    expect(b.take("図D")).toEqual({ wait: "grow" });
+    const again = a.grow(names, write);
+    finish();
+    await growing;
+    await again;
+    expect(writes).toEqual([names]);
+    expect(b.take("図D").write).toBe(true);
+  });
 });
 
 describe("画像のコピーの絵の席を取る", () => {

@@ -1,7 +1,7 @@
 // コピー（タブか拡大の窓）が絵の席の表（lib/seats.js）を使う形。表は窓に 1 つのふつうのデータで、これはコピーごとの手元の覚え。
 // 鍵から絵の席の名前を取り（その場で割り当てられなければ仮の名前を返して、待つわけを覚える）、自分が書く絵の席と書いている途中の
 // 絵の席を覚え、今使っている絵の席を表に渡す。
-import { acquire, wrote as seatWrote, use as seatUse, isSeatName, rewrites, claimRewrite, stopGrowing } from "./seats.js";
+import { acquire, wrote as seatWrote, use as seatUse, isSeatName, rewrites, claimRewrite, stopGrowing, grown } from "./seats.js";
 
 export class SeatUser {
   constructor(table, owner) {
@@ -11,6 +11,7 @@ export class SeatUser {
     this.inflight = new Set(); // 書いている途中の絵の席
     this.held = new Set();     // このコピーが今使っている絵の席（最後に use で渡したものと、そのあと取ったもの）
     this.blocked = null;       // 割り当てを待つわけ（{ wait } | { grow }）。呼ぶ側が片付けて null に戻す
+    this.growing = null;       // 増やす指示の絵の席を作っている途中の印（grow）
     this.waits = 0;
   }
 
@@ -27,11 +28,13 @@ export class SeatUser {
   }
 
   // 鍵 key の絵の席を取る（lib/seats.js の acquire の結果。画像のコピーのように、共有した絵の席の中身の情報が要るときに使う）。
-  // 割り当てられなければ name は無く、待つわけを blocked に覚える。
+  // 割り当てられなければ name は無く、待つわけを blocked に覚える（増やす指示は、前に覚えた待つわけより先にする。捨てると、増やす
+  // 受け持ちが残ったまま誰も増やさない）。
   take(key) {
     const r = acquire(this.table, this.owner, key);
     if (r.name === undefined) {
-      this.blocked ??= r.grow ? { grow: r.grow } : { wait: r.wait };
+      if (r.grow) this.blocked = { grow: r.grow };
+      else this.blocked ??= { wait: r.wait };
       return r;
     }
     if (r.write) this.mine.add(r.name);
@@ -66,15 +69,29 @@ export class SeatUser {
     seatWrote(this.table, name, this.owner, { ok, info });
   }
 
+  // 増やす指示の絵の席 names を write（名前を受けてごく小さい絵で作り、作れなかった名前を返す）で作り、表に載せる。作っている途中に
+  // また呼ばれたら（作り終える前に同じ指示をまた受けた）、作り直さずにそれが終わるのを待つ（二度目の書き込みが、先に作り終えて
+  // 絵を書いた絵の席を上書きしないように）。
+  async grow(names, write) {
+    this.growing ??= (async () => {
+      try {
+        grown(this.table, names, this.owner, await write(names));
+      } finally {
+        this.growing = null;
+      }
+    })();
+    await this.growing;
+  }
+
   // このコピーが書くのを止める（表示しなくなって描画の外の準備を止めた、閉じた）。書く印を受けて書き始めていない絵の席は、書かずに
   // 印を外し（中身の分からない絵の席になって鍵が外れ、同じ鍵を求めたほかのコピーは使っていない絵の席に自分で書く。無くなった絵の席の
-  // 書き直しなら無くなったままにする）、受け持った絵の席を増やす指示をまだ始めていなければ、受け持ちを外す。書いている途中の絵の席は、
-  // 書き終わるまで印を残す。
+  // 書き直しなら無くなったままにする）、受け持った絵の席を増やす指示をまだ始めていなければ、受け持ちを外す。書いている途中の絵の席と
+  // 作っている途中の増やす絵の席は、終わるまで印を残す。
   stop() {
     for (const name of [...this.mine]) if (!this.inflight.has(name)) this.wrote(name, { ok: false });
     if (this.blocked?.grow) {
       this.blocked = null;
-      stopGrowing(this.table, this.owner);
+      if (!this.growing) stopGrowing(this.table, this.owner);
     }
   }
 

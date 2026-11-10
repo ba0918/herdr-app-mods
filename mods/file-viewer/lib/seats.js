@@ -164,10 +164,11 @@ function releaseAgain(table, name) {
 // { name, write: false, info }: 同じ鍵の絵がある（共有する。書き直さない）。writing: true なら、ほかのコピーが書いている途中か、
 //   ファイルが無くなって使う場所が書き直すのを待っている（awaiting）ので、書き終わるまで待つ。無くなった絵の席がどこの集まりにも
 //   無ければ共有せず、使っていない絵の席を割り当てる（無くなった絵の席は鍵を外し、次の手放しでごく小さい絵で上書きする。releaseAgain）。
-// { wait: "init" | "grow" }: 初めての手放しか、絵の席を増やしている途中。あとでもう一度求める。
+// { wait: "init" | "grow" }: 初めての手放しか、ほかのコピーが絵の席を増やしている途中。あとでもう一度求める。
 // { wait: "release" }: 空きが無く、ごく小さい絵で上書きし直せる絵の席がある（増やさずに、それを手放し直してから求める。上書きが
 //   続けて失敗しても絵の席を増やし続けないように。外した使う場所の描画を待っている絵の席は、待つ間に回り続けないように数えない）。
-// { grow: names }: 空きが無い。owner がその名前の絵の席をごく小さい絵で作り、grown を呼んでから、もう一度求める。
+// { grow: names }: 空きが無い。owner がその名前の絵の席をごく小さい絵で作り、grown を呼んでから、もう一度求める（作り終える前に
+//   owner がもう一度求めても同じ指示を返す）。
 // どれも、得た絵の席を owner の使う場所の集まりに入れる。
 export function acquire(table, owner, key) {
   if (table.init.state !== "done") return { wait: "init" };
@@ -182,12 +183,13 @@ export function acquire(table, owner, key) {
   }
   const name = freeSeat(table);
   if (name === undefined) {
-    if (table.growing) return { wait: "grow" };
+    const start = table.order.length;
+    const grow = { grow: Array.from({ length: GROW_SEATS }, (_, i) => seatName(start + i)) };
+    if (table.growing) return same(table.growing, owner) ? grow : { wait: "grow" };
     const used = usedNames(table);
     if (table.order.some((n) => table.seats[n].state === "releasing" && !table.seats[n].by && releasable(table, n, used))) return { wait: "release" };
-    const start = table.order.length;
     table.growing = { ...owner };
-    return { grow: Array.from({ length: GROW_SEATS }, (_, i) => seatName(start + i)) };
+    return grow;
   }
   table.seats[name] = { state: "writing", key, by: { ...owner }, info: null, rewrite: false };
   table.keys[key] = name;

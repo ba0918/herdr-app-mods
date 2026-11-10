@@ -18,7 +18,7 @@ import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
 import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, tileView } from "./lib/diagram-files.js";
 import { oldCacheNames } from "./lib/pictures.js";
-import { IMAGES_DIR, imageKey, unshare, awaiting, setShown, shownOf, holds, ensureTable, startGen, beat, claimInit, stopInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
+import { IMAGES_DIR, imageKey, unshare, awaiting, setShown, shownOf, holds, ensureTable, startGen, beat, claimInit, stopInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
 import { SeatUser } from "./lib/seat-user.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
@@ -367,7 +367,7 @@ export default class FileViewer extends View {
     const blocked = this.seatUser.blocked;
     this.seatUser.blocked = null;
     if (blocked?.grow) {
-      grown(this.seats, blocked.grow, this.seatOwner, await writeTinySeats(blocked.grow));
+      await this.seatUser.grow(blocked.grow, writeTinySeats);
       return;
     }
     if (blocked?.wait === "init") await this.initSeats();

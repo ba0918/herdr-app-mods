@@ -82,6 +82,16 @@ describe("使い始める", () => {
     expect(r.grow).toContain(again.name);
     expect(again.write).toBe(true);
   });
+
+  // 仕様: 絵の席が足りなくなったら、まとめて増やす（反例: 増やす指示を受けたコピーが、もう一度求めて待つわけを受けると、
+  // 自分の受け持ちを待ち続けて誰も増やさない）。
+  test("増やす指示を受けたコピーがもう一度求めると同じ指示が返り、ほかのコピーは待つ", () => {
+    const { table } = ready(1);
+    take(table, own(body1), "図A");
+    const r = acquire(table, own(body1), "図B");
+    expect(acquire(table, own(body1), "図C")).toEqual({ grow: r.grow });
+    expect(acquire(table, own(body2), "図D")).toEqual({ wait: "grow" });
+  });
 });
 
 describe("共有して数える", () => {
