@@ -787,9 +787,9 @@ export default class FileViewer extends View {
         return;
       }
       if (outcome === "keep-edits") { keepEdits(); return; }
-      // 画像の中身が変わったら、新しいコピーを読み込み終えてから替える（前のコピーは、替えた描画のあとに手放す）。
-      // 読み込みを待つ間に打った文字（SVG のソース表示）も捨てない。
-      if (next.cache && file.cache) {
+      // 画像の中身が変わったら、新しいコピーを読み込み終えてから替える（前のコピーは、替えた描画のあとに手放す）。前が書き直す SVG
+      // （file.svg）で、新しい中身が元のままコピーする SVG のときも同じ。読み込みを待つ間に打った文字（SVG のソース表示）も捨てない。
+      if (next.cache && (file.cache || file.svg)) {
         this.copying.add(next.picture);
         await this.whenImageLoaded(file, { picture: next.picture, cache: next.cache }, cx);
         this.copying.delete(next.picture);
@@ -1279,10 +1279,11 @@ export default class FileViewer extends View {
   // 描画のたびに、書き直す SVG の今の中身（file.svg）と見た目（倍率か枠に収める倍率）を見え方の決まり（lib/svg-file.js）に渡し、
   // 書くものがあれば描画の外で進める（.mmd と同じ。syncMarkdown）。ソース表示の間は渡さず、画像表示に戻ったときに今の中身で書き直す。
   // 元のままコピーする SVG（file.svg が無い）に替わったら、見え方の決まりを捨てる（その絵の席は使っている絵から外れて手放される）。
+  // 走っている準備のループも止める（捨てた決まりの絵を書き続けないように）。
   syncSvg(rec, cx) {
     const file = this.file;
     if (!file || file.loading || !file.svg) {
-      if (this.mdSvg) { this.md = null; this.mdSvg = false; }
+      if (this.mdSvg) { this.md = null; this.mdSvg = false; this.preparing = null; }
       return;
     }
     if (this.showsSource(rec) && file.editor) return;
