@@ -140,8 +140,9 @@ function beginRelease(table, name, owner) {
 
 // owner が鍵 key の絵を使う。返す値:
 // { name, write: true }: 空きの絵の席を割り当てた。owner が書き、wrote を呼ぶ。
-// { name, write: false, info }: 同じ鍵の絵がある（共有する。書き直さない）。writing: true なら、ほかのコピーが書いている途中で、
-//   書き終わるまで待つ。
+// { name, write: false, info }: 同じ鍵の絵がある（共有する。書き直さない）。writing: true なら、ほかのコピーが書いている途中か、
+//   ファイルが無くなって使う場所が書き直すのを待っている（awaiting）ので、書き終わるまで待つ。無くなった絵の席がどこの集まりにも
+//   無ければ共有せず、鍵を外して使っていない絵の席を割り当てる（無くなった絵の席は scan がごく小さい絵で作る）。
 // { wait: "init" | "grow" }: 初めての手放しか、絵の席を増やしている途中。あとでもう一度求める。
 // { wait: "release" }: 空きが無く、ごく小さい絵で上書きできなかった絵の席がある（増やさずに、それを手放し直してから求める。上書きが
 //   続けて失敗しても絵の席を増やし続けないように）。
@@ -149,11 +150,14 @@ function beginRelease(table, name, owner) {
 // どれも、得た絵の席を owner の使う場所の集まりに入れる。
 export function acquire(table, owner, key) {
   if (table.init.state !== "done") return { wait: "init" };
-  const held = table.keys[key];
+  let held = table.keys[key];
+  if (held !== undefined && table.seats[held].state === "lost" && !usedNames(table).has(held)) {
+    dropKey(table, held);
+    held = undefined;
+  }
   if (held !== undefined) {
-    const s = table.seats[held];
     addName(table, owner.place, held);
-    return { name: held, write: false, writing: s.state === "writing", info: s.info };
+    return { name: held, write: false, writing: awaiting(table, held), info: table.seats[held].info };
   }
   const name = freeSeat(table);
   if (name === undefined) {
@@ -167,6 +171,12 @@ export function acquire(table, owner, key) {
   table.keys[key] = name;
   addName(table, owner.place, name);
   return { name, write: true };
+}
+
+// 絵の席 name の絵を、共有した所が待つ間か（ほかのコピーが書いている途中か、ファイルが無くなって使う場所が書き直すのを待っている）。
+export function awaiting(table, name) {
+  const state = table.seats[name]?.state;
+  return state === "writing" || state === "lost";
 }
 
 // 絵の席 name の絵が、その鍵の今の中身と違うと分かった（画像の大きさと更新時刻が同じまま中身だけ変わった）。その絵の席から鍵を外し、

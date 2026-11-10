@@ -18,7 +18,7 @@ import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
 import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, tileView } from "./lib/diagram-files.js";
 import { oldCacheNames } from "./lib/pictures.js";
-import { IMAGES_DIR, imageKey, unshare, setShown, shownOf, holds, ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
+import { IMAGES_DIR, imageKey, unshare, awaiting, setShown, shownOf, holds, ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
 import { SeatUser } from "./lib/seat-user.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
@@ -390,12 +390,12 @@ export default class FileViewer extends View {
   }
 
   // 図の SVG のタイル 1 枚を絵の席に書く（text: 配置の大きさの SVG。file: 図のファイル全体、layout: 配置の大きさ）。ほかのコピーが
-  // 書く絵の席を共有したなら、書き終わるのを待つ。書けなかったら例外。
+  // 書く絵の席か、ファイルが無くなって使う場所が書き直す絵の席を共有したなら、書き終わるのを待つ。書けなかったら例外。
   async writeSeatTile(tile, text, file, layout, cx) {
     const user = this.seatUser, name = tile.name;
     if (!user.mustWrite(name)) {
       const until = Date.now() + 10_000;
-      while (seatOf(this.seats, name)?.state === "writing" && Date.now() < until) await cx.sleep(50);
+      while (awaiting(this.seats, name) && Date.now() < until) await cx.sleep(50);
       if (seatOf(this.seats, name)?.state !== "ready") throw new Error("共有した図の絵を書き終えなかった");
       return;
     }
@@ -601,10 +601,10 @@ export default class FileViewer extends View {
     return r;
   }
 
-  // ほかのタブが書いた（か書いている）画像の絵の席を共有する。書き終わるまで待ち、載せた中身の情報で返す。書けなかったら、読み込めなかったことにする。
+  // ほかのタブが書いた（か書いている、書き直している）画像の絵の席を共有する。書き終わるまで待ち、載せた中身の情報で返す。書けなかったら、読み込めなかったことにする。
   async sharedPicture(name, cx) {
     const until = Date.now() + 30_000;
-    while (seatOf(this.seats, name)?.state === "writing" && Date.now() < until) await cx.sleep(50);
+    while (awaiting(this.seats, name) && Date.now() < until) await cx.sleep(50);
     const s = seatOf(this.seats, name);
     if (s?.state !== "ready" || !s.info) throw new Error("画像のコピーを共有できなかった");
     return { exists: true, size: s.info.size, base: s.info.base, cache: `${IMAGES_DIR}/${name}`, header64: s.info.header64 };
@@ -1288,8 +1288,8 @@ export default class FileViewer extends View {
 
   // 図の SVG（タイル 1 枚）を絵の席に書く。書く間の時間も、準備を動かしている時間に数える。書く前に、自分の記録があることを確かめる
   // （無ければ作る。記録の無いタブの使う場所は、ほかのタブの見張りが外すので）。
-  // 絵の席の割り当てを待っていた（仮の名前）なら、待つわけを片付けてから名前を取り直す。ほかのコピーが書く絵の席を共有したなら、
-  // 書き終わるのを待つ（その絵の席の鍵が外れたら、名前を取り直す）。
+  // 絵の席の割り当てを待っていた（仮の名前）なら、待つわけを片付けてから名前を取り直す。ほかのコピーが書く絵の席か、ファイルが
+  // 無くなって使う場所が書き直す絵の席を共有したなら、書き終わるのを待つ（その絵の席の鍵が外れたら、名前を取り直す）。
   async writeSvg(md, task, cx) {
     const name = task.name, user = this.seatUser;
     if (!isSeatName(name)) {
@@ -1300,7 +1300,7 @@ export default class FileViewer extends View {
     if (!user.mustWrite(name)) {
       const key = seatOf(this.seats, name)?.key;
       const until = Date.now() + 10_000;
-      while (seatOf(this.seats, name)?.state === "writing" && seatOf(this.seats, name).key === key && Date.now() < until) await cx.sleep(50);
+      while (awaiting(this.seats, name) && seatOf(this.seats, name).key === key && Date.now() < until) await cx.sleep(50);
       const seat = seatOf(this.seats, name);
       if (seat?.state === "ready" && seat.key === key) md.wrote(name, Date.now());
       else md.refresh();

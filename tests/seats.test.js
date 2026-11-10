@@ -468,6 +468,19 @@ describe("消えた絵の席", () => {
     expect(acquire(table, own(body2), "図B").name).not.toBe(r.name);
   });
 
+  // 仕様: どこも使っていなかった絵の席は、ごく小さい絵で作る（共有する絵としては使わない）。
+  test("無くなった絵の席を、どこの集まりにも無いときに同じ鍵で求めた所には、使っていない絵の席を割り当てて書かせる", () => {
+    const { table } = ready(2);
+    const a = take(table, own(body1), "図A");
+    const other = [seatName(0), seatName(1)].find((n) => n !== a.name);
+    scan(table, [other], own(body2));
+    dropPlace(table, body1);
+    const r = acquire(table, own(body2), "図A");
+    expect(r).toMatchObject({ name: other, write: true });
+    const s = scan(table, [other], own(body2));
+    expect(s.create).toEqual([a.name]);
+  });
+
   test("書き直す前に使う場所がどこも使わなくなった絵の席は、次の確かめでごく小さい絵で作り、鍵を外して空きに戻す", () => {
     const { table } = ready(2);
     const a = take(table, own(body1), "図A");
@@ -488,7 +501,7 @@ describe("消えた絵の席", () => {
     expect(claimRewrite(table, a.name, own(body1, "g1"))).toBe(true);
     wrote(table, a.name, own(body1, "g1"), { ok: false });
     expect(rewrites(table, body1)).toEqual([a.name]);
-    expect(acquire(table, own(body2), "図A").name).toBe(a.name);
+    expect(acquire(table, own(body2), "図A")).toMatchObject({ name: a.name, write: false, writing: true });
     expect(claimRewrite(table, a.name, own(body1, "g1"))).toBe(true);
     startGen(table, own(body1, "g2"), 0);
     expect(rewrites(table, body1)).toEqual([a.name]);
