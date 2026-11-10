@@ -156,24 +156,23 @@ export function readSvgRoot(text) {
   return { kind: "rewrite", width, height, tag, viewBox: box, aspect: aspect(a.preserveAspectRatio) };
 }
 
-// 書き換えで替える属性（タイルは preserveAspectRatio も替える）。
-const RESIZED = new Set(["width", "height", "viewBox"]);
+// 書き換えで替える属性（viewBox が読めればそれは元のまま残す。タイルは preserveAspectRatio も替える）。
+const SIZE = new Set(["width", "height"]);
+const RESIZED = new Set([...SIZE, "viewBox"]);
 const TILED = new Set([...RESIZED, "preserveAspectRatio"]);
 
-const num = (n) => String(Math.round(n * 1000) / 1000);
-
 // root（readSvgRoot の "rewrite"）の SVG の全文を、width × height の絵として描く全文にする。根の要素の width・height を書き換え、
-// viewBox は元のまま（無ければ書かれた大きさで足す）。tile（{ x, y, width, height }。width × height の絵の中の範囲）を渡したら、
+// viewBox は元のまま（無いか読めなければ書かれた大きさで足す）。tile（{ x, y, width, height }。width × height の絵の中の範囲）を渡したら、
 // その範囲だけを描くタイルにする（width・height はタイルの大きさ、viewBox はその範囲に描かれる中身の範囲）。ほかの属性と根の外の
 // 文字は変えない。開始タグの前・新しい開始タグ・後ろをつなぐ 1 回で作る。
 export function rewriteSvg(text, root, { width, height, tile = null }) {
   const tag = root.tag, box = root.viewBox ?? { x: 0, y: 0, width: root.width, height: root.height };
-  const drop = tile ? TILED : RESIZED;
-  let head = ` width="${num(tile?.width ?? width)}" height="${num(tile?.height ?? height)}"`;
+  const drop = tile ? TILED : root.viewBox ? SIZE : RESIZED;
+  let head = ` width="${tile?.width ?? width}" height="${tile?.height ?? height}"`;
   if (tile) {
     const v = tileBox(box, root.aspect, { width, height }, tile);
-    head += ` viewBox="${num(v.x)} ${num(v.y)} ${num(v.width)} ${num(v.height)}" preserveAspectRatio="none"`;
-  } else head += ` viewBox="${num(box.x)} ${num(box.y)} ${num(box.width)} ${num(box.height)}"`;
+    head += ` viewBox="${v.x} ${v.y} ${v.width} ${v.height}" preserveAspectRatio="none"`;
+  } else if (!root.viewBox) head += ` viewBox="${box.x} ${box.y} ${box.width} ${box.height}"`;
   const kept = tag.attrs.filter((a) => !drop.has(a.name)).map((a) => text.slice(a.start, a.end)).join("");
   const tail = text.slice(tag.attrs.length ? tag.attrs[tag.attrs.length - 1].end : tag.start + 1 + tag.name.length, tag.end);
   return text.slice(0, tag.start) + `<${tag.name}${head}${kept}${tail}` + text.slice(tag.end);

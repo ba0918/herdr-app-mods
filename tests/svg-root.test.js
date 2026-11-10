@@ -83,6 +83,12 @@ describe("書き換えた全文", () => {
     expect(out.after).toBe(original.after);
   });
 
+  test("小さい値や細かい値の viewBox も、元の値のまま残す", () => {
+    const text = '<svg width="10" height="20" viewBox="0 0 0.0001 0.00023456"/>';
+    const out = root(rewriteSvg(text, readSvgRoot(text), { width: 30, height: 60 }));
+    expect(out.attrs.viewBox.split(/\s+/).map(Number)).toEqual([0, 0, 0.0001, 0.00023456]);
+  });
+
   test("viewBox が無ければ、書かれた大きさで足す", () => {
     const text = '<svg width="2in" height="1in" xmlns="http://www.w3.org/2000/svg"/>';
     const out = root(rewriteSvg(text, readSvgRoot(text), { width: 384, height: 192 }));
