@@ -14,6 +14,8 @@ import { OLD_CACHE_DIR } from "./lib/pictures.js";
 import { IMAGES_DIR as SEATS_DIR, TINY_SVG } from "./lib/seats.js";
 
 export const DRAFTS_DIR = "file-viewer-drafts";
+// このコンピュータの大きなテキストを読むときの一時ファイルのフォルダ（app home の下。readLarge）。
+const READ_DIR = "file-viewer-read";
 const HEADER_BYTES = 256 * 1024;
 
 const STAT = `stat -L -c '%s|%y' -- "$1"`;
@@ -66,24 +68,46 @@ function psQuote(text) {
 }
 
 // テキストのファイルを読む。{ exists, size, base: { hash, stat, text? }, text }。
-// 上限を超えるときは text を読まずに返す（size だけ）。
-export async function readText(path, on) {
+// 上限（limit。既定はテキストの上限）を超えるときは text を読まずに返す（size だけ）。
+// このコンピュータの、テキストの上限（readTextFile の上限）を超えるファイル（1 MiB を超える SVG）は readLarge で読む。
+export async function readText(path, on, { limit = TEXT_LIMIT } = {}) {
   if (!on) {
     const size = await localSize(path);
     if (size === null) return { exists: false };
-    if (size > TEXT_LIMIT) return { exists: true, size };
+    if (size > limit) return { exists: true, size };
+    if (size > TEXT_LIMIT) return readLarge(path, size);
     const text = await readTextFile(path).catch((e) => { throw readFailure(String(e?.message ?? e), size); });
     if (text === null) return { exists: false };
     return { exists: true, size, text, base: { hash: textHash(text), stat: null, text } };
   }
   const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; cat -- "$1"`;
-  const r = await sh(on, script, [path, String(TEXT_LIMIT)]);
+  const r = await sh(on, script, [path, String(limit)]);
   if (r.code === 4) return { exists: false };
   if (r.code !== 0) throw readFailure(r.stderr.trim() || `読み込みに失敗した（${r.code}）`, sizeBefore(r.stdout));
   const [[stat, hash], text] = splitHead(r.stdout, 2);
   const size = sizeOf(stat);
-  if (size > TEXT_LIMIT) return { exists: true, size };
+  if (size > limit) return { exists: true, size };
   return { exists: true, size, text, base: { hash, stat } };
+}
+
+// このコンピュータの、readTextFile の上限を超えるテキストのファイルを読む。PowerShell でバイト列を app home の一時ファイル
+// （mods/ の外。mods/ の下にファイルを作ると、出している絵が一瞬空白になる）に写し、fs.readFile で文字列にしてから消す。
+// 基準は画像と同じバイト列のハッシュ（変化の確かめを readTextFile で読まないように。checkChanged の bytes）。
+async function readLarge(path, size) {
+  const dir = `${appHome()}/${READ_DIR}`;
+  await fs.mkdir(dir, { recursive: true });
+  const temp = `${dir}/${randomUUID()}.txt`;
+  try {
+    const r = await exec("powershell", ["-NoProfile", "-Command",
+      `$ErrorActionPreference='Stop'; $p=${psQuote(path)}; if (-not (Test-Path -LiteralPath $p)) { exit 4 }; $b=[IO.File]::ReadAllBytes($p); [IO.File]::WriteAllBytes(${psQuote(temp.replace(/\//g, "\\"))}, $b); "$($b.Length)"; (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower()`]);
+    if (r.code === 4) return { exists: false };
+    if (r.code !== 0) throw readFailure(r.stderr.trim() || "読み込みに失敗した", size);
+    const [[length, hash]] = splitHead(r.stdout.replace(/\r/g, ""), 2);
+    const text = await fs.readFile(temp, "utf8");
+    return { exists: true, size: Number(length), text, base: { hash, stat: null, bytes: true } };
+  } finally {
+    await fs.unlink(temp).catch(() => {});
+  }
 }
 
 // ディスクが基準（base）から変わったか。{ missing } か { changed, base }（changed なら新しい基準）。
