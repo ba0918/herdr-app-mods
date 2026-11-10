@@ -110,7 +110,7 @@ export function initDone(table, owner, failed = []) {
 }
 
 function placeOf(table, place) {
-  return (table.places[place] ??= { names: [], frame: 0, dropped: {} });
+  return (table.places[place] ??= { names: [], frame: 0, dropped: {}, shown: null });
 }
 
 // どこかの使う場所の集まりにある絵の席の名前。
@@ -220,18 +220,38 @@ function dropKey(table, name) {
   s.info = null;
 }
 
-// place が今使っている絵の席の集まり（前に渡したものと置き換える）。外した絵の席には、そのときの描画の回数を覚える。
+// place が今使っている絵の席の集まり（前に渡したものと置き換える）。外した絵の席には、そのときの描画の回数を覚える。空きと手放し中の
+// 絵の席は入れない（もう手放した絵の席を守って、あとでほかの絵に使われたその絵の席を手放せなくならないように）。入れた名前を返す。
 export function use(table, place, names) {
   const p = placeOf(table, place);
-  const next = new Set(names);
+  const next = new Set(names.filter((name) => table.seats[name] && table.seats[name].state !== "free" && table.seats[name].state !== "releasing"));
   for (const name of p.names) if (!next.has(name)) p.dropped[name] = p.frame;
   for (const name of next) delete p.dropped[name];
   p.names = [...next];
+  return p.names;
 }
 
 // place のコピーが描画を組み立て終えた（render が返す直前に呼ぶ。打ち切られた描画は戻らないので数えない）。
 export function rendered(table, place) {
   placeOf(table, place).frame++;
+}
+
+// 拡大の窓の使う場所に、窓が今出している絵（{ file, colorsKey, colors }。ふつうのデータ）を置く。その使う場所の今の世代のコピーだけが
+// 置ける。同じ使う場所の新しい世代の窓のコピー（hot reload など）は、これから始める（開いたときの絵に戻らないように）。
+export function setShown(table, owner, shown) {
+  const p = table.places[owner.place];
+  if (p && p.gen === owner.gen) p.shown = shown;
+}
+
+export function shownOf(table, place) {
+  return table.places[place]?.shown ?? null;
+}
+
+// names の絵の席がどれも、place の集まりにあって書き終えたままか（集まりにある間は手放されないので、入れたときの絵のまま）。
+// 手放されて空きか別の絵になっていうるなら false。
+export function holds(table, place, names) {
+  const p = table.places[place];
+  return Boolean(p) && names.every((name) => p.names.includes(name) && table.seats[name]?.state === "ready");
 }
 
 // place を表から外す（タブや窓を閉じた、見張りが閉じたタブを見つけた、窓を作り直す）。その集まりの絵の席は描画の回数を待たない。

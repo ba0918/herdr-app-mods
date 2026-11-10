@@ -78,7 +78,8 @@ export class SeatUser {
     }
   }
 
-  // 今使っている絵の席（仮の名前は除く）を表に渡す。書く印を受けたが書き始めずに使わなくなった絵の席は、書かずに印を外す
+  // 今使っている絵の席（仮の名前は除く）を表に渡す。表が集まりに入れなかった絵の席（空きと手放し中）は持っていないことにする
+  // （次に取ったら、新しく使い始めた名前として知らせる）。書く印を受けたが書き始めずに使わなくなった絵の席は、書かずに印を外す
   // （中身が分からない絵の席として、手放す）。
   use(names) {
     const seats = [...new Set(names)].filter(isSeatName);
@@ -86,7 +87,6 @@ export class SeatUser {
     for (const name of [...this.mine]) {
       if (!using.has(name) && !this.inflight.has(name)) this.wrote(name, { ok: false });
     }
-    this.held = using;
-    seatUse(this.table, this.owner.place, seats);
+    this.held = new Set(seatUse(this.table, this.owner.place, seats));
   }
 }

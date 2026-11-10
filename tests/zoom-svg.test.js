@@ -112,6 +112,24 @@ describe("拡大の窓の倍率", () => {
   });
 });
 
+describe("出せると確かめられない絵で始めた窓", () => {
+  // 仕様: 手放すのは出していない絵の席だけ。窓のコピーが init し直したとき、手放した絵の席（ごく小さい絵か別の絵）を出さない。
+  test("書いて読み込み終えるまで何も出さず、その間は何も持たず、読み込み終えたら書いた絵を出す", () => {
+    const z = new ZoomSvg({ shown: FIRST, colorsKey: "c1", untrusted: true });
+    expect(z.display().file).toBe(null);
+    expect([...z.keep()]).toEqual([]);
+    const task = z.task();
+    expect(task).toEqual({ scale: 1, colorsKey: "c1" });
+    const file = fileAt(task);
+    z.wrote(task, file, 1);
+    expect(z.display().file).toBe(null);
+    expect(z.preloads()).toEqual([file]);
+    z.loadedImage(file.name, 2);
+    expect(z.display().file).toEqual({ ...file, scale: 1 });
+    expect(z.task()).toBe(null);
+  });
+});
+
 describe("拡大の窓の絵の席が無くなったとき", () => {
   // 仕様: 消えた絵の席を使っていた拡大の窓は、出していた絵をその絵の席に書き直す。
   test("出している絵と、書いて読み込みを待っている絵の、どちらの絵の席でも、その絵の倍率と色で書き直す先が分かる", () => {

@@ -10,14 +10,16 @@ const tilesOf = (f) => f.tiles ?? [f];
 
 export class ZoomSvg {
   // shown: 今出している絵 { name, path, scale, width, height }（width / height は出す大きさ）。colorsKey: その絵の色の鍵。
-  constructor({ shown, colorsKey, timeLimit = TIME_LIMIT }) {
-    this.shown = shown;
-    this.shownColors = colorsKey;
+  // untrusted: その絵の絵の席が、もう手放されて別の絵になっていうる（窓のコピーが init し直したときに確かめられなかった）。そのときは
+  // 何も出さず、同じ倍率と色の絵を書いて読み込み終えてから出す。
+  constructor({ shown, colorsKey, untrusted = false, timeLimit = TIME_LIMIT }) {
+    this.shown = untrusted ? null : shown;
+    this.shownColors = untrusted ? null : colorsKey;
     this.want = { scale: shown.scale, colorsKey };
     this.writing = null;   // 書いている書き出し { scale, colorsKey }
     this.writingFile = null; // 書いている書き出しのファイル（書き終えて読み込みを待つ絵に移るまで、使っている絵に入れる）
     this.ready = null;     // 書き終えて、読み込みを待っている { task, file }
-    this.loaded = new Set(tilesOf(shown).map((t) => t.name));
+    this.loaded = new Set(untrusted ? [] : tilesOf(shown).map((t) => t.name));
     this.notice = null;    // { kind: "write", message } | { kind: "timeout" }
     this.gaveUp = null;    // 失敗・時間切れであきらめた望み（同じ倍率と色のまま書き直し続けない）
     this.since = null;     // 今の望みを待ち始めた時刻
@@ -25,7 +27,7 @@ export class ZoomSvg {
   }
 
   satisfied() {
-    return this.want.scale === this.shown.scale && this.want.colorsKey === this.shownColors;
+    return Boolean(this.shown) && this.want.scale === this.shown.scale && this.want.colorsKey === this.shownColors;
   }
 
   // 倍率が変わったとき（窓に収める倍率を含む）。
@@ -136,12 +138,13 @@ export class ZoomSvg {
   // 使っている絵の名前（出している絵と、読み込ませている絵と、書いている絵）。これ以外の窓だけが使っていた絵は手放してよい。
   // 書いている絵を含めるので、書いている間の描画のあと、書き終えて読み込ませる絵に移るまでの間も手放されない。
   keep() {
-    const names = new Set(tilesOf(this.shown).map((t) => t.name));
+    const names = new Set(this.shown ? tilesOf(this.shown).map((t) => t.name) : []);
     if (this.ready) for (const t of tilesOf(this.ready.file)) names.add(t.name);
     if (this.writingFile) for (const t of tilesOf(this.writingFile)) names.add(t.name);
     return names;
   }
 
+  // file: 出している絵（まだ何も出していなければ null）。
   display() {
     return { file: this.shown, notice: this.notice };
   }
@@ -149,7 +152,7 @@ export class ZoomSvg {
   // 無くなった絵の席 name に書き直す絵のタイル { tile, file, scale, colorsKey }（file は絵全体、scale と colorsKey はその絵の倍率と色）。
   // 出している絵と、書いて読み込みを待っている絵から探す。使っていない名前なら null。
   lostTile(name) {
-    const pictures = [{ file: this.shown, scale: this.shown.scale, colorsKey: this.shownColors }];
+    const pictures = this.shown ? [{ file: this.shown, scale: this.shown.scale, colorsKey: this.shownColors }] : [];
     if (this.ready) pictures.push({ file: this.ready.file, ...this.ready.task });
     for (const { file, scale, colorsKey } of pictures) {
       const tile = tilesOf(file).find((t) => t.name === name);

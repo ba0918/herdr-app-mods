@@ -18,7 +18,7 @@ import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
 import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, tileView } from "./lib/diagram-files.js";
 import { oldCacheNames } from "./lib/pictures.js";
-import { IMAGES_DIR, imageKey, unshare, ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
+import { IMAGES_DIR, imageKey, unshare, setShown, shownOf, holds, ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
 import { SeatUser } from "./lib/seat-user.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
@@ -108,22 +108,32 @@ export default class FileViewer extends View {
       // width と height だけを替えて書き直す（lib/zoom-svg.js）。テーマが変わったら、図を描画の外で配置し直して新しい色で書く
       // （layout: lib/overlay-layout.js）。絵は、開いたタブの印（token）の窓の使う場所で絵の席の表に数える（開いたときの絵は、タブが
       // 窓の集まりに入れてから渡す。本文と共有する絵の席は、本文が使わなくなっても窓が出している間は手放さない）。
+      // 窓が出している絵は窓の使う場所に置き（trackOverlayPictures）、同じ窓のコピーが init し直したら（hot reload など）、開いたときの
+      // 絵ではなくそれから始める。どちらの絵も、その絵の席が窓の集まりにあって書き終えたままでなければ（もう手放して別の絵になって
+      // いうる）、出さずに同じ倍率と色の絵を書き直してから出す。
       const colors = p.colors ?? diagramColors(theme());
       this.overlay = {
         source: p.mermaid, firstLine: p.firstLine ?? 1,
         size: { width: p.layoutWidth ?? 1, height: p.layoutHeight ?? 1 },
         zoom: diagramZoom({ fitMax: 3 }), layout: null, running: null,
-        colors: { [colorsKey(colors)]: colors }, svgs: { [colorsKey(colors)]: p.svg ?? null },
-        zs: p.shown ? new ZoomSvg({ shown: p.shown, colorsKey: colorsKey(colors) }) : null,
+        colors: { [colorsKey(colors)]: colors }, svgs: { [colorsKey(colors)]: p.svg ?? null }, zs: null,
       };
+      let start = p.shown ? { file: p.shown, colorsKey: colorsKey(colors) } : null, untrusted = false;
       if (p.token) {
         this.seats = ensureTable(globalThis, Date.now(), { poll: POLL_MS });
         this.seatOwner = { place: windowPlace(p.token), gen: newGen() };
         startGen(this.seats, this.seatOwner, Date.now());
         this.seatUser = new SeatUser(this.seats, this.seatOwner);
         this.seatTurns = new Map();
-        if (this.overlay.zs) this.seatUser.use([...this.overlay.zs.keep()]);
+        const kept = shownOf(this.seats, this.seatOwner.place);
+        if (kept) {
+          start = kept;
+          this.overlay.colors[kept.colorsKey] ??= kept.colors;
+        }
+        untrusted = Boolean(start) && !holds(this.seats, this.seatOwner.place, tileNames(start.file));
       }
+      if (start) this.overlay.zs = new ZoomSvg({ shown: start.file, colorsKey: start.colorsKey, untrusted });
+      if (this.seatUser && this.overlay.zs) this.seatUser.use([...this.overlay.zs.keep()]);
       cx.timer.every(OVERLAY_WATCH_MS, (cx) => this.watchOverlay(cx));
       return;
     }
@@ -1422,13 +1432,14 @@ export default class FileViewer extends View {
     if (o.zoom.view) o.zs.request(Math.round(o.zoom.current(o.size.width, o.size.height) * 1000) / 1000);
     this.runOverlayWrites(cx);
     this.trackOverlayPictures(cx);
+    // file: 出している絵。窓のコピーが init し直して前の絵を確かめられなかったときは、書き直すまで無い（「整形中…」を出す）。
     const { file, notice } = o.zs.display();
     const preloads = o.zs.preloads();
     return root
       .when(Boolean(notice), (el) => el.child(this.banner("fv-overlay-notice", `図を書き出せなかった（${notice.kind === "timeout" ? "10 秒たっても終わらなかった" : notice.message}）`, t, t.blocked)))
       .child(zoomArea({
-        id: "fv-overlay-area", zoom: o.zoom, width: o.size.width, height: o.size.height, shownScale: file.scale, t,
-        content: () => diagramImage(file),
+        id: "fv-overlay-area", zoom: o.zoom, width: o.size.width, height: o.size.height, shownScale: file?.scale ?? null, t,
+        content: () => (file ? diagramImage(file) : waitingLabel(div(), { loading: false, t })),
       }))
       .when(preloads.length > 0, (el) => el.child(preloadImages({
         id: "fv-overlay-preload", files: preloads.map((f) => ({ ...f, id: `${f.name}.${this.seatTurns?.get(f.name) ?? 0}` })),
@@ -1484,9 +1495,12 @@ export default class FileViewer extends View {
   }
 
   // 拡大の窓が使っている絵の席（出している絵と、読み込ませている絵と、書いている絵）を窓の使う場所で表に渡す。差し替えて窓だけが
-  // 使っていた前の絵の席は、差し替えた描画が来てから手放す（trackSeats）。
+  // 使っていた前の絵の席は、差し替えた描画が来てから手放す（trackSeats）。出している絵も窓の使う場所に置く（同じ窓のコピーが
+  // init し直したら、それから始める）。
   trackOverlayPictures(cx) {
-    this.trackSeats(cx, [...this.overlay.zs.keep()]);
+    const zs = this.overlay.zs;
+    this.trackSeats(cx, [...zs.keep()]);
+    if (this.seats && zs.shown) setShown(this.seats, this.seatOwner, { file: zs.shown, colorsKey: zs.shownColors, colors: this.overlay.colors[zs.shownColors] });
   }
 
   // 拡大の窓の見張り: 書き直しが 10 秒たっても終わらないとき、配置し直しが止まったときは、前の絵のまま知らせる。

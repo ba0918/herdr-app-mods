@@ -3,6 +3,7 @@ import {
   SEATS_VERSION, INITIAL_SEATS, GROW_SEATS, STALE_GEN_MS, IMAGES_DIR, seatName, isSeatName,
   ensureTable, claimInit, initPlan, initDone, acquire, grown, wrote, use, rendered, dropPlace, takeReleases, released,
   startGen, watch, scan, rewrites, claimRewrite, imageKey, bodyPlace, windowPlace, seatOf, unshare,
+  setShown, shownOf, holds,
 } from "../mods/file-viewer/lib/seats.js";
 import { RENDER_LIMIT } from "../mods/file-viewer/lib/render-size.js";
 
@@ -266,6 +267,50 @@ describe("窓の置き換え", () => {
     take(table, own(win1, "g2"), "図A|s2");
     expect(takeReleases(table, own(body1))).toEqual([a.name]);
     expect(seatOf(table, b.name).state).toBe("ready");
+  });
+});
+
+describe("窓のコピーが init し直したとき", () => {
+  // 仕様: 同じタブの印のコピーが init し直したら（hot reload など）、拡大の窓のコピーは窓の使う場所を引き継ぐ。手放すのは出していない絵の席だけ。
+  test("窓が出している絵は、同じ使う場所の新しい世代に引き継がれ、窓を作り直すと無くなる", () => {
+    const { table } = ready();
+    const g1 = own(win1, "g1"), g2 = own(win1, "g2");
+    startGen(table, g1, 0);
+    const shown = { file: { name: seatName(0), tiles: [{ name: seatName(0) }] }, colorsKey: "c2", colors: { background: "#000" } };
+    setShown(table, g1, shown);
+    startGen(table, g2, 0);
+    expect(shownOf(table, win1)).toEqual(shown);
+    setShown(table, g1, { ...shown, colorsKey: "c3" });
+    expect(shownOf(table, win1).colorsKey).toBe("c2");
+    dropPlace(table, win1);
+    expect(shownOf(table, win1)).toBe(null);
+  });
+
+  test("出す絵の絵の席が、使う場所の集まりにあって書き終えたままのときだけ確かで、手放されたあとは確かでない", () => {
+    const { table } = ready();
+    const a = take(table, own(win1), "図A|s1");
+    expect(holds(table, win1, [a.name])).toBe(true);
+    use(table, win1, []);
+    rendered(table, win1);
+    released(table, takeReleases(table, own(win1)), own(win1));
+    expect(holds(table, win1, [a.name])).toBe(false);
+    const b = take(table, own(body1), "図B");
+    expect(b.name).toBe(a.name);
+    expect(holds(table, win1, [a.name])).toBe(false);
+  });
+
+  test("集まりには、空きと手放し中の絵の席を入れない（手放した絵の席をほかが使い始めても守らない）", () => {
+    const { table } = ready();
+    const a = take(table, own(win1), "図A|s1");
+    use(table, win1, []);
+    rendered(table, win1);
+    released(table, takeReleases(table, own(win1)), own(win1));
+    use(table, win1, [a.name]);
+    const b = take(table, own(body1), "図B");
+    expect(b.name).toBe(a.name);
+    use(table, body1, []);
+    rendered(table, body1);
+    expect(takeReleases(table, own(body1))).toEqual([a.name]);
   });
 });
 
