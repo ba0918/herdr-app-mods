@@ -1355,6 +1355,9 @@ export default class FileViewer extends View {
           if (this.preparing !== run || !md.needsRun) break;
           const me = this.identify();
           if (!(me?.space.active && me.tabInfo?.active)) { md.pause(); this.seatUser?.stop(); break; }
+          // 書き直す SVG は、ソース表示の間は次の書き込みを始めない（始めていた分は書き終えている）。止め方は表示していないときと同じで、
+          // 画像表示に戻った描画（syncSvg）で続きを始める。
+          if (this.mdSvg && this.md === md && this.showsSource(record(this.token)) && this.file?.editor) { md.pause(); this.seatUser?.stop(); break; }
           const shown = md.shown, failure = md.failure;
           const task = md.writeTask();
           if (task) await this.writeSvg(md, task, cx);
