@@ -32,6 +32,16 @@ describe("書かれた大きさの読み方", () => {
     // 読めない値は、無いのと同じに読む（usvg は読めない属性を無いものとして扱う）。
     expect(size('<svg width="wide" height="5" viewBox="0 0 400 200">')).toEqual({ width: 400, height: 5 });
   });
+
+  test("長い数字の列のあとに読めない文字が続く値も、すぐに読めない値（無いもの）と分かる（開く道は 1 区間 100 ms ほどまで）", () => {
+    const digits = "1".repeat(100_000);
+    for (const text of [`<svg width="${digits}x" height="5" viewBox="0 0 400 200">`, `<svg font-size="${digits}x" width="1em" height="1em">`]) {
+      const begun = performance.now();
+      const r = size(text);
+      expect(performance.now() - begun).toBeLessThan(100);
+      expect(r).toEqual(text.includes("viewBox") ? { width: 400, height: 5 } : { width: 12, height: 12 });
+    }
+  });
 });
 
 describe("根の要素を見つける", () => {

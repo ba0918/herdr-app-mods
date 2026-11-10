@@ -7,7 +7,9 @@ const UNIT = { "": 1, px: 1, in: 96, cm: 96 / 2.54, mm: 96 / 25.4, pt: 96 / 72, 
 // 文字の大きさの既定（usvg の既定）。
 const FONT_SIZE = 12;
 
-const LENGTH = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(px|in|cm|mm|pt|pc|em|ex|%)?$/;
+// 数の部分は、数字の列の分け方が 1 通りになる形にする（`\d+\.?\d*` だと、長い数字の列のあとに読めない文字が続く値で後戻りが
+// 二乗になり、開く道が止まる）。
+const LENGTH = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(px|in|cm|mm|pt|pc|em|ex|%)?$/;
 
 // 長さの値を { px } か { percent } にする。読めなければ null。font: em・ex に使う文字の大きさ（px）。
 function length(value, font) {
