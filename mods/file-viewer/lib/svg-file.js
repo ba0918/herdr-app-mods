@@ -38,7 +38,8 @@ const OUTSIDE = () => ({ inRender: false, over: null });
 class SvgFileState extends MarkdownState {
   display() {
     const d = super.display();
-    const preparing = this.job !== null && !this.job.restyle && this.job.text === this.text && this.shown?.text !== this.text;
+    // 準備している中身が今の中身より前のもの（準備の間にまた変わり、続けて今の中身を準備する）でも同じ。
+    const preparing = this.job !== null && !this.job.restyle && this.shown?.text !== this.text;
     if (preparing && (d.kind === "fallback" || (d.kind === "previous" && d.parts[0]?.error))) return { kind: "loading", notices: [] };
     return d;
   }

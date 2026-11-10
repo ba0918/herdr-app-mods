@@ -352,6 +352,18 @@ describe("失敗したとき", () => {
     expect(view(u)).toEqual({ kind: "loading", notices: [] });
     finish(u, 3);
     expect(view(u)).toMatchObject({ kind: "picture", part: { source: "今" }, notices: [] });
+
+    // 新しい中身の準備の途中で、中身がまた変わっても読み込み中のまま。
+    const w = state();
+    w.open(content("<html/>", "前"));
+    finish(w);
+    w.change(content(svg(50, 50), "次"));
+    w.tick(100, () => 2);
+    w.change(content(svg(40, 40), "今"));
+    expect(view(w)).toEqual({ kind: "loading", notices: [] });
+    finish(w, 3);
+    finish(w, 4);
+    expect(view(w)).toMatchObject({ kind: "picture", part: { source: "今" }, notices: [] });
   });
 
   test("中身が変わって根の要素で描けないと分かる SVG になったら、開けない案内にする", () => {
