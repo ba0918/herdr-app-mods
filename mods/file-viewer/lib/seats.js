@@ -215,6 +215,13 @@ export function stopGrowing(table, owner) {
   if (same(table.growing, owner)) table.growing = null;
 }
 
+// owner が増やす指示の絵の席 names のうち、作る名前（表にまだ無いもの）。owner が増やすのを受け持っていなければ null（作らない。
+// 受け持ちが外れたあとや増やし終えたあとに残った指示で、ほかのコピーが絵を書いて出している絵の席を作り直さないように）。
+export function toGrow(table, names, owner) {
+  if (!same(table.growing, owner)) return null;
+  return names.filter((name) => !table.seats[name]);
+}
+
 // 増やした絵の席を作り終えた（空きとして載せる）。failed: 作れなかった絵の席（空きにせず、次の手放しでもう一度作る）。
 export function grown(table, names, owner, failed = []) {
   const retry = new Set(failed);

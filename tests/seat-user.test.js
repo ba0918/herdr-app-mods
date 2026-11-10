@@ -171,6 +171,34 @@ describe("書かずに止まるとき", () => {
     expect(writes).toEqual([names]);
     expect(b.take("図D").write).toBe(true);
   });
+
+  // 仕様: 手放すのは出していない絵の席だけ（反例: 増やしている途中の描画で受けた同じ増やす指示が増やし終えたあとも残り、それで
+  // もう一度作ると、増やした絵の席にほかのコピーが書いて出している絵をごく小さい絵で上書きする）。
+  test("増やしている途中に受けた増やす指示は、増やし終えたあとに残っても、増やした絵の席をもう一度作らない", async () => {
+    const table = ready(1);
+    const a = user(table), b = user(table, T2);
+    const first = acquire(table, a.owner, "図A");
+    wrote(table, first.name, a.owner, { ok: true });
+    a.take("図B");
+    const names = a.blocked.grow;
+    a.blocked = null;
+    const writes = [];
+    let finish;
+    const gate = new Promise((resolve) => { finish = resolve; });
+    const write = async (list) => { writes.push(list); await gate; return []; };
+    const growing = a.grow(names, write);
+    a.take("図C");
+    finish();
+    await growing;
+    expect(a.blocked).toBe(null);
+    const shown = b.take("図D");
+    b.wrote(shown.name, { ok: true });
+    const blocked = a.blocked;
+    a.blocked = null;
+    if (blocked?.grow) await a.grow(blocked.grow, write);
+    expect(writes).toEqual([names]);
+    expect(seatOf(table, shown.name)).toMatchObject({ state: "ready", key: "図D" });
+  });
 });
 
 describe("画像のコピーの絵の席を取る", () => {

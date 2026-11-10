@@ -1,7 +1,7 @@
 // コピー（タブか拡大の窓）が絵の席の表（lib/seats.js）を使う形。表は窓に 1 つのふつうのデータで、これはコピーごとの手元の覚え。
 // 鍵から絵の席の名前を取り（その場で割り当てられなければ仮の名前を返して、待つわけを覚える）、自分が書く絵の席と書いている途中の
 // 絵の席を覚え、今使っている絵の席を表に渡す。
-import { acquire, wrote as seatWrote, use as seatUse, isSeatName, rewrites, claimRewrite, stopGrowing, grown } from "./seats.js";
+import { acquire, wrote as seatWrote, use as seatUse, isSeatName, rewrites, claimRewrite, stopGrowing, toGrow, grown } from "./seats.js";
 
 export class SeatUser {
   constructor(table, owner) {
@@ -10,7 +10,7 @@ export class SeatUser {
     this.mine = new Set();     // 書く印を受けて、まだ書き終えていない絵の席
     this.inflight = new Set(); // 書いている途中の絵の席
     this.held = new Set();     // このコピーが今使っている絵の席（最後に use で渡したものと、そのあと取ったもの）
-    this.blocked = null;       // 割り当てを待つわけ（{ wait } | { grow }）。呼ぶ側が片付けて null に戻す
+    this.blocked = null;       // 割り当てを待つわけ（{ wait } | { grow }）。呼ぶ側が片付けて null に戻す（増やし終えたら、残った同じ増やす指示は grow が消す）
     this.growing = null;       // 増やす指示の絵の席を作っている途中の印（grow）
     this.waits = 0;
   }
@@ -69,15 +69,18 @@ export class SeatUser {
     seatWrote(this.table, name, this.owner, { ok, info });
   }
 
-  // 増やす指示の絵の席 names を write（名前を受けてごく小さい絵で作り、作れなかった名前を返す）で作り、表に載せる。作っている途中に
-  // また呼ばれたら（作り終える前に同じ指示をまた受けた）、作り直さずにそれが終わるのを待つ（二度目の書き込みが、先に作り終えて
-  // 絵を書いた絵の席を上書きしないように）。
+  // 増やす指示の絵の席 names を write（名前を受けてごく小さい絵で作り、作れなかった名前を返す）で作り、表に載せる。作るのは、この
+  // コピーが増やすのを受け持っている間の、表にまだ無い名前だけ。作っている途中にまた呼ばれたら（作り終える前に同じ指示をまた受けた）、
+  // 作り直さずにそれが終わるのを待ち、作り終えたら、その間に受けて blocked に残った同じ指示を消す（増やし終えたあとに古い指示で
+  // もう一度作ると、先に作り終えて絵を書いた絵の席をごく小さい絵で上書きするので）。
   async grow(names, write) {
     this.growing ??= (async () => {
       try {
-        grown(this.table, names, this.owner, await write(names));
+        const create = toGrow(this.table, names, this.owner);
+        if (create) grown(this.table, create, this.owner, create.length ? await write(create) : []);
       } finally {
         this.growing = null;
+        if (this.blocked?.grow?.join() === names.join()) this.blocked = null;
       }
     })();
     await this.growing;
