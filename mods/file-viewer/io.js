@@ -93,7 +93,8 @@ export async function readText(path, on, { limit = TEXT_LIMIT } = {}) {
 
 // このコンピュータの、readTextFile の上限を超えるテキストのファイルを読む。PowerShell でバイト列を app home の一時ファイル
 // （mods/ の外。mods/ の下にファイルを作ると、出している絵が一瞬空白になる）に写し、fs.readFile で文字列にしてから消す。
-// 基準は画像と同じバイト列のハッシュ（変化の確かめを readTextFile で読まないように。checkChanged の bytes）。
+// 基準は画像と同じバイト列のハッシュ（変化の確かめを readTextFile で読まないように。checkChanged の bytes）。ハッシュは写したのと
+// 同じバイト列から取る（元のファイルを読み直すと、その間に外で書き換わったとき、返す本文と基準が別の中身になり、次の変化を見落とす）。
 // fs.readFile は UTF-8 として読めないバイト列で例外を投げる（vendor/gpui-kit/crates/shell/src/engine/quickjs/host.rs の read_file）ので、
 // そのときは text を空にして utf8: false を返す（呼ぶ側が UTF-8 でないファイルとして扱う）。ほかの例外は今までどおり投げる。
 async function readLarge(path, size) {
@@ -102,7 +103,7 @@ async function readLarge(path, size) {
   const temp = `${dir}/${randomUUID()}.txt`;
   try {
     const r = await exec("powershell", ["-NoProfile", "-Command",
-      `$ErrorActionPreference='Stop'; $p=${psQuote(path)}; if (-not (Test-Path -LiteralPath $p)) { exit 4 }; $b=[IO.File]::ReadAllBytes($p); [IO.File]::WriteAllBytes(${psQuote(temp.replace(/\//g, "\\"))}, $b); "$($b.Length)"; (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower()`]);
+      `$ErrorActionPreference='Stop'; $p=${psQuote(path)}; if (-not (Test-Path -LiteralPath $p)) { exit 4 }; $b=[IO.File]::ReadAllBytes($p); [IO.File]::WriteAllBytes(${psQuote(temp.replace(/\//g, "\\"))}, $b); "$($b.Length)"; [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-','').ToLower()`]);
     if (r.code === 4) return { exists: false };
     if (r.code !== 0) throw readFailure(r.stderr.trim() || "読み込みに失敗した", size);
     const [[length, hash]] = splitHead(r.stdout.replace(/\r/g, ""), 2);
