@@ -1,21 +1,21 @@
 # 大きな Markdown の整形表示の実装計画
 
-File viewer 仕様の「整形の準備」と「整形表示の上限」（2026-11-07 の改訂）と、図を SVG 画像として描く改訂（2026-11-08、コミット d41fc0d）と、絵のファイルを付き添いの mod に置いて使わなくなった絵を手放す改訂（2026-11-09、コミット 5205df8）を、今の `mods/file-viewer/` に入れる計画。実装ブランチは `large-markdown`。Step 1〜13 は実装済みで（下の「実装済みのステップ」）、Step 14 から続ける。
+File viewer 仕様の「整形の準備」と「整形表示の上限」（2026-11-07 の改訂）と、図を SVG 画像として描く改訂（2026-11-08、コミット d41fc0d）と、絵のファイルを付き添いの mod に置いて使わなくなった絵を手放す改訂（2026-11-09、コミット 5205df8）と、付き添いの mod をやめて `mods/file-viewer-images/` の決まった名前の絵の席を上書きして使い回す改訂（2026-11-10、コミット 9c2f734）を、今の `mods/file-viewer/` に入れる計画。実装ブランチは `large-markdown`。Step 1〜22 は実装済みで（下の「実装済みのステップ」）、Step 23 から続ける。
 
 ## Goal
 
-画像やバッジ・図の多い大きな Markdown を開いても整形表示が止まらず（描画の外で整形の準備をして「整形中…」を出す）、部品が描くのに重すぎる Markdown はソース表示で理由を出して開き、Mermaid の図は SVG 画像として描いて図の多い文書（64 個を超える）でも止まらず、拡大してもくっきりした状態にする。図の SVG と画像のコピーは付き添いの mod `file-viewer-images` に置き、使わなくなった絵を手放して、開き直しやテーマ・倍率の行き来で app のメモリが増え続けないようにする。
+画像やバッジ・図の多い大きな Markdown を開いても整形表示が止まらず（描画の外で整形の準備をして「整形中…」を出す）、部品が描くのに重すぎる Markdown はソース表示で理由を出して開き、Mermaid の図は SVG 画像として描いて図の多い文書（64 個を超える）でも止まらず、拡大してもくっきりした状態にする。図の SVG と画像のコピーは `mods/file-viewer-images/` の絵の席に上書きで書き、使わなくなった絵の席をごく小さい絵の上書きで手放して、開き直しやテーマ・倍率の行き来で app のメモリが増え続けず、ほかのタブの絵も一瞬も空白にならないようにする。
 
 ## Specification
 
 - [viewer](../spec/file-viewer/viewers.md) — [整形の準備](../spec/file-viewer/viewers.md#整形の準備)、[整形表示の上限](../spec/file-viewer/viewers.md#整形表示の上限)、[markdown viewer](../spec/file-viewer/viewers.md#markdown-viewer)（今の内容を表示する、プレビュータブで整形表示に戻す）、[ローカル画像](../spec/file-viewer/viewers.md#ローカル画像)（画像を押せる名前にする処理そのもの）、[上限](../spec/file-viewer/viewers.md#上限)、[任せたこと](../spec/file-viewer/viewers.md#任せたこと)
 - [編集・保存と外部変更](../spec/file-viewer/editing.md) — [外で書き換えられたら追従する](../spec/file-viewer/editing.md#外で書き換えられたら追従する)、[ほかの知らせが出ているとき](../spec/file-viewer/editing.md#ほかの知らせが出ているとき)、[下書き](../spec/file-viewer/editing.md#下書き)
 - [開き方とタブ](../spec/file-viewer/opening-and-tabs.md) — [プレビュータブ](../spec/file-viewer/opening-and-tabs.md#プレビュータブ)、[再起動後の復元](../spec/file-viewer/opening-and-tabs.md#再起動後の復元)
-- [Mermaid 図](../spec/file-viewer/mermaid.md) — [描き方](../spec/file-viewer/mermaid.md#描き方)、[描けない図](../spec/file-viewer/mermaid.md#描けない図)（図ごとの失敗の出し方と行番号、.mmd の時間切れと書き出しの失敗、6 つ目の理由「付き添いの mod が入っていない」）、[拡大表示](../spec/file-viewer/mermaid.md#拡大表示)、[色](../spec/file-viewer/mermaid.md#色)、[Mermaid 単体ファイル](../spec/file-viewer/mermaid.md#mermaid-単体ファイル)
-- [File viewer 仕様（入口）](../spec/file-viewer/index.md) — [共通の前提](../spec/file-viewer/index.md#共通の前提)（3 つの mod）、[実機の確かめ](../spec/file-viewer/index.md#実機の確かめ)、[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（付き添いの mod、名前と手放す時、片付け、メモリの成功条件）、[作らないもの](../spec/file-viewer/index.md#作らないもの)、[任せたこと](../spec/file-viewer/index.md#任せたこと)、[見送った案](../spec/file-viewer/index.md#見送った案)、[決めていないこと](../spec/file-viewer/index.md#決めていないこと)
-- [image viewer](../spec/file-viewer/viewers.md#image-viewer)（画像のコピーを画像の置き場所に置き、手放して消す）、[開けないファイル](../spec/file-viewer/viewers.md#開けないファイル)（画像で付き添いの mod が入っていないとき）
-- 用語: [CONTEXT.md](../../CONTEXT.md)（整形の準備、プレビュータブ、外部変更、付き添いの mod、手放す）
-- プラットフォームの事実と制約: [mod 開発ガイド](../guides/herdr-app-mod-development.md)（「開発ループ」「確かめ専用の窓（playground）」「制約」。特に「描画の時間」「`matchAll`」「長い同期処理」「`check`」「`herdr-app shot`」「`cx.spawn` の始まり」「メモリ」「`image(path)` の読み込み」「`image(path)` のメモリ」「表示していない間の部品の状態」「スクロールバー」）
+- [Mermaid 図](../spec/file-viewer/mermaid.md) — [描き方](../spec/file-viewer/mermaid.md#描き方)（絵の席に書く、書き出していない図を空白で見せない）、[描けない図](../spec/file-viewer/mermaid.md#描けない図)（図ごとの失敗の出し方と行番号、.mmd の時間切れと書き出しの失敗。理由は 5 つ）、[拡大表示](../spec/file-viewer/mermaid.md#拡大表示)、[色](../spec/file-viewer/mermaid.md#色)、[Mermaid 単体ファイル](../spec/file-viewer/mermaid.md#mermaid-単体ファイル)
+- [File viewer 仕様（入口）](../spec/file-viewer/index.md) — [共通の前提](../spec/file-viewer/index.md#共通の前提)（2 つの mod と 1 つの layout、`file-viewer` が作る絵のフォルダ）、[実機の確かめ](../spec/file-viewer/index.md#実機の確かめ)（PrintWindow で続けて撮る）、[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（頼る app の振る舞い、置き場所と絵の席、絵の席の表、手放す時、片付け、成功条件 (1)〜(6)）、[作らないもの](../spec/file-viewer/index.md#作らないもの)、[任せたこと](../spec/file-viewer/index.md#任せたこと)、[見送った案](../spec/file-viewer/index.md#見送った案)、[決めていないこと](../spec/file-viewer/index.md#決めていないこと)
+- [image viewer](../spec/file-viewer/viewers.md#image-viewer)（画像のコピーを絵の席に書いて差し替え、ほかに使う場所が無ければ手放す）、[開けないファイル](../spec/file-viewer/viewers.md#開けないファイル)（理由はバイナリ・上限超え・読み込みの失敗の 3 つ）
+- 用語: [CONTEXT.md](../../CONTEXT.md)（整形の準備、プレビュータブ、外部変更、絵の席、手放す）
+- プラットフォームの事実と制約: [mod 開発ガイド](../guides/herdr-app-mod-development.md)（「開発ループ」「確かめ専用の窓（playground）」とその「一瞬の空白の撮り方」「メモリの測り方」、「守るべき規則」の `globalThis`、「制約」。特に「描画の時間」「`matchAll`」「長い同期処理」「`check`」「`herdr-app shot`」「`cx.spawn` の始まり」「メモリ」「`image(path)` の形式」「`image(path)` の読み込み」「`image(path)` の見えない要素」「`image(path)` の絵の覚え方」「app home の見張り」「フォルダの変化の知らせ」「`main.js` の無いフォルダと表示しない mod」「消してから手放されるまで」「`image(path)` のメモリ」「コピーができるとき」「表示していないコピー」「`cx.notify()` と描画」「閉じるときの呼び出し」「モジュールのトップレベルと実行環境」「窓と app home」「`fs/promises`」「`fs/promises` の `writeFile`」「表示していない間の部品の状態」「スクロールバー」）
 
 ## Approach and why
 
@@ -52,6 +52,20 @@ File viewer 仕様の「整形の準備」と「整形表示の上限」（2026-
 - **入れ方**: `scripts/deploy.sh <mod>` は `rsync -rL --delete` で `mods/<mod>/` を app home に写し、`herdr-app check` を通す。`--delete` のため、そのまま付き添いの mod に使うと、中の絵のファイルが消える。README の「入れ方」は `file-viewer`・`file-tree`・`layout` の 3 行。
 - `bun test` は 337 件が通る（HEAD eddc7b3）。
 
+### Step 22 のあとの作り（読んで分かったこと。Step 23 からの出発点）
+
+Step 14〜22 で入れた、付き添いの mod を使う作り。Step 23 からこれを絵の席の作りに置き換える。
+
+- **付き添いの mod**: リポジトリの `mods/file-viewer-images/` に、何も描かない `main.js` と `mod.json`（`place: none`）がある。`scripts/deploy.sh file-viewer-images` は、この 2 つだけを `--delete` 無しで写す（スクリプトの先頭のコメントと `if [ "$target" = file-viewer-images ]` の分かれ道）。README の 12 行目（mod の表）・28 行目（入れ方）・34 行目（説明）が付き添いの mod を書いている。
+- **名前と持ち方（`lib/pictures.js`）**: `PictureNames` が、絵ごとに `<token>[~<窓の印>]-<書いた時刻>-<連番>.<拡張子>` の新しい名前を作る（P30）。`PictureTable` はコピー（JavaScript のインスタンス）ごとの「見た目の鍵 → 名前」の表で、`name(key, ext)`・`use(place, names)`・`commit()`（描画で使う名前を渡し終えた）・`drawn(frame)`（その描画が済んだ）・`takeReleases(companion)`・`lost(names)`・`forget`・`adopt` を持つ。`ReleaseQueue` が手放したファイルを消す時を決め（`RELEASE_WAIT_MS = 0`）、`sweepTargets`（見張りが、閉じたタブの token で 10 秒以上たったものを選ぶ）と `ownStale`（復元したタブが自分の古いファイルを選ぶ）が名前の時刻で選ぶ。`companionInstalled`・`COMPANION_MISSING`・`tinyPicture(ext)`（形式ごとの 1 × 1 の base64）・`oldCacheNames`（前の置き場所の名前）もここにある。
+- **図の名前（`lib/diagram-files.js`）**: `diagramFile(nameOf, part, look)` が、図のソース・色の鍵・書き出しの大きさ（とタイルの位置）を鍵にして `nameOf(key)` で名前を取り、パスを `IMAGES_DIR`（`mods/file-viewer-images`）の下にする。
+- **入出力（`io.js`）**: `companionPresent`（`main.js` と `mod.json` があるか）、`writePictureText`（`fs.writeFile`）、`pictureExists`、`listPictures`、`removePicture`（`fs.unlink`）、`overwriteTiny(names)`（SVG は `fs.writeFile`、ほかは PowerShell の `[IO.File]::WriteAllBytes`）、`listOldCache`・`removeOldCache`・`removeOldCacheDir`。`copyImage(path, on, name)` は、このコンピュータのファイルを 1 回の PowerShell で読んで書き、ほかの machine のファイルは base64 の文字列を `mods/file-viewer-images/<名前>.b64` に書いてから PowerShell で戻して消す。`pauseForApp()` は `fs.exists(appHome())` を 1 回待つだけで、描画が済んだことを示さない（ガイドの「`cx.notify()` と描画」）。
+- **`main.js` の手放しと片付け**: 差し替えたあと `trackPictures` が `commit()` してから `pauseForApp()` を待って `drawn()` し、`releasePictures` が `takeReleases` の名前を `overwriteTiny` してから消す。`close()` は自分の token のファイルを手放して消す。`init` のあとの最初の `POLL_MS` の回に `sweepOwnStale` が、どのタブも `POLL_MS` の回に見張り（`sweepTargets` と、最初の回の `file-viewer-cache/` の片付け）をする。`checkSvgs` が、表示に戻ったときに出している SVG が無くなっていないかを見て `md.lost` で新しい名前で書かせる。
+- **付き添いの mod の判定**: `lib/kind.js` の `kind({ …, companion })` が画像を開けないファイル（理由 `companion`）にし、`lib/prepare.js` の `diagramLayout(…, { companion })`・`startPreparation(…, { companion })` と `MarkdownState.companionChecked`・`lib/mmd.js` が図を「付き添いの mod が入っていない」の描けない図にする。`tests/kind.test.js`・`tests/markdown-state.test.js`・`tests/mmd.test.js`・`tests/pictures.test.js`・`tests/diagram-files.test.js` にそのテストがある。
+- **拡大の窓**: 窓のコピーは自分の `PictureTable`（token と窓の印 `z<n>`）を持つ。本文の絵を借りて開いたことを、タブの記録（`shared.json` の `file-viewer:tabs`）の `window: { mark, borrowing }` に書き（`main.js` の `putRecord(this.token, { window: … })`）、タブは `POLL_MS` の回にそれを見て借りた絵を手放す（P38）。
+- **playground**: 今は Step 22 の作り（HEAD の file-viewer と付き添いの mod）が入っている。playground の `mods/file-viewer-images/` には `main.js`・`mod.json`・app が書いた `gpui-kit.d.ts`・`jsconfig.json` と、前の作りの名前の絵のファイルがある。作業者の app には、受け入れの前までどれも入れていない。
+- `bun test` は全件通る（HEAD 9c2f734）。
+
 ### 作り方の全体
 
 - **コマンドの呼び方と反映**: `herdr-app <サブコマンド>` は、ガイドの「開発ループ」の `$APP`（Windows 側の `herdr-app.exe`。PATH には無い）で呼ぶ。mod は `scripts/deploy.sh file-viewer` で app home に反映し、同じスクリプトが `herdr-app check` を通す。`mods/file-tree/` の `lib` は `mods/file-viewer/lib` へのシンボリックリンクなので、lib を変えたら `scripts/deploy.sh file-tree` も流す。app home 側を直接編集しない。
@@ -59,6 +73,7 @@ File viewer 仕様の「整形の準備」と「整形表示の上限」（2026-
 - **順番**: 実機の事実を測る（Step 1）→ 区切りながら準備する処理（Step 2）→ 見え方の決まり（Step 3）→ 画面へのつなぎ（Step 4）→ 整形表示の上限（Step 5）→ 通しの確認（Step 6）。Step 1 の (3)〜(5)（部品と図の重さ、差し替えでスクロールが保たれるか）で Step 2〜5 の作りと基準が変わるので最初に置く。(1)・(2)（描画の中で済む大きさ）は今の処理で測る仮の値で、Step 6 で新しい処理で測り直して定数を直す。Step 2・3 は lib だけで互いに独立している（順は 2 → 3 とする）。Step 4 が両方を使う。
 - **順番（SVG の改訂）**: 確かめ専用の窓の手順をガイドに書き、置き換える前の図を撮っておき、SVG で使える字体を確かめる（Step 7）→ 配置から SVG を作る lib（Step 8）→ 整形表示の図を SVG で出す（書き出しを整形の準備に入れる。Step 9）→ テーマの切り替え（Step 10）→ 拡大の窓（Step 11）→ .mmd（Step 12）→ 部品で描く図を消し、上限を測り直し、通しの確認（Step 13）。Step 7 の比べる元の画像は、図を SVG に置き換える前（Step 9 より前）でないと撮れないので最初に置く。Step 8 は lib だけで独立。Step 9〜12 は Step 8 を使い、Step 10・11 は Step 9 の書き出しの仕組み（キャッシュの名前と消し方）を使い、Step 12 は Step 10・11 の仕組みも使う。
 - **順番（付き添いの mod の改訂）**: 整形表示のスクロールの印の限界をコメントとガイドに書く（Step 14。ほかと独立で小さいので先に済ませる）→ 直す前の作りでメモリを測り、手放し方の事実を確かめる（Step 15）→ 付き添いの mod と入れ方（Step 16）→ 名前・持ち方・選び方の lib（Step 17）→ 本文と `.mmd` の絵（Step 18）→ 画像のコピー（Step 19）→ 拡大の窓（Step 20）→ 見張りと前の置き場所の片付け（Step 21）→ メモリの確かめと通しの確認（Step 22）。Step 15 を最初に置くのは、直す前の作り（今 playground に入っている HEAD eddc7b3）で同じ手順を測れるのは新しい作りを入れる前だけで、手放し方の事実（画像の形式ごとに手放せるか、書き換えてからすぐ消してよいか）で Step 17〜19 の作りが変わるため。Step 17 は lib だけで、Step 18〜21 がそれを使う。Step 19・20 は Step 18 の書き込みと手放しの仕組みを使い、Step 21 は Step 18〜20 が書くすべての名前を片付ける。Step 22 は全部のあと。
+- **順番（絵の席の改訂）**: 絵の席の作りが頼る事実を確かめ、playground から付き添いの mod の残りを片付ける（Step 23）→ 絵の席の表の lib（Step 24）→ 本文と `.mmd` の図を絵の席に書く（Step 25）→ 画像のコピー（Step 26）→ 拡大の窓（Step 27）→ 見張り・外から消されたとき・前の置き場所（Step 28）→ リポジトリから付き添いの mod を消す（Step 29）→ メモリと空白の確かめと通しの確認（Step 30）。Step 23 を最初に置くのは、画像の書き方（PowerShell でその場で書くと空白が出ないか）とごく小さい絵の形式（SVG の上書きで PNG の絵も手放せるか）で Step 24〜26 の作りが変わるため。Step 24 は lib だけで、Step 25〜28 がそれを使う。Step 25 が表を作る・描画の回数を数える・絵の席に書く・手放すの仕組みを入れ、Step 26〜28 はその仕組みに乗る。Step 26・27 は Step 25 の後で互いに独立（順は 26 → 27）。Step 28 は、表を使う場所が全部そろった後。Step 29 は、コードから付き添いの mod の判定とコメントが消えた後（Step 28）。Step 30 は全部の後。
 - **確かめの場所**: Step 7 からの実機の確かめと測定は、すべて[確かめ専用の窓](../spec/file-viewer/index.md#実機の確かめ)で行う（P16）。作業者の app には、受け入れの前まで mod を入れない（入れ直すたびにメモリが減って戻らない。ガイドの「メモリ」）。
 
 ### 仕様が決めていないことへの仮の答え
@@ -110,7 +125,7 @@ P1〜P29 と Step 9〜13 のうち、絵のファイルの置き場所・名前�
 - **P28 Step 9〜13 の確かめの分け方**: 各ステップの「Shown by」は、自動で確かめるもの（`bun test`・deploy の `check`・`status`）にする。単体テストは Done when の「下のテストが通る」に、playground で `shot` を見る確かめは Done when の項目として置き、結果（撮った画像のパスと見たもの）を終わりの報告に書く。覆す条件: なし。
 - **P29 受け入れのやり方**: 受け入れも playground で行い、実装者が P16 の手順で操作して撮った画像を作業者に見せる。作業者の app には受け入れまで mod を入れない（作業者の画面を使わない仕様の決まりと、入れ直しのたびに作業者の app のメモリが減るため）。覆す条件: 作業者が、受け入れは自分の窓で見たいと言ったとき（そのとき作業者の app に 1 回だけ入れる）。
 
-以下は付き添いの mod の改訂（Step 14〜22）のための仮の答え。どれも[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)の決まりの上に立つ。
+以下は付き添いの mod の改訂（Step 14〜22）のための仮の答え（その作りの記録。Step 23 からは下の P42〜P57 に置き換わる）。どれも、そのときの[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)の決まり（コミット 5205df8）の上に立つ。
 
 - **P30 絵のファイルの名前**: 図の SVG（タイルを含む）も画像のコピーも、`<タブの token>[~<窓の印>]-<書き出しの番号>.<拡張子>` にする。書き出しの番号は、名前を決めた（P31 の表に載せた）ときの `Date.now()` と、そのコピー（タブか窓の JavaScript のインスタンス）の中の連番を、どちらも 36 進にして `-` でつないだもの（名前は `<token>[~<窓の印>]-<時刻>-<連番>.<拡張子>`。今の `MarkdownState` も窓も、書く前に名前を決めるので。名前の時刻は書いた時刻より前か同じになり、見張りの 10 秒はこの時刻から数える。見張りが年齢を見るのは閉じたタブの token の絵だけで、開いているタブが書いている途中のファイルは年齢によらず選ばないので、書くのが遅れても取り違えない）。名前から token・窓の印・書いた時刻を読み戻せる形にする（token は UUID で `-` を含むので、読み戻しは末尾から決まる形にし、テストする）。時刻を名前に入れるのは、`fs/promises` に更新時刻を読む口が無く（「Step 13 のあとの作り」）、見張りの「書いてから 10 秒以上」をほかに知る手が無いため。時刻と連番で、同じコピーの中でも、再起動で復元したタブ（同じ token の新しいコピー）とでも名前が重ならず、手放した名前を使い直さない。画像のコピーの途中の一時ファイルは `<名前>.b64`。今のハッシュの名前の形は、前の置き場所の片付け（P37）でだけ使う。覆す条件: 作業者が、名前に時刻を入れず連番だけにしてほしいと言ったとき（そのときは書いた時刻を別の記録に持つ）。
 - **P31 持ち方と書き直さない範囲**: コピーごとに、今使っている（か書いている途中の）絵の「見た目の鍵 → 名前」の表を持つ。鍵は図のソース・色の鍵・書き出しの大きさ・タイルの位置。画像のコピーは表で照らさず、コピーするたびに新しい名前にする（このコンピュータの画像は中身のハッシュを書き込みと同じ PowerShell の中で求めるので、書く前に照らせない。中身の変化は `checkChanged` で先に見ている）。表にある鍵の絵は同じ名前を使い、書き直さない（[描き方](../spec/file-viewer/mermaid.md#描き方)の「図の中身と色と書き出しの大きさが変わらない限り、SVG を書き直さない」は、前の絵をまだ持っている間に限って成り立つ）。手放したら鍵を表から外し、同じ見た目がまた要るときは新しい名前で書く。書いたはずのファイルが無くなっていたとき（`checkSvgs` が見つけて `md.lost(names)` を呼ぶ）も、その名前の鍵を表から外し、新しい名前で書き直す（[描き方](../spec/file-viewer/mermaid.md#描き方)の「無くなっていたら、新しい名前で書き直す」。今の `lost()` は同じ名前で書き直す）。無くなった名前は、新しい絵に差し替えたあと P32 のとおり手放す（書き換えるとファイルができて app が前の絵を放すので、消えたファイルでも手放せる）。`MarkdownState` の `fileOf` と、拡大の窓の書き出しの名前は、この表から取る。今の「もうある名前のファイルは書かない」（`writeSvg` と `writeTiles` の `cacheExists`）は、この表で置き換える。Step 9〜12 で入れた、ハッシュの名前と、前の見た目に戻ると書かずに同じ名前を出すことを確かめるテスト（`tests/diagram-files.test.js`・`tests/markdown-state.test.js`・`tests/mmd.test.js`・`tests/zoom-svg.test.js` の該当するもの）は、「持っている間は同じ名前・手放したあとは新しい名前で書く」に改める。覆す条件: 作業者が、前の見た目に戻したときは書き直さずに出してほしいと言ったとき（仕様の「手放した名前は使い直さない」と両立しないので、brainstorm で仕様を見直す）。
@@ -142,6 +157,25 @@ P1〜P29 と Step 9〜13 のうち、絵のファイルの置き場所・名前�
   覆す条件: 作業者が「大きく超える」に別の値を示したとき。
 - **P41 画像のコピーの差し替え**: 外部変更で画像の中身が変わったら、新しい名前でコピーし、見えない所で読み込ませ（`preloadImages`）、読み込み終えてから出すコピーを替え、そのあと前のコピーを手放す（今は読み込む間に絵が空く。P32 の決まりで直る）。プレビュータブで別のファイルに替わったときは、読み込み中の表示になって前のコピーを出さなくなるので、すぐ手放す。読み直しで捨てるコピー（打った文字を捨てないときの読み直しなど）も手放す。SVG の画像のソースを保存して取り直したとき（今の保存の後の `copyImage`）も、外部変更と同じく新しい名前でコピーし、読み込んでから替え、前のコピーを手放す。付き添いの mod が無くて開けないファイルにした画像も、ほかの開けないファイルと同じく大きさと更新時刻（`sign()`）を取り、ファイルが変わったときだけ読み直す（付き添いの mod を探しに 2 秒ごとに読み直さない。P34）。覆す条件: なし。
 
+以下は絵の席の改訂（Step 23〜30）のための仮の答え。どれも[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)の決まりの上に立つ。P30〜P41 は Step 14〜22 で入れた作りの記録で、Step 23 からはここに置き換わる（食い違えばこちらを採る）。P37 の前の置き場所の片付けは P53 が、P40 の測り方の操作は P56 が引き継ぐ。
+
+- **P42 表の形と置き場所**: 絵の席の表は、窓の `globalThis` に `file-viewer` だけが使う名前で置く、ふつうのデータ（オブジェクト・配列・`Map`・`Set`・数・文字列。クラスのインスタンスや関数を入れない）にする。表を読み書きする判断は、表を引数に取る lib の関数に置く（`herdr`・`gpui-kit` を import しない）。モジュールが同じ mod のコピーで分かれることがあり（ガイドの「モジュールのトップレベルと実行環境」）、分かれたモジュールの両方が同じ表を読めるようにするためと、単体テストで新しい表を渡して確かめるため。表は形式の版の数を持ち、この計画で作るのは版 1。コピーの `init` で表が無ければ作る（P44）。表の形を変える将来の変更は、同じ変更の中に前の版から移す処理（使う場所の集まり・鍵・描画の回数・書いた絵の中身の情報を写す）を足し、作り直して出している絵の席を上書きすることはしない（[絵の席の表](../spec/file-viewer/index.md#画像の置き場所)の「引き継ぐ」と、手放すのは出していない絵の席だけ、を守るため）。知らない版の表（新しい版から古い版に戻したとき）を見つけたら、フォルダの絵の席を全部空きとして載せた新しい表を作り、その時点では上書きせず、次の `POLL_MS` の回に手放す（hot reload は全部のコピーを同じ同期の処理の中で `init` し直すので、その回には、表示しているコピーはどれも新しい状態で描き直していて、前の絵の席を出していない。表示していないコピーは何も出していない）。覆す条件: なし。
+- **P43 絵の席のファイルとごく小さい絵**: 絵の席の名前は実装者に任せる（[任せたこと](../spec/file-viewer/index.md#任せたこと)の決まりの中で。番号の入った決まった形にして、フォルダの一覧から絵の席だけを拾えるようにする）。中身の形式はどれでも同じ絵の席に書く（形式は中身で決まる。ガイドの「`image(path)` の形式」）。ごく小さい絵は 1 × 1 の空の SVG の文字列にし、`fs.writeFile` でその場で上書きする（PowerShell を使わずに済み、`close()` の中でも速い）。これで PNG などの絵も手放せることは Step 23 で確かめ、手放せなければ 1 × 1 の PNG を PowerShell でその場で書く形に替える（どちらも[任せたこと](../spec/file-viewer/index.md#任せたこと)の「ごく小さい絵の形式」の範囲）。覆す条件: なし。
+- **P44 初めの数・増やす数・初めて表を作るとき**: 初めに作る絵の席の数は、`RENDER_LIMIT.diagrams` の 2 倍に 8 を足した数（今の値で 1,008）を、コードで定数から求める（[置き場所と絵の席](../spec/file-viewer/index.md#画像の置き場所)の下限: テーマを替える間は前と新しい色の絵の席を両方使うので図の数の 2 倍。そのあと前の色の絵の席を手放してから拡大の窓の 2 つを使う。8 は差し替えが重なるときのゆとり）。足りなくなったら 64 個まとめて増やす。`file-viewer` が絵を書くときにフォルダが無ければ、フォルダを作ってから初めの数の絵の席をごく小さい絵で作る。コピーの `init` で表が無いとき（その起動で初めて）は、表を「手放し中」の印付きで作ってから、フォルダの一覧の絵の席の名前を全部拾い、ごく小さい絵で上書きし、見つかった絵の席が初めの数より少なければ、足りない分をごく小さい絵で作る（このときはまだどの絵も出していない）。手放し中の間は、どのコピーも絵の席を割り当てず書かない（割り当てを待たせる。手放す前に書いた絵が上書きで消されないように）。絵の席の名前の形でないファイル（`gpui-kit.d.ts`・`jsconfig.json`・前の作りの名前の絵）は拾わず、触らない。フォルダを作る・絵の席を作るのは、表の印で一度に 1 つのコピーだけがする。絵の席の数が 2,000 を超えると、フォルダの知らせで app が読み直すのは 2,000 個までになる（ガイドの「フォルダの変化の知らせ」）が、この作りはフォルダの知らせに頼らないので、上限は設けない。覆す条件: 作業者が、初めに約 1,000 個のファイルを作るのは多すぎると言ったとき（下限の決め方は仕様なので、brainstorm で見直す）。
+- **P45 鍵と共有**: 図の絵の鍵は、今の `diagramFile` の鍵（図のソース・色の鍵・書き出しの大きさ・タイルの位置）のまま。画像のコピーの鍵は、machine・パス・大きさ・更新時刻（今の `statOf` で取れるもの）にする（このコンピュータの画像の中身のハッシュは、コピーと同じ PowerShell の中で求めるので、絵の席を選ぶ前には分からない）。同じ鍵の絵が表にあれば、その絵の席を共有し、書き直さない。書いている途中なら、書き終わるまで待ってから共有する。画像の絵の席には、コピーのときに分かった中身の情報（今の `copyImage` が返す基準のハッシュ・大きさ・先頭のバイト）をふつうのデータで一緒に載せ、共有したタブはそれを使う（共有するとコピーしないので、外部変更の基準と寸法の表示を、ここから取る）。覆す条件: 作業者が、更新時刻が違っても中身が同じ画像は共有してほしいと言ったとき。
+- **P46 使う場所**: 使う場所は「タブの印（token）と、本文か拡大の窓か」の 2 つ（`<token>` の本文と `<token>` の窓）で、表に、使う場所ごとに今使っている絵の席の集まりを置く。本文の集まりは、今の `trackPictures` の `md`（`MarkdownState` の `keep()`）・`opening`（拡大の窓を開く前に書いている絵）・`image`（image viewer の今のコピー・差し替え待ちのコピー・コピーしている途中のコピー）を合わせたもの。`lent`（窓に貸した本文の絵）は無くす（窓の使う場所が、借りた絵の席を自分の集まりに入れて数えるので。P52）。窓の集まりは、窓が出している絵・見えない所で読み込ませている絵・書いている途中の絵。`keep()` が代わりの整形表示・描けない図・上限で移したソース表示の絵を含まないこと、利用者が選んだソース表示の間は前の絵を含むことは、今の決まり（P32）のまま。同じ印の新しいコピー（hot reload など）は、同じ使う場所を使い、最初に集まりを渡すまでは前のコピーの集まりがそのまま残る（[絵の席の表](../spec/file-viewer/index.md#画像の置き場所)の「引き継ぐ」）。覆す条件: なし。
+- **P47 描画の回数と手放す時**: 表に、使う場所ごとの描画の回数を置き、本文のコピーと窓のコピーが `render()` のたびに自分の使う場所の回数を 1 つ進める。使う場所が絵の席を集まりから外したら、そのときの回数を覚える。絵の席は、どの使う場所の集まりにも無く、外したどの使う場所も覚えた回数より先に描画が進んでいる（か、その使う場所が表から無くなった）ときに手放す。差し替えたコピーは、`cx.notify()` のあと `pauseForApp()` を繰り返して自分の回数が進むのを 1 秒まで待ってから手放し、進まなければ（表示していないなど）`POLL_MS` の回に任せる（描画は notify から 3〜18 ms で動いた。ガイドの「`cx.notify()` と描画」）。書いている途中の絵の席は、書き終わってから手放す。手放す前に同じ鍵がまた求められたら、手放さずにその絵の席を使う。手放すは P43 のごく小さい絵で上書きすることだけで、ファイルは消さない（今の `ReleaseQueue` と消す処理は無くす）。手放し始めるときに鍵を外して「手放し中」の印（P48 の世代付き）を付け、上書きが終わるまで、その絵の席は共有にも新しい割り当てにも使わない。上書きが終わったら印を外して空きに戻す。覆す条件: なし。
+- **P48 書いている途中・手放し中と世代**: 書いている途中と手放し中の印には、その書き込みをしているコピーの使う場所と世代（`init` ごとに変わる値）を入れる。表には世代ごとに最後に `POLL_MS` の回が動いた時刻を置く。hot reload では古いコードの非同期処理が止まり（ガイドの「閉じるときの呼び出し」）、`close()` は 250 ms で打ち切られるので、印が残りうる。コピーの `init` は、自分の使う場所の前の世代が付けた印を外す（窓のコピーは窓の使う場所の印だけ、タブのコピーは本文の使う場所の印だけ）。書いている途中だった絵の席は「中身の分からない」絵の席にし（鍵を外す。その鍵を求める所は、使っていない絵の席に書き直す。どこの集まりにも無ければ手放す）、手放し中だった絵の席は手放し直す。最後の回から 10 秒たった世代の印は、P53 の見張りが同じに扱う。ほかのコピーが書いている途中の鍵を求めたコピーは、表を見て待つ（`Promise` を表に置かない。止まった古いコードの `Promise` は決着しないので）。覆す条件: なし。
+- **P49 書き方**: 図の SVG とごく小さい絵は、絵の席のファイルを `fs.writeFile` でその場で上書きする（すでにあるファイルの書き換えはフォルダの知らせを出さない。ガイドの「フォルダの変化の知らせ」。Step 23 で道具ごとに確かめ直す）。このコンピュータの画像は、1 回の PowerShell で元のファイルを読み、絵の席のファイルを `FileMode.Open` で開いて書き、`SetLength` で長さを合わせる（作り直さず、その場で書く。Step 23 で空白が出ないことを確かめる）。ほかの machine の画像は、Step 23 で 0.1.14 の `fs.writeFile` が `Uint8Array` のバイト列を書けると分かればそれで絵の席に書き、書けなければ、base64 の文字列を `mods/` の外の app home 直下の一時のフォルダ（名前は実装者に任せる。app の見張りは `mods/` の外の変化を捨てる）に、書いた時刻を入れた名前で書いてから、同じく PowerShell でその場で書き、一時のファイルを消す。消し損ねた一時のファイルは、P53 の窓で 1 回の片付けの回に、名前の時刻から 60 秒たったものを消す。`mods/file-viewer-images/` に一時のファイルを作らない（作るとフォルダの絵が全部一瞬空白になる）。書き終えてから見えない所で読み込ませるまでは、Step 23 の (d) で決めた時間を待つ（書いた絵の席自身の変化の知らせが読み込みのあとに届くと、差し替えた絵が一瞬空白になりうるため。(d) で空白が出なければ待たない）。覆す条件: なし。
+- **P50 足りなくなったとき・フォルダが無いとき**: 割り当てで使っていない絵の席が無ければ、P44 の増やす数（64 個）の新しい絵の席をごく小さい絵で作ってから割り当てる（そのとき出している絵は一瞬空白になりうる。仕様のまれな場面）。絵を書く時にフォルダが無ければ P44 のとおり作る。覆す条件: なし。
+- **P51 外から消されたとき**: P53 の見張りの回に、フォルダが無ければ作り直し、表にある絵の席のうちファイルが無いものを見つける。どこの集まりにも無い絵の席は、ごく小さい絵で同じ名前に作り直す。どこかの集まりにある絵の席は「無くなった」の印を付け、その使う場所のコピーが、次の自分の `POLL_MS` の回（表示していなくても動く）に、出していた絵をその絵の席に書き直す（ファイルを作る）。2 つの使う場所が共有している絵の席は、先に気づいたコピーが P48 の書いている途中の印を付けて書き、もう一方は書き終わるのを待つ。図は今の `MarkdownState` の書き直し（`lost`）を、新しい名前でなく同じ絵の席に書く形に改める。画像はコピーし直す。窓は自分の絵を書き直す。表はそのまま使う。今の `checkSvgs`（表示に戻ったときに自分で探す）は、この見張りに置き換えて無くす。覆す条件: なし。
+- **P52 拡大の窓**: 窓のコピーは props のタブの token から窓の使う場所を決め、自分の `PictureTable` を持たない（表は窓とタブで 1 つ）。窓の印（今の `windowMark()` と props の `mark`）は、使う場所を決めるのに要らないので無くす。本文の絵で開いたときは、その絵の席を窓の集まりに入れる（共有なので、本文が使わなくなっても窓が出している間は手放さない）。タブのコピーが開く前に書く収まる大きさの絵は、本文の使う場所の印（`opening`）で書き、間に合って窓を開いたら、窓が自分の集まりに入れてから、タブが `opening` から外す（共有なので手放されない）。間に合わずに本文の絵で開いたときは、今と同じく、窓のコピーが自分で収まる大きさの絵を書いて差し替え、本文の絵の席を窓の集まりから外す。タブが遅れて書き終えた絵は `opening` から外し、P47 で手放す。倍率・色の差し替えと閉じるときも P47 で手放す（閉じたら窓の使う場所を表から外す）。窓の `close()` が呼ばれなかったときは、同じタブが次に窓を開くとき、窓の使う場所を一度表から外してから新しい窓で作り直す（前の窓のコピーはもう描かないので、その集まりの絵の席は回数を待たずに手放す。新しい窓が集まりに入れた絵の席は除く）。タブの記録の `window: { mark, borrowing }` と、タブが `POLL_MS` の回にそれを見る処理（`checkLent`・`this.lent` など）は無くす（[作らないもの](../spec/file-viewer/index.md#作らないもの)の「使っている絵の席をタブの記録に書くこと」）。覆す条件: なし。
+- **P53 見張り**: 窓のコピーを除く `file-viewer` のどのタブのコピーも、`POLL_MS` のタイマー（表示していなくても、名乗る前でも動く）で、表の使う場所のうち、印が開いているタブ（今の `liveViewerTokens()`: pane が今ある viewer のペインの記録と、名乗り待ちの記録）のどれでもないものを外し、どこの集まりにも無くなった絵の席を手放す（その使う場所はもう描かないので、その使う場所の回数は待たない。ほかの使う場所が外して描画を待っている分は待つ）。P48 の、最後の回から 10 秒たった世代の印も扱う。タブは、今の `ensureRecord` のとおり、絵を書く前に自分の token の記録があることを確かめ、無ければ作る（記録の無いタブの使う場所を、ほかのタブの見張りが外さないように）。フォルダの一覧を取る P51 の確かめと、前の置き場所 `file-viewer-cache/` の片付け（P37 と同じ、名前の形が前の作りのファイルを消し、空ならフォルダも消す）と、P49 の一時のフォルダの片付けは、表に最後にした時刻を置き、窓の中で `POLL_MS` に 1 回だけ、どれか 1 つのコピーがする（前の置き場所の片付けは起動して最初の 1 回だけ）。今の `sweepTargets`・`ownStale`・名前の時刻で選ぶことは無くす（再起動の前の絵は P44 で手放す）。覆す条件: なし。
+- **P54 閉じるとき**: タブのコピーの `close()` は本文の使う場所を、窓のコピーの `close()` は窓の使う場所を表から外し、どこの集まりにも無くなった絵の席のうち、閉じた使う場所のほかに描画を待っている使う場所の無いものを、すぐに手放し始める（閉じた使う場所の回数は待たない。250 ms で終わらなくてよい。残りは P48・P53 の見張りがする）。下書きを書く今の処理は変えない。覆す条件: なし。
+- **P55 付き添いの mod の片付け**: コードから、`companionPresent`・`companionInstalled`・`COMPANION_MISSING`・`MarkdownState.companionChecked`・`kind` の `companion` と理由 `companion`・`prepare` の `companion`・`mmd` の付き添いの mod の理由と、それらのテストを消す（描けない図の理由は 5 つ、開けないファイルの理由は 3 つになる）。リポジトリの `mods/file-viewer-images/`、`scripts/deploy.sh` の分かれ道と先頭のコメントの行、README の 3 か所を消す（README の入れ方は `file-viewer`・`file-tree`・`layout` の 3 行に戻り、絵のフォルダは `file-viewer` が作ると書く）。playground の `mods/file-viewer-images/` は、新しい作りを入れる前に、フォルダごと消す（Step 23。中の `main.js` があると mod として扱われ続けるため。消すときにほかの mod の絵が一度空白になるのは playground の中だけ）。作業者の app には付き添いの mod を入れていないので、何もしない。覆す条件: なし。
+- **P56 メモリと空白の測り方**: [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)の成功条件を、ガイドの「メモリの測り方」の手順（終わりの値は最後の操作から 10 秒後）で、起動し直した直後の playground で測る。直す前の値は Step 15 で測ったもの（221.8〜285.7 MiB。仕様の「直す前の作り」は Step 13 までの作りで、Step 15 で測った）を使い、測り直さない。Step 15 の値は 5 秒後に取ったもので、ガイドの表にもそう書いてある。直す前の作りは使わなくなった絵を手放さないので、待ちを 10 秒に延ばしても値は下がらないと見て、そのまま比べる元にする。Step 22 で測った付き添いの mod の作りの値は、その作りのものとしてガイドに残す。(6) の空白の確かめは、ガイドの「一瞬の空白の撮り方」で、場面ごとに 5 回ずつ、操作していないほうの絵（図のある Markdown のタブの図と、4,000 × 4,000 px の PNG を開いた image viewer のタブの画像）を出したまま続けて撮り、空白のコマを数える。操作していないほうの絵を出したまま操作する並べ方（ほかのタブを `do` で選ばずに開く・閉じる、ペインを分けるなど）は実装者が決めてガイドに書く。絵の席が足りている状態（初めの数で足りる）から始める。覆す条件: 作業者が、直す前の値も 10 秒後で測り直してほしいと言ったとき（Step 13 の作りを playground に入れ直して Step 15 の手順をやり直す）。
+- **P57 画像のコピーの差し替え**: P41 の差し替えの順（新しいコピーを見えない所で読み込ませ、読み込み終えてから替え、前のコピーを手放す。プレビュータブで別のファイルに替わったらすぐ手放す。捨てる読み直しのコピーも手放す。SVG のソースの保存のあとの取り直しも同じ）は、絵の席の上でもそのまま使う。新しいコピーは、P45 の鍵が変わったときだけ書く（同じ鍵なら共有する）。手放すのは、P47 のとおり、ほかの使う場所が使っていないときだけ。覆す条件: なし。
+
 ## Scope of change
 
 - `mods/file-viewer/lib/markdown.js`（区切りながらの準備に合わせた分け方）、新しい lib のファイル（区切りながらの準備、見え方の決まり、整形表示の上限の判定。名前は実装者に任せる）
@@ -155,20 +189,23 @@ P1〜P29 と Step 9〜13 のうち、絵のファイルの置き場所・名前�
 - playground の app home（`%USERPROFILE%\.config\herdr-app-playground`）の `mods/`（Step 7 から。P16）
 - メインのチェックアウトの `.agents/scratch/`（ignore 済み。確認用リポジトリ `fv-check/` に見本の Markdown を足す。測るためのスクリプト）
 - Step 14 から: `mods/file-viewer/lib/body-scroll.js`（Step 14 のコメントだけ）・`lib/diagram-files.js`・`lib/records.js`・`lib/markdown-state.js`・`lib/mmd.js`・`lib/zoom-svg.js` と lib の新しいファイル、`mods/file-viewer-images/`（新しい付き添いの mod。`main.js` と `mod.json`）、`scripts/deploy.sh`（付き添いの mod の入れ方）、`README.md`（「入れ方」）、`mods/file-viewer/registry.js`（開いているタブの token）、`mods/file-viewer/views/image.js`（差し替え待ちのコピー）、playground の app home の `mods/file-viewer-images/` と `file-viewer-cache/`、測る間だけ playground に入れる使い捨ての mod（Step 15。リポジトリには未追跡で置き、コミットしない）
+- Step 23 から: `mods/file-viewer/lib/pictures.js`（絵の席の表に書き換える。新しいファイルに分けてもよい）・`lib/diagram-files.js`・`lib/markdown-state.js`・`lib/mmd.js`・`lib/zoom-svg.js`・`lib/kind.js`・`lib/prepare.js`、`mods/file-viewer/main.js`（記録の `window` を書く処理を無くす）・`io.js`・`registry.js`・`views/markdown.js`・`views/image.js`、`tests/`（`pictures.test.js` ほか、付き添いの mod と名前の時刻を前提にしたテスト）、`mods/file-viewer-images/`（リポジトリから消す）、`scripts/deploy.sh`・`README.md`（付き添いの mod の記述を消す）、`docs/guides/herdr-app-mod-development.md`、playground の app home の `mods/file-viewer-images/`（フォルダごと消してから、新しい作りが作る）と `file-viewer-cache/`、測る間だけ playground に入れる使い捨ての mod（Step 23。リポジトリには未追跡で置き、コミットしない）
 
 app home のそれ以外のファイル（同梱 mod、同梱 layout、`keys.json`、`settings.json`、`shared.json`）は直接編集しない。
 
 ## Step order and prerequisites
 
-1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13（ここまで実装済み）→ 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22。各ステップの「Shown by」が通らなければ次に進まない。Step 10・11 は Step 9 の後で互いに独立（順は 10 → 11）。Step 12 は Step 10・11 の仕組みを使うので、その後。Step 14 はほかと独立。Step 15 は新しい作りを playground に入れる前（Step 16 の deploy より前）に済ませる。Step 19・20 は Step 18 の後で互いに独立（順は 19 → 20）。Step 21 は Step 18〜20 の後、Step 22 は全部の後。
+1 → 2 → … → 22（ここまで実装済み）→ 23 → 24 → 25 → 26 → 27 → 28 → 29 → 30。各ステップの「Shown by」が通らなければ次に進まない。Step 10・11 は Step 9 の後で互いに独立（順は 10 → 11）。Step 12 は Step 10・11 の仕組みを使うので、その後。Step 14 はほかと独立。Step 15 は新しい作りを playground に入れる前（Step 16 の deploy より前）に済ませる。Step 19・20 は Step 18 の後で互いに独立（順は 19 → 20）。Step 21 は Step 18〜20 の後、Step 22 は全部の後。Step 23 は新しい作りを playground に入れる前（Step 25 の deploy より前）。Step 26・27 は Step 25 の後で互いに独立（順は 26 → 27）。Step 28 は Step 25〜27 の後、Step 29 は Step 28 の後、Step 30 は全部の後。
 
 Step 1〜6 の実機での確認は作業者の herdr-app（Windows）と WSL の space で行った（[共通の前提](../spec/file-viewer/index.md#共通の前提)）。Step 7 からは P16 の確かめ専用の窓で行い、下の Step 1〜6 の書き方（作業者の窓・P3）には従わない。作業者は使用中なので、作業者のタブ・ペイン・space を閉じない。作業者の窓の layout は切り替えない。作業者の herdr-app は再起動しない（再起動後の振る舞いは単体テストと受け入れ 11 で確かめる）。Step 1〜6 では、実装者が開いたタブは確かめが終わったら閉じて作業者がもともと見ていたタブに戻し、画面を使う確かめ・重い文書を実機の窓で開く確かめ・表示を切り替える `tab.new` は、P3 のとおり始める前に作業者に確かめた。Step 7 からは、作業者の窓には何も送らない（`tab.new`・`tab.select` も送らない）。確かめのスペースを閉じるだけにする（P16）。
 
-## 実装済みのステップ（Step 1〜13）
+## 実装済みのステップ（Step 1〜22）
 
 Step 1〜6 はコミット dcb1cdb〜ac18cfa で実装し、レビューと受け入れの確かめ（一部）を済ませた。やり直さない。下の Step 1〜6 の本文は、そのときの記録として残す。受け入れの確かめで分かったこと: 図 100 個の文書は部品で描く作りでは描き直しで interrupted になる（Step 1 の (4) の値 100 個は小さな図だけを並べた文書で測ったもので、実際の文書では成り立たなかった）。これを受けて仕様を改め（コミット d41fc0d）、Step 7〜13 を足した。
 
 Step 7〜13 はコミット f85327c〜eddc7b3 で実装し、レビューを済ませた。やり直さない。下の Step 7〜13 の本文も記録として残す（絵の置き場所・名前・消し方の部分は、上の「仕様が決めていないことへの仮の答え」の冒頭のとおり P30〜P41 に置き換わった）。受け入れの確かめで分かったこと: 図を SVG 画像で描く作りは、図 1 個を開くたびに app のメモリが約 3.5 MiB 増えて戻らなかった（ガイドの「`image(path)` のメモリ」）。これを受けて仕様を改め（コミット 5205df8）、Step 14〜22 を足した。整形表示のスクロールの印の限界を書くこと（Step 14）も、同じ受け入れの確かめから残っていたもの。
+
+Step 14〜22 はコミット 4997115〜5966f89 で実装し、レビューを済ませた。やり直さない。下の Step 14〜22 の本文も記録として残す（その作りの決まりは P30〜P41。Step 23 からは P42〜P57 に置き換わる）。分かったこと: 付き添いの mod を使う作りで、手順 (1)〜(4) の差は 50 MiB 以下になった（ガイドの「メモリの測り方」）。一方、app のソース（v0.1.14）と playground の測定で、(1) `mods/` の下はファイルを作る・消すたびにそのフォルダの絵が全部一瞬空白になり、上書きならその絵だけが読み直されること、(2) 一度も表示していない復元タブにはコピーができず自分で片付けられないこと、(3) `cx.notify()` のあと `pauseForApp()` を待っても描画は済んでいないこと、(4) `main.js` の無いフォルダでも絵を捨てる知らせが届くことが分かった（ガイドの「制約」）。これを受けて仕様を改め（コミット 9c2f734）、Step 23〜30 を足した。
 
 ## Step 1 — 実機で値と事実を測る
 
@@ -503,11 +540,136 @@ Shown by: check — 順に `bun test`（全件）、deploy（Step 18 と同じ 3
 Left to the implementer: 見本の中身。
 Stop and hand back if: 作業者が playground の起動し直しを許さないとき（(5) を受け入れに回し、その旨を報告に書く。止めない）。手順のどれかの差が 50 MiB を超え、原因が app が絵を放さないこと（`file-viewer` の手放し漏れではないこと）だと分かったとき（仕様の前提が崩れるので brainstorm に返す）。
 
+## Step 23 — 絵の席の作りが頼る事実を確かめ、playground を片付ける
+
+Purpose: 画像をその場で書く方法で空白が出ないこと、ごく小さい SVG の上書きでほかの形式の絵も手放せること、0.1.14 の `fs.writeFile` が `Uint8Array` を書けるかを確かめてガイドに書き、playground から付き添いの mod の残りを片付ける。Specification: [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（頼る app の振る舞い、置き場所と絵の席）、[任せたこと](../spec/file-viewer/index.md#任せたこと)（ごく小さい絵の形式）、[実機の確かめ](../spec/file-viewer/index.md#実機の確かめ)。
+Prerequisites: Step 22（実装済み）。playground は今、Step 22 の作りで動いている。起動し直さない。落ちている・描かないときは、止まって作業者に起動の許可を聞く（P16）。
+May change: `docs/guides/herdr-app-mod-development.md`、メインのチェックアウトの `.agents/scratch/`（見本、測るスクリプト、記録、`playground/guard-log.txt`）、playground の app home の `mods/`（測る間だけの使い捨ての mod と、その `main.js` の無い絵のフォルダ。`mods/file-viewer-images/` を消す）。リポジトリには、測る間だけ未追跡の使い捨ての mod を置いてよい（P1 と同じくコミットせず、終わったら消す）。
+Done when:
+- 使い捨ての mod（P1 と同じ作り。`mods/` の下の `main.js` の無いフォルダに絵を書き、`image(パス)` で出す）で、次を確かめ、ガイドの「フォルダの変化の知らせ」か「`image(path)` のメモリ」の行に、回数と一緒に書いてある:
+  - (a) そのフォルダの、出していない既存のファイルに、P49 の PowerShell の書き方（`FileMode.Open` で開いて書き、`SetLength`）で 4,000 × 4,000 px の PNG を書くと、フォルダの変化の知らせが出ず（Windows の FileSystemWatcher で見る）、同じフォルダから出している別の 4,000 × 4,000 px の PNG に、ガイドの「一瞬の空白の撮り方」で撮った空白のコマが無い（5 回のうち 5 回）。書いたファイルをそのあと出すと、新しい絵で描かれる。
+  - (b) 出していたあと隠した 4,000 × 4,000 px の PNG のファイルを、1 × 1 の空の SVG の文字列で `fs.writeFile` で上書きすると、10 秒のうちに 100 MiB 以上減る（3 回のうち 3 回）。
+  - (c) 0.1.14 の `fs.writeFile` に `Uint8Array` を渡したときに書かれるファイルのバイト数（ガイドの「`fs/promises` の `writeFile`」の行を、0.1.14 で測った値にする）。
+  - (d) そのフォルダの既存のファイルを、`fs.writeFile`（2,000 × 2,000 px の SVG）と P49 の PowerShell の書き方（4,000 × 4,000 px の PNG）でその場で書いた直後に、見えない所で読み込ませ、読み込み終えたら出して、その絵そのものをガイドの「一瞬の空白の撮り方」で 1 秒続けて撮り、空白のコマを数える（道具ごとに 5 回）。あわせて、`fs.writeFile` でのその場の上書きでフォルダの変化の知らせが出ないことを FileSystemWatcher で見る。空白が写れば、書いてから読み込ませるまで何 ms 待てば写らないかを測り、P49 の待ちの時間にしてガイドに書く。
+- playground の `mods/file-viewer-images/` をフォルダごと消してある（P55）。使い捨ての mod とその絵のフォルダ、開いたタブ、確かめ専用のスペースを片付けてある。操作の前後の記録が `guard-log.txt` にある。
+Shown by: artifact — `docs/guides/herdr-app-mod-development.md` の追記と、メインのチェックアウトの `.agents/scratch/` の測った記録と `guard-log.txt`。あわせて、WSL から playground の app home の `mods/` を `ls` して、`file-viewer-images` と使い捨ての mod が無いこと。
+Left to the implementer: 使い捨ての mod の作り、測る回数（上の数より多くてよい）、FileSystemWatcher の見方。
+Stop and hand back if: (a) で知らせが出るか空白のコマが写るとき、(d) で `fs.writeFile` の上書きでフォルダの知らせが出るとき（画像や図を上書きだけで書けず、仕様の「上書きだけで書き出しと手放しをする」が成り立たないので、brainstorm に返す）。(d) で、1 秒待っても空白が写るとき（同じ）。(b) で減らないときは、1 × 1 の PNG を (a) の書き方で書いて同じく確かめ、減れば P43 のとおり PNG に替えて書き（止めない）、それでも減らなければ返す（[手放す](../../CONTEXT.md#手放す)の定義が成り立たないため）。
+
+## Step 24 — 絵の席の表の lib
+
+Purpose: 絵の席の表（割り当て・共有・使う場所・描画の回数・手放す絵の席の選び方・初めて作るとき・hot reload・見張り・消えた絵の席）を、`herdr` と `gpui-kit` を import しない lib に置いてテストする。Specification: [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（確かめ方の「絵の席の表（…）は単体テストで確かめる」）。
+Prerequisites: Step 23（ごく小さい絵の形式）。
+May change: `mods/file-viewer/lib/` の新しいファイル（絵の席の表）、`mods/file-viewer/lib/diagram-files.js`（名前を表から取る形の調整。今の呼び出し方も動くままにする）、`tests/` の新しいファイル、`tests/diagram-files.test.js`。
+Done when: P42〜P48・P50・P51・P53 の判断が新しい lib のファイルにあり、下のテストが通る。今の `lib/pictures.js` の export（`PictureNames`・`PictureTable`・`ReleaseQueue`・`sweepTargets`・`ownStale`・`companionInstalled`・`COMPANION_MISSING` など）は、`main.js` と `tests/mmd.test.js`・`tests/zoom-svg.test.js`・`tests/markdown-state.test.js` が使っているので、この Step では残す（消すのは Step 25〜28 で呼び出し側が無くなってから。Step 28 の Done when で確かめる）。
+Shown by: test — RED → GREEN → REFACTOR で `bun test`。どれも [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)の確かめ方による:
+- 使い始める: 同じ鍵を 2 つの使う場所が求めると同じ絵の席になり、書く印は 1 回だけ返る。違う鍵は、使っていない別の絵の席になる。使っていない絵の席が無いときは、増やす数（P44）の絵の席を作る指示を返し、作ったあとに割り当てる。
+- 共有して数える: 2 つの使う場所（同じタブの本文と窓、別のタブの本文どうし）が共有する絵の席は、片方が外しても手放す絵の席に入らず、両方が外して描画の回数が進むと入る。
+- 描画の回数: 外した使う場所の回数が、外したときより進むまで手放す絵の席に入らない。その使う場所を表から外すと（閉じた、見張り）、回数を待たずに入る。手放す前に同じ鍵がまた求められると、手放す絵の席から外れて同じ絵の席が返る。
+- 書いている途中・手放し中: 書き終わるまで手放す絵の席に入らない。同じ鍵を求めた別の使う場所には、書き終わるまで「書いている途中」が返る。手放し中の絵の席は、上書きが終わるまで共有にも新しい割り当てにも返らない。同じ使う場所の新しい世代が始まると（P48）、前の世代の書いている途中の絵の席は鍵を外され、どこの集まりにも無ければ手放す絵の席に入り、前の世代の手放し中の絵の席は手放し直す絵の席に入る。窓の使う場所の新しい世代は、本文の使う場所の印を外さない。
+- 窓の置き換え: 窓の使う場所を外して作り直すと（P52）、前の集まりの絵の席は描画の回数を待たずに手放す絵の席に入る。新しい窓が集まりに入れた絵の席は入らない。
+- 初めて作るとき: フォルダの一覧から絵の席の名前だけを拾い（`gpui-kit.d.ts`・`jsconfig.json`・前の作りの名前を拾わない）、全部を手放す絵の席にする。手放し中の間は割り当てが待たされる。版の違う表は作り直される。
+- 引き継ぐ: 同じ使う場所の新しい世代が最初に集まりを渡すまで、前の集まりの絵の席は手放す絵の席に入らない。
+- 見張り: 開いているタブ（pane がある記録・名乗り待ちの記録）の印でない使う場所が外れ、その絵の席が手放す絵の席に入る。開いているタブの印の使う場所は、表示していなくても外れない。最後の回から 10 秒たった世代の書いている途中・手放し中の印は、P48 のとおり扱われる。
+- 消えた絵の席: 一覧に無い絵の席のうち、どこの集まりにも無いものは「ごく小さい絵で作る」に、どこかの集まりにあるものは「無くなった」の印になり、その使う場所に書き直す絵の席として返る。フォルダが無いときは「フォルダを作る」が返る。
+- 初めの数で足りること（[置き場所と絵の席](../spec/file-viewer/index.md#画像の置き場所)の下限の場面）: 初めの数の表で、図の数が `RENDER_LIMIT.diagrams` ちょうどの本文の使う場所を作り、テーマを替えて（新しい色の鍵で全部取り、そろってから前の色を外して描画の回数を進め）、窓の使う場所で 1 つの図を開き、倍率を 1 回替える、の間に、増やす指示が一度も返らない。
+- 画像の鍵: machine・パス・大きさ・更新時刻のどれかが違うと違う鍵になり、同じなら共有され、載せた中身の情報（P45）が共有した側に返る。
+Left to the implementer: 関数とファイルの名前、表の中の形（P42 の範囲）、絵の席の名前の形（P43 の範囲）、世代の値の作り方。
+Stop and hand back if: none.
+
+## Step 25 — 本文と .mmd の図を絵の席に書く
+
+Purpose: Markdown の整形表示と `.mmd` の図の SVG を絵の席に上書きで書き、差し替えた描画が済んだことを描画の回数で確かめてから前の絵の席を手放す。表を作る・初めて作るときに手放す・フォルダと絵の席を作る・閉じるときの手放しもここで入れる。Specification: [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)、[描き方](../spec/file-viewer/mermaid.md#描き方)、[描けない図](../spec/file-viewer/mermaid.md#描けない図)、[色](../spec/file-viewer/mermaid.md#色)、[Mermaid 単体ファイル](../spec/file-viewer/mermaid.md#mermaid-単体ファイル)、[整形の準備](../spec/file-viewer/viewers.md#整形の準備)、[整形表示の上限](../spec/file-viewer/viewers.md#整形表示の上限)。
+Prerequisites: Step 24。playground の `mods/file-viewer-images/` が無いこと（Step 23）。
+May change: `mods/file-viewer/main.js`、`mods/file-viewer/io.js`、`mods/file-viewer/lib/`（`markdown-state.js`・`mmd.js`・`prepare.js`・`kind.js`・`diagram-files.js`・`pictures.js` を含む）、`mods/file-viewer/views/markdown.js`、`tests/`。
+Done when:
+- コピーの `init` が P42・P44 のとおり表を作り（初めてなら手放し中にしてフォルダの絵の席を全部ごく小さい絵で上書きし）、`render()` が本文の使う場所の描画の回数を進める。
+- 本文と `.mmd` の図の SVG を、表から割り当てた絵の席に `fs.writeFile` で上書きし、`image("mods/file-viewer-images/<絵の席>")` で出す。フォルダが無ければ作り、絵の席が足りなければ増やす（P44・P50）。
+- `trackPictures` が本文の使う場所の集まり（P46）を表に渡し、P47 のとおり描画の回数が進んでから手放す。`pauseForApp()` を描画が済んだ印に使わない。`close()` が P54 のとおり手放し始める。
+- P55 のうち図の判定の分（`COMPANION_MISSING`・`companionChecked`・`prepare` と `mmd` の `companion`）と、そのテストが無い。`checkSvgs` と、`sweepOwnStale`・`releaseAndRemove` の消す処理が無い（外から消されたときは Step 28）。image viewer の画像のコピーは、この Step の終わりでは前の書き方のままでよい（Step 26 で置き換える。`bun test` と deploy の `check` が通ればよい）。
+- 下のテストが通る（[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)、[描き方](../spec/file-viewer/mermaid.md#描き方)、[色](../spec/file-viewer/mermaid.md#色)による）:
+  - テーマを A → B と替えると、B の絵がそろってから替わり、その描画のあとに A の絵の席が手放す絵の席に入る。B の絵がそろう前に A に戻ると、A の絵の席をそのまま使い、書き直さない。A の絵の席を手放したあとに A に戻ると、使っていない絵の席に書き直す。
+  - 利用者が選んだソース表示の間は前の絵の席を `keep()` に含み、その間に中身が変わっても、整形表示に戻って新しい絵に替えるまで含む。上限を超えたら、そのときに含まなくなる。
+  - `keep()` が、代わりの整形表示・描けない図・上限で移したソース表示の絵を含まない（今のテストが残っていればそのまま）。
+  - `.mmd` で倍率を続けて変えて途中の絵が要らなくなったら、その絵の席が `keep()` から外れる。
+  - Step 9〜22 のテストのうち、絵ごとの新しい名前・名前の時刻・「もうある名前は書かない」・付き添いの mod を前提にしたものを、P45・P47 の決まりに改めるか消してある（消したテストと改めたテストを終わりの報告に書く）。
+- playground（P16。前後の記録を `guard-log.txt` に）で、P16 の環境変数を付けた `scripts/deploy.sh file-viewer`・`scripts/deploy.sh file-tree` を流し、図の多い文書と `.mmd` を開き、テーマを行き来し、`.mmd` の倍率を変えて、`shot` で図がくっきり出ることと、`mods/file-viewer-images/` の一覧（WSL の `ls -l`）で、絵の席の数が P44 の初めの数で、大きいファイルが今出している絵の分だけであることを見る。図の多い文書を途中までスクロールしてからテーマを替え、スクロールの位置が残っていることを `shot` で見る。タブを閉じて 10 秒後に、絵の席のファイルが全部ごく小さい絵の大きさであることを見る（結果を報告に書く）。
+Shown by: check — 順に `bun test`（全件）、P16 の環境変数を付けた `scripts/deploy.sh file-viewer`・`scripts/deploy.sh file-tree`（どちらも `check passed`）、playground の `status` の `errors` が空。
+Left to the implementer: 割り当てと書き込みの非同期処理の分け方、`MarkdownState` に絵の席を渡す形、描画の回数を待つ処理の置き場所。
+Stop and hand back if: 絵の席への上書きで、出している別の図が空白になる・小さい絵に替わるのが `shot` で写るとき（ガイドの事実と食い違うので、原因を playground で確かめ、`file-viewer` の誤りでなければ返す）。図の数が上限ちょうどの文書で、初めの数の絵の席を作る間か初めて表を作るときの手放しの間に、描画が interrupted になるとき（P44 の数を作る処理を区切っても直らなければ返す）。
+
+## Step 26 — 画像のコピーを絵の席に書く
+
+Purpose: image viewer の画像のコピーを絵の席にその場で書き、同じ画像は共有し、差し替えと閉じるときに、ほかに使う場所が無ければ手放す。Specification: [image viewer](../spec/file-viewer/viewers.md#image-viewer)、[開けないファイル](../spec/file-viewer/viewers.md#開けないファイル)、[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)。
+Prerequisites: Step 25。
+May change: `mods/file-viewer/io.js`（`copyImage`）、`mods/file-viewer/main.js`、`mods/file-viewer/views/image.js`、`mods/file-viewer/lib/`、`tests/`。
+Done when:
+- `copyImage` が、P45 の鍵で割り当てた絵の席に、P49 の書き方で書く。同じ鍵の絵が表にあれば書かずに共有する。`mods/file-viewer-images/` に `.b64` などの一時のファイルを作らない。
+- P57 のとおり差し替え、前のコピーと捨てるコピーの絵の席を P47 で手放す。
+- P55 のうち画像の判定の分（`companionPresent`・`companionInstalled`・`kind` の `companion` と理由 `companion`）と、そのテストが無く、開けないファイルの理由が 3 つ（[開けないファイル](../spec/file-viewer/viewers.md#開けないファイル)）。
+- playground で、同じ PNG を 2 つのタブで開き、絵の席が 1 つだけ大きいことを一覧で見る。片方を閉じても、残りのタブの画像が替わらず絵の席が大きいままで、両方を閉じて 10 秒後にごく小さい絵になることを見る。png と svg の画像を開いて外から中身を書き換え、新しい絵に替わることを `shot` で見る（結果を報告に書く）。
+Shown by: check — 順に `bun test`（全件）、deploy（Step 25 と同じ 2 つ）、playground の `status` の `errors` が空。
+Left to the implementer: PowerShell のスクリプトの組み方、ほかの machine の画像の一時のフォルダの名前（P49 の範囲）。
+Stop and hand back if: none.
+
+## Step 27 — 拡大の窓の絵を絵の席に書く
+
+Purpose: 拡大の窓の絵を、開いたタブの印の窓の使う場所で表に数え、本文と共有する絵の席は本文が使わなくなっても窓が出している間は持ち、差し替えと閉じるときに窓だけが使っていた絵の席を手放す。Specification: [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（絵の席の表、手放す時）、[拡大表示](../spec/file-viewer/mermaid.md#拡大表示)、[色](../spec/file-viewer/mermaid.md#色)。
+Prerequisites: Step 25。
+May change: `mods/file-viewer/main.js`、`mods/file-viewer/lib/`（`zoom-svg.js` を含む）、`tests/`。
+Done when:
+- P52 の作りがある（窓の使う場所、窓の `render()` での描画の回数、窓の差し替えと `close()` での手放し、次に窓を開くときの置き換え）。窓のコピーが自分の `PictureTable` を持たない。タブの記録の `window` と、それを読み書きする処理（`checkLent`・`this.lent` など）が無い。
+- 下のテストが通る（[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)と[拡大表示](../spec/file-viewer/mermaid.md#拡大表示)による）: 窓の倍率を続けて変えて途中の絵が要らなくなったら、その絵の席が窓の集まりから外れる。差し替えたら前の倍率の絵の席が外れ、今の絵の席は外れない。本文の絵の席で開いた窓では、本文がその絵の席を外しても、窓が外すまで手放す絵の席に入らない。
+- playground で、図を押して窓を開き、倍率を上げ下げしてテーマを替え、閉じる。`shot` で窓の絵がくっきり出ること、本文の図が替わっていないこと、閉じて 10 秒後に窓だけが使っていた絵の席がごく小さい絵になっていることを見る。書き出しが 1 秒に間に合わない大きな図で本文の絵で開いた窓を、開いたまま本文のテーマを替えても、窓の絵が出たままであることを見る（結果を報告に書く）。
+Shown by: check — 順に `bun test`（全件）、deploy（Step 25 と同じ 2 つ）、playground の `status` の `errors` が空。
+Left to the implementer: 窓のコピーが窓の使う場所を決める props の渡し方。
+Stop and hand back if: none.
+
+## Step 28 — 見張り、外から消されたとき、前の置き場所
+
+Purpose: どのタブも表示していなくても 2 秒おきに、閉じたタブの使う場所を外して絵の席を手放し、外から消されたフォルダと絵の席のファイルを作り直し、前の置き場所 `file-viewer-cache/` を片付ける。Specification: [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（絵の席の表の「外から消されたら」、片付け）、[描き方](../spec/file-viewer/mermaid.md#描き方)（無くなっていたら作り直して書き直す）、[image viewer](../spec/file-viewer/viewers.md#image-viewer)。
+Prerequisites: Step 25・26・27。
+May change: `mods/file-viewer/main.js`、`mods/file-viewer/registry.js`、`mods/file-viewer/io.js`、`mods/file-viewer/lib/`、`tests/`。
+Done when:
+- P53 の見張りと P51 の作り直しと書き直しがある。図は同じ絵の席に書き直し、画像はコピーし直し、窓は自分の絵を書き直す。
+- 前の作りの残りが無い: `lib/pictures.js` の古い export（`PictureNames`・`PictureTable`・`ReleaseQueue`・`sweepTargets`・`ownStale`・`parsePictureName`・`RELEASE_WAIT_MS`・`ORPHAN_AGE_MS`・形式ごとの `TINY` と `tinyPicture(ext)`・`companionInstalled`・`COMPANION_MISSING`）、`io.js` の `removePicture`・`pictureExists`・`companionPresent`・`overwriteTiny` の PowerShell の分かれ道・`.b64` を絵のフォルダに書く処理、`main.js` の `startedAt`・`ownSwept`・`releases`・`windowMark()` と props の `mark`、それらのテスト（`tests/zoom-svg.test.js` の窓の印の付いた名前のテストなど）と、`mods/file-viewer/` と `tests/` の「付き添い」のコメント。前の置き場所の名前の形（`oldCacheNames`）は P53 の片付けで使うので残る。
+- 下のテストが通る（[描き方](../spec/file-viewer/mermaid.md#描き方)による）: 出している図の絵の席が「無くなった」になると、同じ絵の席に書き直し、書き終わるまで、出していた結果を出し続ける。
+- playground で、図のある Markdown と画像を 2 つのタブで開き、表示していない方のタブを `do` で閉じて、残りのタブを表示していない状態でも、10 秒のうちに閉じたタブだけが使っていた絵の席がごく小さい絵になることを見る。出している図の絵の席のファイルを 1 つ WSL から消すと、同じ名前で作り直されて図が出ることを、フォルダごと消すと、フォルダと絵の席が作り直されて図と画像が出ることを、`shot` と一覧で見る。playground の app home 直下の `file-viewer-cache/` に前の作りの名前の空のファイルを置いてからタブを開くと、ファイルとフォルダが消えることを見る（結果を報告に書く）。
+Shown by: check — 順に `bun test`（全件）、`rg -n 'PictureNames|PictureTable|ReleaseQueue|sweepTargets|ownStale|parsePictureName|windowMark|companion|付き添い' mods/file-viewer tests`（0 件）、`rg -n '\.b64' mods/file-viewer`（P49 の一時のフォルダで使う行だけ）、deploy（Step 25 と同じ 2 つ）、playground の `status` の `errors` が空。
+Left to the implementer: 見張りの関数の分け方、`readdir` の回数を減らす工夫（P53 の範囲）。
+Stop and hand back if: none.
+
+## Step 29 — リポジトリから付き添いの mod を消す
+
+Purpose: 付き添いの mod とその入れ方を、リポジトリと README から消す。Specification: [共通の前提](../spec/file-viewer/index.md#共通の前提)、[作らないもの](../spec/file-viewer/index.md#作らないもの)（`main.js` と `mod.json` を持つ置き場所の mod と、それを入れる手順）。
+Prerequisites: Step 28（コードが付き添いの mod を見なくなり、コメントも消えた後）。
+May change: `mods/file-viewer-images/`（消す）、`scripts/deploy.sh`、`README.md`。
+Done when: P55 のリポジトリの分がある。README の mod の表・入れ方・説明が、2 つの mod と 1 つの layout と、`file-viewer` が絵のフォルダ `mods/file-viewer-images/` を作ること（mod ではない）を書いている。
+Shown by: check — 順に `test ! -e mods/file-viewer-images`、`rg -n '付き添い' README.md scripts mods tests`（0 件）、`rg -n 'file-viewer-images' scripts/deploy.sh`（0 件）、`bun test`（全件）、`scripts/deploy.sh file-viewer`（P16 の環境変数を付けて、`check passed`）。
+Left to the implementer: README の文言。
+Stop and hand back if: none.
+
+## Step 30 — メモリと空白の確かめと通しの確認
+
+Purpose: 新しい作りで[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)の成功条件 (1)〜(6) を playground で確かめ、ガイドを新しい値と手順にし、受け入れの準備をする。Specification: [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)、[image viewer](../spec/file-viewer/viewers.md#image-viewer)、[描き方](../spec/file-viewer/mermaid.md#描き方)、[実機の確かめ](../spec/file-viewer/index.md#実機の確かめ)。
+Prerequisites: Step 29。
+May change: `docs/guides/herdr-app-mod-development.md`、メインのチェックアウトの `.agents/scratch/`、playground の app home の `mods/`。直すべき不具合が見つかったら、Step 25〜28 の May change の範囲。
+Done when:
+- 測る前に、playground を閉じて起動し直してある（**止まって作業者に起動の許可を聞く**。P16。ガイドの「メモリの測り方」は起動し直した直後に測る）。
+- P56 のとおり、手順 (1)〜(4) を最後の操作から 10 秒後の値で測り、どれも差が 50 MiB 以下で、Step 15 の直す前の値と並べてガイドに書いてある。各手順のあと `shot` で図と画像が正しい絵で出て、ほかのタブの絵が替わっていないこと、`mods/file-viewer-images/` の一覧を見てある。
+- (5) 図のある Markdown と画像のタブを開いたまま一覧を記録してから、playground を強制終了して起動し直し（**止まって作業者に起動の許可を聞く**。P16）、`file-viewer` のタブを開いて 10 秒後の一覧で、絵の席のファイルがどれも、開いているタブが出している絵か、ごく小さい絵であることを見てある。
+- (6) P56 のとおり、場面ごと（同じタブでテーマ・倍率を替える、ほかのタブを開く・閉じる・プレビューを替える、拡大の窓を開く・閉じる）に 5 回ずつ撮り、操作していないほうの絵に空白のコマが 0 枚であることを見てある。撮った並べ方と結果がガイドにある。
+- ガイドの「`image(path)` のメモリ」の行の「今の作りでは、まだ測っていない」が新しい値になっている。「メモリの測り方」の表に、絵の席の作りの値（10 秒後）が足してあり、前の 2 つの表の値が 5 秒後のものだという注記と、付き添いの mod を使う作りの値がその作りのものだということが分かる形で残っている。
+- [受け入れの操作確認](#受け入れの操作確認)の見本と項目ごとに見るものが `.agents/scratch/fv-check/` にそろっている。確かめ専用のスペースが閉じてある。
+Shown by: check — 順に `bun test`（全件）、deploy（Step 25 と同じ 2 つ）、playground の `status` の `errors` が空、playground の `ls` に確かめ専用のスペースが無い、ガイドに (1)〜(4) の新旧の値と (6) の結果がある。
+Left to the implementer: 見本の中身、(6) の並べ方（P56 の範囲）。
+Stop and hand back if: 作業者が playground の起動し直しを許さないとき（Step 30 では、測る前の起動し直しを許さないなら、今の playground で測って、起動し直していないことを値と一緒にガイドと報告に書く。(5) の起動し直しを許さないなら、(5) を受け入れに回し、その旨を報告に書く。どちらも止めない）。手順のどれかの差が 50 MiB を超え、原因が app が絵を放さないこと（`file-viewer` の手放し漏れではないこと）だと分かったとき（仕様の前提が崩れるので brainstorm に返す）。(6) で空白のコマが写り、原因が `file-viewer` の誤りでない（上書きでも app が隣の絵を読み直す）と分かったとき（同じ）。(6) のある場面で、操作していないほうの絵を出したまま操作できる並べ方がどれも無いとき（成功条件を確かめられないので返す）。
+
 ## 受け入れの操作確認
 
 cycle の最後の受け入れで行う（P29）。見る画面は playground（確かめ専用の窓）で、実装者が P16 の手順で操作し、撮った画像を作業者に見せる。作業者が自分の窓で見たいと言ったら、そのときに作業者の app に入れる（入れ直しは 1 回にする）。見本はメインのチェックアウトの `.agents/scratch/fv-check/` に置く。Step 13 で測った描画の外で準備する大きさが整形表示の上限以上だったときは、1・3・4 の「整形中…」を経る場面は起きないので、その部分は省く。不合格の項目は、cycle の修正に戻して直す。
 
-9 と 11 は、2026-11-09 に HEAD eddc7b3 の作りで済んだ（絵の中身と、再起動後の表示の選び方は、付き添いの mod の改訂で変わらない）。改訂のあとの受け入れでは、絵の書き方と置き場所が変わって影響を受ける 1〜8・10 と、改訂の分の 12〜14 を見る。
+9 と 11 は、2026-11-09 に HEAD eddc7b3 の作りで済んだ（絵の中身と、再起動後の表示の選び方は、付き添いの mod の改訂と絵の席の改訂で変わらない）。絵の席の改訂のあとの受け入れでは、絵の書き方と置き場所が変わって影響を受ける 1〜8・10 と、改訂の分の 12〜14 を見る。
 
 1. 画像やバッジの多い大きな README（描画の外で準備する大きさを超え、整形表示の上限より小さい）を開く → 「整形中…」のあと整形表示が出て、画像の名前を押すと画像が開く。準備の間もスクロールが引っかからない（[整形の準備](../spec/file-viewer/viewers.md#整形の準備)）
 2. ふつうの README と、図のある小さな README を開く・ソース表示から戻る → 「整形中…」がちらつかずに出る（図のある方は、ソース表示の間に図が変わってから戻ったときだけ一瞬出てよい。ソース表示での編集を PostMessage で送れなければ、ソース表示の間に外から書き換えて確かめる）（[整形の準備](../spec/file-viewer/viewers.md#整形の準備)）
@@ -520,9 +682,9 @@ cycle の最後の受け入れで行う（P29）。見る画面は playground（
 9. 部品で描いていた図と SVG の図を並べた画像（Step 13）を見る → 大きさ・色・線・文字の位置と字体に違和感が無い（作業者が決める）（[描き方](../spec/file-viewer/mermaid.md#描き方)）
 10. 整形表示の上限を超える Markdown を開く → ソース表示で、上限の値と今の大きさが出て、整形表示のボタンが無い。削って下回る（送れなければ外から書き換えて） → 帯が消えてボタンが出るが、表示はソースのまま。ボタンを押すと整形表示になる。自分でソース表示を選んだタブは、どう削っても勝手に整形表示にならない（[整形表示の上限](../spec/file-viewer/viewers.md#整形表示の上限)）
 11. 上限を超える Markdown をツリーでシングルクリックしてプレビュータブに入れる → ソース表示で開く。再起動後も、上限で移したソース表示が利用者の選んだ表示として残っていない（再起動は作業者の許可を得て playground を閉じて起動し直す）（[整形表示の上限](../spec/file-viewer/viewers.md#整形表示の上限)、[再起動後の復元](../spec/file-viewer/opening-and-tabs.md#再起動後の復元)）
-12. Step 15 と Step 22 で測った、手順 (1)〜(4) の始めと終わりの private bytes の表（直す前と後）と、各手順のあとの `shot` を見る → 新しい作りはどれも差が 50 MiB 以下で、直す前は 100 MiB 以上。図と画像が正しい絵で出て、ほかのタブの絵が替わっていない（[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)）
-13. playground を強制終了して起動し直し（作業者の許可を得て）、`file-viewer` のタブを開いて 5 秒後の `mods/file-viewer-images/` の一覧を見る → `main.js`・`mod.json`・app が書くファイルと、開いているタブが使う絵しか無い。画像のタブを閉じると、ほかのタブがあれば数秒のうちにそのコピーが消える（[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)、[image viewer](../spec/file-viewer/viewers.md#image-viewer)）
-14. 付き添いの mod を外して、図のある Markdown・`.mmd`・画像を開く → 図は描けない図、画像は開けないファイルとして「付き添いの mod が入っていない」が出て、Markdown のほかの部分は整形表示のまま。入れ直してから開き直すと普通に出る。図を出したまま入れ直しても、表示中の図が空かない（[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)、[描けない図](../spec/file-viewer/mermaid.md#描けない図)、[開けないファイル](../spec/file-viewer/viewers.md#開けないファイル)）
+12. Step 15 と Step 30 で測った、手順 (1)〜(4) の始めと終わりの private bytes の表（直す前は最後の操作から 5 秒後、新しい作りは 10 秒後の値。P56）と、各手順のあとの `shot` を見る → 新しい作りはどれも差が 50 MiB 以下で、直す前は 100 MiB 以上。図と画像が正しい絵で出て、ほかのタブの絵が替わっていない（[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)）
+13. playground を強制終了して起動し直し（作業者の許可を得て）、`file-viewer` のタブを開いて 10 秒後の `mods/file-viewer-images/` の一覧を見る → 絵の席のファイルはどれも、開いているタブが出している絵か、ごく小さい絵。同じ画像をほかに開いていない画像のタブを閉じると、10 秒後にそのコピーの絵の席がごく小さい絵になっている（[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)、[image viewer](../spec/file-viewer/viewers.md#image-viewer)）
+14. Step 30 で撮った (6) の結果（場面ごとの 5 回の撮影と空白のコマの数）を見る → 同じタブでテーマ・倍率を替える、ほかのタブを開く・閉じる・プレビューを替える、拡大の窓を開く・閉じるのどれでも、操作していないほうの図と画像に空白のコマが無い（[画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)）
 
 ## Verification map
 
@@ -535,22 +697,24 @@ cycle の最後の受け入れで行う（P29）。見る画面は playground（
 | [描けない図](../spec/file-viewer/mermaid.md#描けない図)（図ごとの失敗、行番号） | Step 2（失敗した図だけが失敗になるテスト。既存の行番号のテストが変わらない） |
 | [外で書き換えられたら追従する](../spec/file-viewer/editing.md#外で書き換えられたら追従する)・[下書き](../spec/file-viewer/editing.md#下書き) | Step 3（中身が変わったときのテスト）、Step 4（実機の追記） |
 | [ほかの知らせが出ているとき](../spec/file-viewer/editing.md#ほかの知らせが出ているとき)（整形の準備の知らせと「図を書き出せなかった」） | Step 4・5（P11 の持ち方。外部変更の知らせと並んで出る）、Step 9・10（「図を書き出せなかった」） |
-| [描き方](../spec/file-viewer/mermaid.md#描き方) | Step 7（字体・比べる元）、Step 8（SVG のテスト）、Step 9（整形表示）、Step 13（並べた画像）、Step 18・20（画像の置き場所に置き、手放して消す。無くなったら新しい名前で書き直す）、受け入れ 5・9 |
-| [共通の前提](../spec/file-viewer/index.md#共通の前提)（3 つの mod） | Step 16 |
-| ガイドの「`image(path)` のメモリ」 | Step 15（手放し方の事実と細かい手順）、Step 22（新しい作りの値と食い違わない） |
+| [描き方](../spec/file-viewer/mermaid.md#描き方) | Step 7（字体・比べる元）、Step 8（SVG のテスト）、Step 9（整形表示）、Step 13（並べた画像）、Step 18・20（記録）、Step 25・27（絵の席に書き、手放す）、Step 28（無くなったら作り直して書き直す）、受け入れ 5・9 |
+| [共通の前提](../spec/file-viewer/index.md#共通の前提)（2 つの mod と 1 つの layout、絵のフォルダは mod ではない） | Step 16（記録）、Step 29 |
+| ガイドの「`image(path)` のメモリ」「フォルダの変化の知らせ」「`fs/promises` の `writeFile`」 | Step 15（手放し方の事実と細かい手順）、Step 22（付き添いの mod の作りの値）、Step 23（その場で書く書き方、ごく小さい SVG での手放し、`Uint8Array`）、Step 30（絵の席の作りの値） |
 | [拡大表示](../spec/file-viewer/mermaid.md#拡大表示) | Step 11、Step 12（.mmd の倍率）、受け入れ 6 |
 | [色](../spec/file-viewer/mermaid.md#色) | Step 8（色が入る）、Step 10（本文）、Step 11（拡大の窓）、Step 12（.mmd）、受け入れ 7 |
 | [描けない図](../spec/file-viewer/mermaid.md#描けない図)（.mmd の 2 つの理由） | Step 12 |
 | [Mermaid 単体ファイル](../spec/file-viewer/mermaid.md#mermaid-単体ファイル) | Step 12、受け入れ 8 |
 | [image viewer](../spec/file-viewer/viewers.md#image-viewer)（キャッシュの消し方。Step 9〜13 の記録） | Step 9、Step 11（置き換わった消し方。今の決まりは下の「画像の置き場所に置き、手放して消す」の行） |
-| [実機の確かめ](../spec/file-viewer/index.md#実機の確かめ) | Step 7（手順をガイドに）、Step 7〜22（その手順で確かめ、前後の記録を `guard-log.txt` に残す） |
-| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（付き添いの mod） | Step 16（入れ方）、Step 17（判定のテスト）、Step 18・19（無いときの見え方）、Step 22（外したときと入れ直したとき）、受け入れ 14 |
-| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（名前と手放す時） | Step 15（手放せる事実）、Step 17（名前と表のテスト）、Step 18（本文と `.mmd`）、Step 19（画像）、Step 20（拡大の窓）、Step 22・受け入れ 12（メモリ） |
-| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（片付け） | Step 17（選び方のテスト）、Step 18（始めの回の自分の古いファイルの片付けと `close()`）、Step 21（見張りと前の置き場所）、Step 22・受け入れ 13（再起動のあとの一覧） |
-| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（成功条件の測り方） | Step 15（直す前の値と細かい手順）、Step 22（新しい作りの値）、受け入れ 12 |
-| [描けない図](../spec/file-viewer/mermaid.md#描けない図)（付き添いの mod が入っていない） | Step 17（理由の順のテスト）、Step 18（テスト）、Step 22、受け入れ 14 |
-| [image viewer](../spec/file-viewer/viewers.md#image-viewer)（画像の置き場所に置き、手放して消す） | Step 19、Step 21（閉じると数秒で消える）、受け入れ 13 |
-| [開けないファイル](../spec/file-viewer/viewers.md#開けないファイル)（付き添いの mod が入っていない） | Step 19（テスト）、Step 22、受け入れ 14 |
+| [実機の確かめ](../spec/file-viewer/index.md#実機の確かめ) | Step 7（手順をガイドに）、Step 7〜30（その手順で確かめ、前後の記録を `guard-log.txt` に残す）、Step 23・30（PrintWindow で続けて撮る） |
+| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（付き添いの mod の作り。Step 14〜22 の記録） | Step 15〜22 |
+| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（頼る app の振る舞い） | Step 23 |
+| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（置き場所と絵の席、絵の席の表） | Step 24（表のテスト）、Step 25（表を作る・初めて作るときの手放し・フォルダと絵の席を作る・増やす）、Step 26・27（画像と窓の共有）、Step 28（外から消されたとき）、Step 30・受け入れ 13（再起動のあとの一覧） |
+| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（手放す時） | Step 24（描画の回数と数え方のテスト）、Step 25（本文と `.mmd`）、Step 26（画像）、Step 27（拡大の窓）、Step 30・受け入れ 12・14 |
+| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（片付け） | Step 24（見張りのテスト）、Step 25（`close()`）、Step 28（見張りと前の置き場所）、Step 30・受け入れ 13 |
+| [画像の置き場所](../spec/file-viewer/index.md#画像の置き場所)（成功条件の測り方） | Step 15（直す前の値と細かい手順）、Step 30（新しい作りの値、10 秒、(5)・(6)）、受け入れ 12〜14 |
+| [描けない図](../spec/file-viewer/mermaid.md#描けない図)（理由は 5 つ） | Step 25（付き添いの mod の理由を消す） |
+| [image viewer](../spec/file-viewer/viewers.md#image-viewer)（絵の席にコピーし、ほかに使う場所が無ければ手放す） | Step 26、Step 28、受け入れ 13 |
+| [開けないファイル](../spec/file-viewer/viewers.md#開けないファイル)（理由は 3 つ） | Step 26 |
 | [スクロールバー](../spec/file-viewer/viewers.md#スクロールバー)（タブを替えて戻ったときの操作の印の限界） | Step 14 |
 
 ## Left to the implementer
@@ -559,7 +723,9 @@ cycle の最後の受け入れで行う（P29）。見る画面は playground（
 - 帯の文言と並び順（[任せたこと](../spec/file-viewer/viewers.md#任せたこと)）
 - 区切りに使う入出力の種類（P5 の範囲内）
 - 画面の拡大率（DPI）の取り方の細部（[Mermaid 図の任せたこと](../spec/file-viewer/mermaid.md#任せたこと)。書き出しの大きさの式は P27。くっきり描ければよい）
-- ごく小さい絵のバイト列の中身（P33。その形式の 1 × 1 の絵であればよい）、名前の正規表現と 36 進の桁の数（P30 の形を読み戻せればよい）
+- 絵の席の名前の形と、`globalThis` の表の名前（P43・P42 の範囲。[任せたこと](../spec/file-viewer/index.md#任せたこと)の決まりを守る）
+- ごく小さい絵の SVG の文字列の中身（P43。1 × 1 であればよい）
+- 絵の席の表の中の形と、それを読み書きする lib の関数の分け方（P42 の範囲）
 
 ## Stop conditions
 
@@ -570,9 +736,10 @@ cycle の最後の受け入れで行う（P29）。見る画面は playground（
 - playground の `status` に `out of memory` が出る、表示に `Null"null"` が出る、playground が落ちる・描かなくなったとき（製品の不具合と取り違えず、止まって作業者に再起動の許可を求める。P16）
 - app home の同梱 mod・`keys.json`・`settings.json`・`shared.json` を直接編集しないと進めないと分かったとき
 - 作業者のタブ・space を閉じる、layout を切り替える、herdr-app を再起動する必要が出たとき
-- playground を起動し直す・強制終了することになるとき（Step 15・22・受け入れ 13。そのたびに止まって作業者に許可を聞く。P16）
+- playground を起動し直す・強制終了することになるとき（Step 15・22・30・受け入れ 11・13。そのたびに止まって作業者に許可を聞く。P16）
 - 絵を手放す手段（[手放す](../../CONTEXT.md#手放す)）が、ある形式やある場面で効かないと分かったとき（仕様の前提が崩れるので brainstorm に返す）
-- 付き添いの mod の中身（`main.js`・`mod.json`・app が書くファイル）を `file-viewer` から書き換えたり消したりしないと進めないと分かったとき
+- 絵の席を、上書きでなくファイルを作る・消すことでしか書けない・手放せない場面が、仕様のまれな場面（フォルダを初めて作る、絵の席を増やす、外から消されたものを作り直す）のほかに見つかったとき（仕様の前提が崩れるので brainstorm に返す）
+- 作業者の app home の `mods/` に何かを書かないと進めないと分かったとき（受け入れの前まで、作業者の app には入れない）
 
 ## Test command
 
