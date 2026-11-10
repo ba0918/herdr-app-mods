@@ -134,8 +134,28 @@ const localName = (name) => name.slice(name.indexOf(":") + 1);
 
 // <style> 要素（名前空間の接頭辞つきも）がどこかにあるか。コメントや文字の中のものも数える（タイルに分けない側に倒れるだけ）。
 // style 属性は数えない（書かれた要素にだけ当たり、祖先の関係に左右されず、タイルの外側の svg は何も設定しないので、包んでも当たり方は
-// 変わらない）。全文に 1 回当てるので、後戻りが長さに比例しない形にする。
-const STYLED = /<(?:\w[\w.-]*:)?style[\s/>]/;
+// 変わらない）。全文に正規表現を当てると QuickJS で 6,000,000 文字に 50 ms ほどかかるので、"<style" と ":style" を indexOf で探し、
+// 見つかった所だけ前後を確かめる（ガイドの「SVG の根の読み書きの時間」）。
+function hasStyleElement(text) {
+  for (const mark of ["<style", ":style"]) {
+    for (let i = text.indexOf(mark); i >= 0; i = text.indexOf(mark, i + 1)) {
+      if (styleEnd(text[i + mark.length]) && (mark === "<style" || prefixed(text, i))) return true;
+    }
+  }
+  return false;
+}
+
+// 要素の名前 style の次の文字か（空白・"/"・">"）。見つかった所ごとに呼ぶので、多くの文字は正規表現を当てずに分ける。
+const styleEnd = (c) => c === ">" || c === "/" || (c !== undefined && (c <= " " || c >= "\u00a0") && /\s/.test(c));
+const NAME_START = /\w/;
+const NAME_CHAR = /[\w.-]/;
+
+// i の ":" の前が、"<" に続く名前空間の接頭辞（\w[\w.-]*）か。前へ戻るのは ":" を含まない文字の列の間だけなので、全文で長さに比例する。
+function prefixed(text, i) {
+  let j = i;
+  while (j > 0 && NAME_CHAR.test(text[j - 1])) j--;
+  return j < i && j > 0 && text[j - 1] === "<" && NAME_START.test(text[j]);
+}
 
 // SVG の全文 text の根の要素を読む。
 //   { kind: "rewrite", width, height, styled, ... }: 書かれた大きさ（px）が決まる。表示の大きさで書き直す（rewriteSvg）。styled: <style>
@@ -152,7 +172,7 @@ export function readSvgRoot(text) {
   const width = side(length(a.width, font), box?.width), height = side(length(a.height, font), box?.height);
   if ([width, height].some((v) => v !== null && v <= 0)) return { kind: "unopenable", reason: "書かれた大きさが 0 以下" };
   if (width === null || height === null) return { kind: "asis" };
-  return { kind: "rewrite", width, height, styled: STYLED.test(text), tag, viewBox: box };
+  return { kind: "rewrite", width, height, styled: hasStyleElement(text), tag, viewBox: box };
 }
 
 // 書き換えで替える属性（viewBox が読めればそれは元のまま残す）。タイルで包む元の根は x・y も外す（いちばん外の svg では効かないが、
