@@ -18,7 +18,7 @@ import { layoutMermaid } from "./lib/prepare.js";
 import { MarkdownState } from "./lib/markdown-state.js";
 import { diagramFile, bodyLook, scaleLook, fitLook, colorsKey, maxDiagramScale, tileView } from "./lib/diagram-files.js";
 import { oldCacheNames } from "./lib/pictures.js";
-import { IMAGES_DIR, imageKey, ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
+import { IMAGES_DIR, imageKey, unshare, ensureTable, startGen, beat, claimInit, initPlan, initDone, rendered, use as useSeats, dropPlace, takeReleases, released, grown, seatOf, isSeatName, bodyPlace, windowPlace, watch, scan } from "./lib/seats.js";
 import { SeatUser } from "./lib/seat-user.js";
 import { diagramFileState, diagramFileView } from "./lib/mmd.js";
 import { diagramSvg, diagramColors, resizeSvg } from "./lib/mermaid/svg.js";
@@ -497,10 +497,11 @@ export default class FileViewer extends View {
     });
   }
 
-  async read(path, machine, cx) {
+  // hash: 確かめで分かった今の中身のハッシュ（外部変更で読み直すとき。画像の絵の席を共有するかを決めるのに使う）。
+  async read(path, machine, cx, hash = null) {
     const file = { path, machine, loading: false };
     try {
-      if (kind({ path, size: 0 }).type === "image") return await this.readImage(file, cx);
+      if (kind({ path, size: 0 }).type === "image") return await this.readImage(file, cx, hash);
       const r = await readText(path, machine);
       if (!r.exists) {
         file.missing = true;
@@ -526,8 +527,8 @@ export default class FileViewer extends View {
 
   // 画像は絵の席にコピーして表示する（copyPicture。コピーしている間は使っている絵に入れ、読み込んだ file を採るか捨てるときに外す）。
   // SVG はソースも読んで Editor に入れる（1 MiB まで）。
-  async readImage(file, cx) {
-    const r = await this.copyPicture(file, cx);
+  async readImage(file, cx, hash = null) {
+    const r = await this.copyPicture(file, cx, hash);
     if (!r.exists) {
       file.missing = true;
       file.view = { type: "unopenable", reason: "missing" };
@@ -556,8 +557,10 @@ export default class FileViewer extends View {
   // 画像を絵の席にコピーする。絵の席は machine・パス・大きさ・更新時刻の鍵で表から取り、同じ鍵の絵があればコピーせずに共有して、
   // コピーしたときに載せた中身の情報（基準のハッシュ・大きさ・先頭のバイト）を使う（ほかのコピーが書いている途中なら書き終わるのを待つ）。
   // 絵の席の名前は file.picture に置き、コピーしている間は使っている絵に入れる（this.copying）。書いた絵は、書いた絵自身の変化の知らせが
-  // 済むまで待ってから返す（すぐ出すと、出した絵が捨てられて一瞬空白になる）。
-  async copyPicture(file, cx) {
+  // 済むまで待ってから返す（すぐ出すと、出した絵が捨てられて一瞬空白になる）。hash（確かめで分かった今の中身のハッシュ）を渡したとき、
+  // 共有した絵の中身の情報のハッシュがそれと違えば（大きさと更新時刻が同じまま中身だけ変わった）、共有をやめて使っていない絵の席に
+  // コピーし直す（鍵の形は変えない。lib/seats.js の unshare）。
+  async copyPicture(file, cx, hash = null) {
     const sig = await statOf(file.path, file.machine);
     if (!sig) return { exists: false };
     const [size, mtime] = [Number(sig.split("|")[0]), sig.slice(sig.indexOf("|") + 1)];
@@ -568,7 +571,13 @@ export default class FileViewer extends View {
     const name = seat.name;
     file.picture = name;
     this.copying.add(name);
-    if (!seat.write) return this.sharedPicture(name, cx);
+    if (!seat.write) {
+      const shared = await this.sharedPicture(name, cx);
+      if (!hash || shared.base?.hash === hash) return shared;
+      unshare(this.seats, name);
+      this.copying.delete(name);
+      return this.copyPicture(file, cx);
+    }
     this.seatUser.writing(name);
     let r = null;
     try {
@@ -658,14 +667,15 @@ export default class FileViewer extends View {
   }
 
   // ディスクの内容で読み直す（未保存の編集は捨てる）。wasMissing は、確認で戻ってきたと分かる前に無かったか。
-  reload(cx, wasMissing) {
+  // hash: 確かめで分かった今の中身のハッシュ（分かっていれば。read に渡す）。
+  reload(cx, wasMissing, hash = null) {
     const file = this.file;
     if (!file) return;
     const missing = wasMissing ?? file.missing;
     const key = this.loadedKey;
     const before = file.editor?.value();
     cx.spawn(async (cx) => {
-      const next = await this.read(file.path, file.machine, cx);
+      const next = await this.read(file.path, file.machine, cx, hash);
       // 読み直したコピーは、採らなければ使っている絵から外れて手放される。
       this.copying.delete(next.picture);
       // 古い読み直しのコピーも、描画が来なくても使っている絵の表を更新して手放す。
@@ -824,7 +834,8 @@ export default class FileViewer extends View {
         const back = file.missing;
         file.missing = false;
         if (!r.changed) { if (back) cx.notify(); return; }
-        if (this.considerExternal(file, { changed: true, diskHash: r.base.hash }) === "reload") { this.reload(cx, back); return; }
+        // 画像のバイト列のハッシュで確かめたとき（Editor の無い画像）は、そのハッシュで、共有する絵の席の中身を確かめさせる。
+        if (this.considerExternal(file, { changed: true, diskHash: r.base.hash }) === "reload") { this.reload(cx, back, file.editor ? null : r.base.hash); return; }
         cx.notify();
       } catch {
         // 一時的な失敗（machine に届かない等）は次の確認で取り直す。

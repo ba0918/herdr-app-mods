@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   SEATS_VERSION, INITIAL_SEATS, GROW_SEATS, STALE_GEN_MS, IMAGES_DIR, seatName, isSeatName,
   ensureTable, claimInit, initPlan, initDone, acquire, grown, wrote, use, rendered, dropPlace, takeReleases, released,
-  startGen, watch, scan, rewrites, claimRewrite, imageKey, bodyPlace, windowPlace, seatOf,
+  startGen, watch, scan, rewrites, claimRewrite, imageKey, bodyPlace, windowPlace, seatOf, unshare,
 } from "../mods/file-viewer/lib/seats.js";
 import { RENDER_LIMIT } from "../mods/file-viewer/lib/render-size.js";
 
@@ -514,6 +514,26 @@ describe("画像の鍵", () => {
     for (const change of [{ machine: null }, { path: "/repo/b.png" }, { size: 101 }, { mtime: 6 }]) {
       expect(imageKey({ ...base, ...change })).not.toBe(imageKey(base));
     }
+  });
+
+  // 仕様: 画像の中身が変わったら新しい絵に替える（外部変更は中身で見る）。大きさと更新時刻が同じまま中身だけ変わることもある。
+  test("共有しようとした絵が今の中身と違うと分かったら、同じ鍵でも使っていない絵の席に書き直し、前の絵の席は使っている所が外すまで手放さない", () => {
+    const { table } = ready();
+    const key = imageKey(base);
+    const a = take(table, own(body1), key, { base: { hash: "前" } });
+    expect(acquire(table, own(body2), key).name).toBe(a.name);
+    unshare(table, a.name);
+    use(table, body2, []);
+    const again = acquire(table, own(body2), key);
+    expect(again.name).not.toBe(a.name);
+    expect(again.write).toBe(true);
+    wrote(table, again.name, own(body2), { ok: true, info: { base: { hash: "今" } } });
+    rendered(table, body2);
+    expect(takeReleases(table, own(body2))).toEqual([]);
+    expect(acquire(table, own(body1), key)).toMatchObject({ name: again.name, info: { base: { hash: "今" } } });
+    use(table, body1, [again.name]);
+    rendered(table, body1);
+    expect(takeReleases(table, own(body1))).toEqual([a.name]);
   });
 
   test("同じなら共有され、載せた中身の情報が共有した側に返る", () => {

@@ -169,6 +169,13 @@ export function acquire(table, owner, key) {
   return { name, write: true };
 }
 
+// 絵の席 name の絵が、その鍵の今の中身と違うと分かった（画像の大きさと更新時刻が同じまま中身だけ変わった）。その絵の席から鍵を外し、
+// 次にその鍵を求めた所に使っていない絵の席を割り当てる（鍵の形は変えない。ほかのコピーがもう別の絵の席に書き直していれば、そちらの
+// 鍵はそのまま）。前の絵の席は、出している所が使い続け、どこも使わなくなったら手放す。
+export function unshare(table, name) {
+  if (table.seats[name]) dropKey(table, name);
+}
+
 // owner が受け持った絵の席を増やすのを、始めずにやめた（ほかのコピーが受け持てるようにする）。
 export function stopGrowing(table, owner) {
   if (same(table.growing, owner)) table.growing = null;
