@@ -283,8 +283,8 @@ async function writeBase64(seat, data, size) {
 }
 
 // 一時ファイルのフォルダに残ったファイルのうち、書いてから 10 分を過ぎたものを消す（消す前に app が終わったときや、消すのに失敗した
-// ときの残り）。使っている一時ファイルは書いてから 1 回の読み込みの間（数秒）しか無いので、ほかの窓が使っているものは消さない
-// （窓ごとに実行環境が別で、使っているかを互いに知らない）。
+// ときの残り）。同じ窓のほかのタブのコピーが読み込みの最中かもしれないので、使っているかではなく古さで決める（使っている一時ファイルは
+// 書いてから 1 回の読み込みの間（数秒）しか無い）。
 export async function removeLeftoverTemps() {
   const dir = `${appHome()}/${READ_DIR}`.replace(/\//g, "\\");
   await exec("powershell", ["-NoProfile", "-Command",
