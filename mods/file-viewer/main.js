@@ -28,7 +28,7 @@ import { ZoomSvg, DiagramOpening } from "./lib/zoom-svg.js";
 import { OverlayLayout } from "./lib/overlay-layout.js";
 import { record, putRecord, viewerTabsIn, findOwnPane, pruneRecords, openTokens, liveViewerTokens, openFile } from "./registry.js";
 import { readText, checkChanged, checkUtf8, statOf, pathKind, writeText, WriteConflict, listDrafts, writeDraft, deleteDraft, draftName, copyImage, pauseForApp } from "./io.js";
-import { listOldCache, removeOldCache, removeOldCacheDir } from "./io.js";
+import { listOldCache, removeOldCache, removeOldCacheDir, removeLeftoverTemps } from "./io.js";
 import { listSeats, makeSeatsDir, writeSeatText, writeTinySeats } from "./io.js";
 import { markdownBody, markdownWaiting, waitingLabel, preloadImages, diagramImage, bodyWidth, diagramError, thumbSpan, BAR_MAX, BAR_INSET, BAR_WIDTH } from "./views/markdown.js";
 import { BodyScroll, BodyInput, measuredParts } from "./lib/body-scroll.js";
@@ -265,7 +265,7 @@ export default class FileViewer extends View {
   // 窓で POLL_MS に 1 回だけ（表に最後にした時刻を置き、どれか 1 つのコピーが）: フォルダの一覧を取り、外から消されたフォルダと絵の席の
   // ファイルを作り直す（どこも使っていない絵の席はごく小さい絵で作り、使っている絵の席は使う場所のコピーが書き直す。lib/seats.js の
   // scan）。起動して最初の 1 回だけ、前の置き場所 file-viewer-cache/ の file-viewer の名前の形のファイルを消し、空ならフォルダも消す
-  // （mods/ の外なので、消してもメモリは放されない）。
+  // （mods/ の外なので、消してもメモリは放されない）。一時ファイルのフォルダ file-viewer-read/ に残ったファイルも、そのとき消す。
   async seatChores() {
     const table = this.seats, chores = table.chores, now = Date.now();
     if (now - (chores.scanAt ?? 0) < POLL_MS) return;
@@ -280,6 +280,7 @@ export default class FileViewer extends View {
         for (const name of oldCacheNames(old)) await removeOldCache(name);
         await removeOldCacheDir();
       }
+      await removeLeftoverTemps();
     }
   }
 
