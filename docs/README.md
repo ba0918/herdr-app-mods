@@ -14,6 +14,5 @@
 
 - [File viewer 仕様](spec/file-viewer/index.md) — Files で押したファイルをメイン領域のタブで表示・編集する viewer
 - [herdr-app mod 開発ガイド](guides/herdr-app-mod-development.md) — mod の仕組み、この環境（Windows app + WSL）での開発ループ、組み込み方、制約
-- [大きな SVG を表示の大きさで書き直す実装計画](plans/large-svg.md) — image viewer の SVG を画面に出す大きさで書き直したコピーで出す計画（実装ブランチ `large-svg`）
 
 用語はリポジトリ直下の [CONTEXT.md](../CONTEXT.md) にある。
