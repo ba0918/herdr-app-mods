@@ -107,6 +107,19 @@ class SvgFileState extends MarkdownState {
     super.settle(job);
   }
 
+  // 前の絵を出したまま確かめを待っている間に見た目が変わったら、前の中身は書き直さず（前の絵を前の大きさのまま出す）、今の中身を
+  // 新しい見た目で準備し直す。新しい見た目でも確かめが要れば settle でまた待ち（確かめの続きは checking に残る）、要らなければ
+  // 確かめを終えるのを待たずに書く（仕様の、確かめはタイルに分けて書きたい大きさになったときだけ）。
+  setLook(look) {
+    if (this.deferred && !this.job && this.look?.key !== look.key) {
+      this.look = look;
+      this.deferred = null;
+      this.begin(this.text, false);
+      return;
+    }
+    super.setLook(look);
+  }
+
   waitsForCheck(job) {
     const shown = this.shown;
     if (!shown || shown.fallback || !shown.files.some(Boolean) || shown.text === job.text) return false;

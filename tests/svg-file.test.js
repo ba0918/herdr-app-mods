@@ -413,6 +413,35 @@ describe("中身が変わったとき", () => {
     expect(view(s).part.file.tiles.length).toBe(1);
   });
 
+  test("中身が変わって確かめ直している間に倍率を変えたら、前の絵は書き直さずに前の大きさのまま出し、新しい中身を新しい倍率で書いてから替える", () => {
+    const s = shownAt(svg(8000, 800), "前");
+    s.change(content(long(8000, 800), "今"));
+    for (let i = 0; i < 10 && s.busy; i++) s.tick(100, () => 2);
+    s.tick(100, () => 2);
+    expect(s.needsRun).toBe(true);
+    s.setLook(scaleLook(null, 0.75));
+    const seen = run(s, 3, [view(s)]);
+    for (const v of seen) {
+      expect(v.kind).toBe("picture");
+      if (v.part.source === "前") expect(v.part.file.width).toBe(8000);
+      else expect(v.part.file).toMatchObject({ width: 6000 });
+    }
+    expect(view(s).part).toMatchObject({ source: "今", file: { width: 6000 } });
+    expect(view(s).part.file.tiles.length).toBe(2);
+  });
+
+  test("中身が変わって確かめ直している間に、タイルに分けない大きさの倍率にしたら、確かめを終えるのを待たずに新しい中身を書いて替える", () => {
+    const s = shownAt(svg(8000, 800), "前");
+    s.change(content(long(8000, 800), "今"));
+    for (let i = 0; i < 10 && s.busy; i++) s.tick(100, () => 2);
+    s.tick(100, () => 2);
+    s.setLook(scaleLook(null, 0.1));
+    for (let i = 0; i < 10 && s.busy; i++) s.tick(100, () => 3);
+    finish(s, 3);
+    expect(view(s).part).toMatchObject({ source: "今", file: { width: 800 }, layout: { styled: null } });
+    expect(s.needsRun).toBe(false);
+  });
+
   test("中身が変わって確かめ直しているとき、打ち切りになったら、タイルに分けないと書けない SVG は前の絵のまま知らせ、1 枚で書ける SVG は <style> 要素を持つとみなす", () => {
     const s = shownAt(extreme(), "前");
     const next = content(`<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="10">${`<rect width="1" height="1"/>`.repeat(50_000)}</svg>`, "今");
