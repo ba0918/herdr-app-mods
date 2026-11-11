@@ -41,8 +41,7 @@ const OUTSIDE = () => ({ inRender: false, over: null });
 // <style> 要素の有無（タイルに分けるか）は、出している今の中身の絵がタイルに分けたい大きさのとき（svgStyleWanted）だけ、描画の外で
 // 区切りごとに 1 区間で確かめる（tick。区切りの間は呼ぶ側が入出力の await を挟む）。確かめ終えるまでは、タイルに分けない 1 枚で書いた
 // 絵を出す。確かめ終えたら、分かった有無で今の中身を準備し直す（書き終えて読み込むまで、出している絵のまま）。
-// 確かめにも準備の区間と同じ見張りと 10 秒の上限を当てる（区切りの前に slice の印を置く。watch）。上限を超えたら、<style> 要素を
-// 持つとみなす（タイルに分けない側に倒す）。
+// 確かめにも準備の区間と同じ見張りと 10 秒の上限を当てる（区切りの前に slice の印を置く。watch）。上限を超えたら打ち切る（timedOut）。
 class SvgFileState extends MarkdownState {
   constructor(options) {
     super(options);
@@ -95,12 +94,12 @@ class SvgFileState extends MarkdownState {
     this.slice = null;
     check.elapsed += ended - begun;
     if (check.scanner.done) this.checkedAs(check.scanner.found);
-    else if (check.elapsed > this.timeLimit) this.checkedAs(true);
+    else if (check.elapsed > this.timeLimit) this.timedOut();
     return true;
   }
 
   // 確かめの区切りから戻らない非同期処理の見張り（MarkdownState の watch と同じ決まり）。止まった確かめが今の確かめなら、区切りを
-  // 始めてから気づくまでを表示している間だけ数え、上限を超えていれば <style> 要素を持つとみなし、超えていなければ確かめを始めから
+  // 始めてから気づくまでを表示している間だけ数え、上限を超えていれば打ち切り（timedOut）、超えていなければ確かめを始めから
   // やり直す（止まった区切りの途中までの読み位置を使わない）。ほかは準備の見張り（slice の印が scanner を持たない準備の job か、印が無い）。
   watch(now, visible) {
     const check = this.slice;
@@ -108,9 +107,22 @@ class SvgFileState extends MarkdownState {
     this.slice = null;
     if (check !== this.checking) return true;
     if (visible) this.count(check, now());
-    if (check.elapsed > this.timeLimit) this.checkedAs(true);
+    if (check.elapsed > this.timeLimit) this.timedOut();
     else check.scanner = styleScanner(check.content.text);
     return true;
+  }
+
+  // 確かめを 10 秒で打ち切った。出している部分がタイルに分けなければ描けない SVG（unchecked。確かめ終えるまで読み込み中）なら、
+  // 開くときの打ち切りと同じく、打ち切りを理由に開けない案内にする（出している部分は絵を持たないので代わりの整形表示になり、
+  // svgFileView が打ち切りの理由を出す）。タイルに分けない 1 枚で描けるなら、<style> 要素を持つとみなす（タイルに分けない側に倒す）。
+  timedOut() {
+    if (!this.shown?.parts[0]?.unchecked) {
+      this.checkedAs(true);
+      return;
+    }
+    const { content } = this.checking;
+    this.checking = null;
+    this.fail(content, { kind: "timeout" });
   }
 
   // 確かめている中身の <style> 要素の有無が決まった。その有無で今の中身を準備し直す。

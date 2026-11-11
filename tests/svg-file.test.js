@@ -265,6 +265,43 @@ describe("<style> 要素の確かめの見張りと 10 秒", () => {
     expect(view(s).part.file.tiles.length).toBe(1);
   });
 
+  // タイルに分けなければ描けない（縦横の比が極端な）SVG は、確かめ終えるまで読み込み中なので、確かめの打ち切りは開くときの打ち切り。
+  test("タイルに分けなければ描けない SVG の確かめを打ち切ったら、開くときの打ち切りと同じ開けない案内になる（表示していない間は数えない）", () => {
+    const u = state();
+    const now = (() => { let t = 0; return () => (t += 1); })();
+    u.open(content(svg(100, 100)));
+    u.tick(0, now);
+    u.wrote(u.writeTask().name, now());
+    u.tick(0, () => 10_500);
+    const opening = view(u);
+
+    const extreme = (body = "") => `<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="10">${body}<rect width="1" height="1"/></svg>`;
+    const s = state();
+    s.open(content(extreme()));
+    finish(s);
+    expect(view(s).kind).toBe("loading");
+    stall(s, 10);
+    expect(s.watch(() => 6_010, true)).toBe(true);
+    stall(s, 6_010);
+    expect(s.watch(() => 60_000, false)).toBe(true);
+    finish(s, 60_000);
+    expect(view(s).kind).toBe("loading");
+    stall(s, 60_000);
+    expect(s.watch(() => 64_001, true)).toBe(true);
+    settle(s, 64_002);
+    expect(view(s)).toEqual({ kind: "error", message: opening.message, notices: [] });
+    expect(s.needsRun).toBe(false);
+
+    // 区切りが戻っても、区切りの時間で 10 秒を超えたら同じ。
+    const r = state();
+    r.open(content(extreme(`<rect width="1" height="1"/>`.repeat(50_000))));
+    finish(r);
+    let t = 10;
+    r.tick(100, () => (t += 10_001));
+    settle(r, t);
+    expect(view(r)).toEqual({ kind: "error", message: opening.message, notices: [] });
+  });
+
   // 確かめが要らなくなっている（収まる大きさで、タイルに分けない大きさで書く）間は、確かめを動かしていない。
   test("確かめの途中で要らなくなり、また要るようになったら、その間の時間を数えずに確かめを続ける", () => {
     const s = waiting(long);
