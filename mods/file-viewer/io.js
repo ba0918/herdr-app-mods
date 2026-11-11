@@ -285,10 +285,12 @@ async function writeBase64(seat, data, size) {
 // 一時ファイルのフォルダに残ったファイルのうち、書いてから 10 分を過ぎたものを消す（消す前に app が終わったときや、消すのに失敗した
 // ときの残り）。同じ窓のほかのタブのコピーが読み込みの最中かもしれないので、使っているかではなく古さで決める（使っている一時ファイルは
 // 書いてから 1 回の読み込みの間（数秒）しか無い）。
+// フォルダが無いか空なら PowerShell を起動しない。時刻は UTC で比べる（夏時間の切り替えで、使っている一時ファイルを古いと見ないように）。
 export async function removeLeftoverTemps() {
-  const dir = `${appHome()}/${READ_DIR}`.replace(/\//g, "\\");
+  const dir = `${appHome()}/${READ_DIR}`;
+  if (!(await fs.readdir(dir).catch(() => []))?.length) return;
   await exec("powershell", ["-NoProfile", "-Command",
-    `$d=${psQuote(dir)}; if (Test-Path -LiteralPath $d) { Get-ChildItem -LiteralPath $d -File | Where-Object { $_.LastWriteTime -lt (Get-Date).AddMinutes(-10) } | Remove-Item -Force -ErrorAction SilentlyContinue }`]).catch(() => {});
+    `$d=${psQuote(dir.replace(/\//g, "\\"))}; if (Test-Path -LiteralPath $d) { Get-ChildItem -LiteralPath $d -File | Where-Object { $_.LastWriteTimeUtc -lt [DateTime]::UtcNow.AddMinutes(-10) } | Remove-Item -Force -ErrorAction SilentlyContinue }`]).catch(() => {});
 }
 
 // ---- 前の置き場所（app home 直下の file-viewer-cache/。片付けるだけ） ----
