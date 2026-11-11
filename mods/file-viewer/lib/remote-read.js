@@ -16,7 +16,8 @@ export function chunkRanges(size, chunk = READ_CHUNK) {
 export const base64Length = (length) => Math.ceil(length / 3) * 4;
 
 // sh のスクリプトの一部: パス "$1" のファイルの、引数 offsetArg 番目の位置から引数 lengthArg 番目の長さのバイト列を、
-// 改行なしの base64 で標準出力に出す。
+// 改行なしの base64 で標準出力に出す。パイプの終了コードは最後の base64 のものなので、読めないファイル（権限が無いなど）は先に
+// 開いて確かめ、開けなければ sh が理由を stderr に出して 0 以外で終える（読めない理由が読み込みの失敗の理由に届くように）。
 export function chunkCommand(offsetArg, lengthArg) {
-  return `tail -c +"$(( \${${offsetArg}} + 1 ))" -- "$1" | head -c "\${${lengthArg}}" | base64 -w0`;
+  return `exec 3< "$1" || exit 1; tail -c +"$(( \${${offsetArg}} + 1 ))" <&3 | head -c "\${${lengthArg}}" | base64 -w0`;
 }
