@@ -8,6 +8,7 @@ import { TEXT_LIMIT, IMAGE_LIMIT } from "./lib/kind.js";
 import { splitForWrite } from "./lib/save.js";
 import { createDraftStore } from "./lib/draft-store.js";
 import { utf8Checker } from "./lib/utf8.js";
+import { READ_CHUNK, chunkRanges, base64Length, chunkCommand } from "./lib/remote-read.js";
 
 import { OLD_CACHE_DIR } from "./lib/pictures.js";
 import { IMAGES_DIR as SEATS_DIR, TINY_SVG } from "./lib/seats.js";
@@ -162,16 +163,25 @@ export async function statOf(path, on) {
 }
 
 // ファイルのバイト列が UTF-8 として正しいか。確かめられなかったとき（コマンドの失敗など）は null。
-// バイト列は base64 で運ぶ（画像の運搬と同じ。テキストの上限 1 MiB は base64 で約 1.4 MB）。
+// バイト列は base64 で運ぶ（画像の運搬と同じ。画像の上限まで読む SVG もここを通る）。ほかの machine のファイルは区切って受け取る
+// （readRemoteBase64）。
 const UTF8_CHUNK = 250_000;
 export async function checkUtf8(path, on) {
-  const r = !on
-    ? await exec("powershell", ["-NoProfile", "-Command", `$ErrorActionPreference='Stop'; [Convert]::ToBase64String([IO.File]::ReadAllBytes(${psQuote(path)}))`])
-    : await sh(on, `base64 -w0 -- "$1"`, [path]);
-  if (r.code !== 0) return null;
+  let data;
+  if (!on) {
+    const r = await exec("powershell", ["-NoProfile", "-Command", `$ErrorActionPreference='Stop'; [Convert]::ToBase64String([IO.File]::ReadAllBytes(${psQuote(path)}))`]);
+    if (r.code !== 0) return null;
+    data = r.stdout;
+  } else {
+    const r = await sh(on, `s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; ${chunkCommand(2, 3)}`, [path, "0", String(READ_CHUNK)]);
+    if (r.code !== 0) return null;
+    const [[stat], first] = splitHead(r.stdout, 1);
+    data = await readRemoteBase64(on, path, sizeOf(stat), first).catch(() => null);
+    if (data === null) return null;
+  }
   const checker = utf8Checker();
-  for (let i = 0; i < r.stdout.length; i += UTF8_CHUNK) {
-    checker.feed(r.stdout.slice(i, i + UTF8_CHUNK));
+  for (let i = 0; i < data.length; i += UTF8_CHUNK) {
+    checker.feed(data.slice(i, i + UTF8_CHUNK));
     // 非同期処理は約 0.5 秒続けて動くと黙って止まり、マイクロタスクの await では区切れない（ガイドの「制約」）。
     // ファイルの有無の確認（実際の入出力）を挟んで区切る。
     await fs.exists(appHome());
@@ -238,9 +248,9 @@ printf '%s\\n' "$h"; ${STAT.replace('"$1"', '"$real"')}`;
 
 // 画像を絵の席 seat にコピーする（image() は app home の相対パスしか出せない）。絵の席のファイルを作り直さずにその場で書く（すでにある
 // ファイルの書き換えはフォルダの変化の知らせを出さず、同じフォルダのほかの絵が空白にならない。ガイドの「フォルダの変化の知らせ」）。
-// このコンピュータのファイルは 1 回の PowerShell で読んで書く。ほかの machine のファイルは base64 で受け取り、文字列のまま app home の
-// 一時ファイルに書いて、PowerShell でバイト列に戻して絵の席に書く（0.1.15 の fs.writeFile は Uint8Array を渡すと 0 バイトのファイルを
-// 書く。ガイドの「fs/promises の writeFile」）。
+// このコンピュータのファイルは 1 回の PowerShell で読んで書く。ほかの machine のファイルは base64 で区切って受け取り（readRemoteBase64）、
+// 文字列のまま app home の一時ファイルに書いて、PowerShell でバイト列に戻して絵の席に書く（0.1.15 の fs.writeFile は Uint8Array を
+// 渡すと 0 バイトのファイルを書く。ガイドの「fs/promises の writeFile」）。
 // { exists, size, base, cache: "mods/file-viewer-images/<seat>", header64: 先頭のバイトの base64 }。上限超えは cache なし。
 export async function copyImage(path, on, seat) {
   if (!on) {
@@ -252,31 +262,54 @@ export async function copyImage(path, on, seat) {
     if (Number(size) > IMAGE_LIMIT) return { exists: true, size: Number(size) };
     return { exists: true, size: Number(size), base: { hash, stat: null, bytes: true }, cache: `${SEATS_DIR}/${seat}`, header64 };
   }
-  const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; base64 -w0 -- "$1"`;
-  const r = await sh(on, script, [path, String(IMAGE_LIMIT)]);
+  const script = `[ -e "$1" ] || exit 4; s=$(${STAT}) || exit 5; printf '%s\\n' "$s"; [ "\${s%%|*}" -le "$2" ] || exit 0; sha256sum < "$1" | cut -d' ' -f1; ${chunkCommand(3, 4)}`;
+  const r = await sh(on, script, [path, String(IMAGE_LIMIT), "0", String(READ_CHUNK)]);
   if (r.code === 4) return { exists: false };
   if (r.code !== 0) throw readFailure(r.stderr.trim() || "画像を読めなかった", sizeBefore(r.stdout));
-  const [[stat, hash], data] = splitHead(r.stdout, 2);
+  const [[stat, hash], first] = splitHead(r.stdout, 2);
   const size = sizeOf(stat);
   if (size > IMAGE_LIMIT) return { exists: true, size };
-  await writeBase64(seat, data, size);
+  const data = await readRemoteBase64(on, path, size, first);
+  await writeBase64(seat, data, size, hash);
   return { exists: true, size, base: { hash, stat }, cache: `${SEATS_DIR}/${seat}`, header64: data.slice(0, Math.ceil(HEADER_BYTES / 3) * 4) };
+}
+
+// ほかの machine の大きさ size のファイルを、区切り（lib/remote-read.js）ごとに base64 で受け取り、つないだ文字列を返す。first は
+// 呼ぶ側が先に受け取った先頭の区切り（大きさの確かめと同じ回で読む）。区切りの base64 の長さが合わなければ（読む間にファイルが
+// 縮んだ・読めなかった）、読み込みの失敗にする。読む間に中身が変わったかは、呼ぶ側がハッシュで確かめる（writeBase64）。
+async function readRemoteBase64(on, path, size, first) {
+  const ranges = chunkRanges(size);
+  const parts = [];
+  for (const [i, { offset, length }] of ranges.entries()) {
+    let part = first;
+    if (i > 0) {
+      const r = await sh(on, chunkCommand(2, 3), [path, String(offset), String(length)]);
+      if (r.code !== 0) throw readFailure(r.stderr.trim() || "画像を読めなかった", size);
+      part = r.stdout;
+    }
+    if (part.length !== base64Length(length)) throw readFailure("読む間にファイルが変わった", size);
+    parts.push(part);
+  }
+  return parts.join("");
 }
 
 // base64 の文字列 data を、バイト列に戻して絵の席 seat にその場で書く（作り直さない。copyImage）。文字列を app home の一時ファイル
 // （mods/ の外。mods/ の下にファイルを作ると、出している絵が一瞬空白になる）に書き、PowerShell で戻して書いてから一時ファイルを消す。
-// 戻したバイト数が size と違えば（読んだ途中で変わった・書けなかった）、読み込みの失敗にする。
-async function writeBase64(seat, data, size) {
+// 戻したバイト列の大きさが size と違うか、ハッシュが hash と違えば（区切って読む間に中身が変わった）、絵の席に書かずに読み込みの
+// 失敗にする。
+async function writeBase64(seat, data, size, hash) {
   const dir = `${appHome()}/${READ_DIR}`;
   await fs.mkdir(dir, { recursive: true });
   const temp = `${dir}/${randomUUID()}.b64`;
   try {
     await fs.writeFile(temp, data);
     const r = await exec("powershell", ["-NoProfile", "-Command",
-      `$ErrorActionPreference='Stop'; $b=[Convert]::FromBase64String([IO.File]::ReadAllText(${psQuote(temp.replace(/\//g, "\\"))})); $f=[IO.File]::Open(${psQuote(seatPath(seat).replace(/\//g, "\\"))}, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write); try { $f.Write($b, 0, $b.Length); $f.SetLength($b.Length) } finally { $f.Close() }; "$($b.Length)"`]);
+      `$ErrorActionPreference='Stop'; $b=[Convert]::FromBase64String([IO.File]::ReadAllText(${psQuote(temp.replace(/\//g, "\\"))})); $h=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-','').ToLower(); "$($b.Length)"; $h; if ($b.Length -ne ${size} -or $h -ne ${psQuote(hash)}) { exit 6 }; $f=[IO.File]::Open(${psQuote(seatPath(seat).replace(/\//g, "\\"))}, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write); try { $f.Write($b, 0, $b.Length); $f.SetLength($b.Length) } finally { $f.Close() }`]);
+    const [[written]] = splitHead(r.stdout.replace(/\r/g, ""), 1);
+    if (r.code === 6) {
+      throw readFailure(Number(written) === size ? "読む間にファイルが変わった" : `画像を写せなかった（${size} バイトのうち ${written} バイト）`, size);
+    }
     if (r.code !== 0) throw readFailure(r.stderr.trim() || "画像を写せなかった", size);
-    const written = Number(r.stdout.trim());
-    if (written !== size) throw readFailure(`画像を写せなかった（${size} バイトのうち ${written} バイト）`, size);
   } finally {
     await fs.unlink(temp).catch(() => {});
   }
