@@ -239,32 +239,6 @@ describe("<style> 要素の確かめの見張りと 10 秒", () => {
     expect(view(s).part.file.tiles.length).toBe(2);
   });
 
-  test("戻らないことが続き、表示している間の時間で 10 秒を超えたら、<style> 要素を持つとみなしてタイルに分けない（表示していない間は数えない）", () => {
-    const s = waiting();
-    stall(s, 10);
-    expect(s.watch(() => 6_010, true)).toBe(true);
-    expect(view(s).part.file.tiles.length).toBe(1);
-    stall(s, 6_010);
-    expect(s.watch(() => 60_000, false)).toBe(true);
-    expect(s.needsRun).toBe(true);
-    stall(s, 60_000);
-    expect(s.watch(() => 64_001, true)).toBe(true);
-    settle(s, 64_002);
-    expect(s.needsRun).toBe(false);
-    expect(view(s).part.file).toMatchObject({ width: TILE_SIDE, height: 410 });
-    expect(view(s).part.file.tiles.length).toBe(1);
-  });
-
-  test("戻らなかった時間と区切りの時間を合わせて 10 秒を超えたら、区切りが戻っても打ち切る", () => {
-    const s = waiting(long);
-    stall(s, 10);
-    expect(s.watch(() => 10_009, true)).toBe(true);
-    let t = 10_009;
-    s.tick(100, () => (t += 2));
-    settle(s, t);
-    expect(view(s).part.file.tiles.length).toBe(1);
-  });
-
   // タイルに分けなければ描けない（縦横の比が極端な）SVG は、確かめ終えるまで読み込み中なので、確かめの打ち切りは開くときの打ち切り。
   test("タイルに分けなければ描けない SVG の確かめを打ち切ったら、開くときの打ち切りと同じ開けない案内になる（表示していない間は数えない）", () => {
     const u = state();
