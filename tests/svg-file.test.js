@@ -357,6 +357,83 @@ describe("中身が変わったとき", () => {
     finish(s, 3);
     expect(view(s).part).toMatchObject({ source: "今", file: { width: 50, height: 40 } });
   });
+
+  // <style> 要素の確かめが要る中身に変わったときも、確かめと書き直しが済むまで前の絵を出し、済んでから替える（確かめる間に、
+  // タイルに分けない 1 枚の小さい絵や読み込み中を挟まない）。
+  const extreme = (key = "") => `<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="10"><rect width="1" height="${key.length + 1}"/></svg>`;
+  const long = (w, h) => `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">${`<rect width="1" height="1"/>`.repeat(50_000)}</svg>`;
+  // するものが無くなるまで、確かめ・準備・書き込み・読み込みを進め、進めるたびに見え方を seen に積む。
+  function run(s, t, seen = []) {
+    for (let i = 0; i < 100 && (s.needsRun || s.busy || s.preloads().length); i++) {
+      for (let k = 0; k < 10 && !s.writeTask() && s.busy; k++) { s.tick(100, () => t); seen.push(view(s)); }
+      for (let task; (task = s.writeTask());) { s.wrote(task.name, t); seen.push(view(s)); }
+      for (const f of s.preloads()) { s.loadedImage(f.name, t); seen.push(view(s)); }
+      if (s.needsRun) { s.tick(100, () => t); seen.push(view(s)); }
+    }
+    return seen;
+  }
+  function shownAt(text, key) {
+    const s = state();
+    s.open(content(text, key));
+    run(s, 1);
+    return s;
+  }
+
+  test("タイルで出している SVG の中身が変わったら、確かめ終えてタイルで書き終えるまで、前の絵のまま出す", () => {
+    for (const next of [svg(8000, 800), long(8000, 800)]) {
+      const s = shownAt(svg(8000, 800), "前");
+      expect(view(s).part).toMatchObject({ source: "前" });
+      expect(view(s).part.file.tiles.length).toBe(2);
+      s.change(content(next, "今"));
+      const seen = run(s, 2, [view(s)]);
+      expect(seen[0]).toMatchObject({ kind: "picture", part: { source: "前" } });
+      for (const v of seen) {
+        expect(v).toMatchObject({ kind: "picture", notices: [] });
+        expect(v.part.file.tiles.length).toBe(2);
+      }
+      expect(view(s).part).toMatchObject({ source: "今" });
+    }
+  });
+
+  test("タイルに分けないと書けない SVG の中身が変わっても、確かめ終えて書き終えるまで、読み込み中にせず前の絵のまま出す", () => {
+    const s = shownAt(extreme(), "前");
+    expect(view(s)).toMatchObject({ kind: "picture", part: { source: "前" } });
+    s.change(content(extreme("今"), "今"));
+    const seen = run(s, 2, [view(s)]);
+    for (const v of seen) expect(v).toMatchObject({ kind: "picture", notices: [] });
+    expect(view(s)).toMatchObject({ kind: "picture", part: { source: "今" }, notices: [] });
+  });
+
+  test("中身が変わって確かめ直しているとき、<style> 要素があると分かったら、タイルに分けない大きさで書いてから前の絵と替える", () => {
+    const s = shownAt(svg(8000, 800), "前");
+    s.change(content(`<svg xmlns="http://www.w3.org/2000/svg" width="8000" height="800"><style>rect { fill: red }</style><rect width="1" height="1"/></svg>`, "今"));
+    const seen = run(s, 2, [view(s)]);
+    for (const v of seen) expect(v.part.source === "前" || v.part.layout.styled === true).toBe(true);
+    expect(view(s).part).toMatchObject({ source: "今", layout: { styled: true } });
+    expect(view(s).part.file.tiles.length).toBe(1);
+  });
+
+  test("中身が変わって確かめ直しているとき、打ち切りになったら、タイルに分けないと書けない SVG は前の絵のまま知らせ、1 枚で書ける SVG は <style> 要素を持つとみなす", () => {
+    const s = shownAt(extreme(), "前");
+    const next = content(`<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="10">${`<rect width="1" height="1"/>`.repeat(50_000)}</svg>`, "今");
+    s.change(next);
+    for (let i = 0; i < 10 && s.busy; i++) s.tick(100, () => 2);
+    expect(view(s)).toMatchObject({ kind: "picture", part: { source: "前" }, notices: [] });
+    let t = 10;
+    for (let i = 0; i < 5 && s.needsRun; i++) s.tick(100, () => (t += 10_001));
+    run(s, t);
+    expect(view(s)).toMatchObject({ kind: "picture", part: { source: "前" }, notices: [{ kind: "restyle-timeout" }] });
+    s.sync(next);
+    expect(s.busy || s.needsRun).toBe(false);
+
+    const u = shownAt(svg(8000, 800), "前");
+    u.change(content(long(8000, 800), "今"));
+    for (let i = 0; i < 10 && u.busy; i++) u.tick(100, () => 2);
+    t = 10;
+    for (let i = 0; i < 5 && u.needsRun && !u.busy; i++) u.tick(100, () => (t += 10_001));
+    run(u, t);
+    expect(view(u).part).toMatchObject({ source: "今", layout: { styled: true } });
+  });
 });
 
 describe("失敗したとき", () => {

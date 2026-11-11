@@ -42,6 +42,8 @@ const OUTSIDE = () => ({ inRender: false, over: null });
 // 区切りごとに 1 区間で確かめる（tick。区切りの間は呼ぶ側が入出力の await を挟む）。確かめ終えるまでは、タイルに分けない 1 枚で書いた
 // 絵を出す。確かめ終えたら、分かった有無で今の中身を準備し直す（書き終えて読み込むまで、出している絵のまま）。
 // 確かめにも準備の区間と同じ見張りと 10 秒の上限を当てる（区切りの前に slice の印を置く。watch）。上限を超えたら打ち切る（timedOut）。
+// 書いた絵を出している間に中身が変わり、新しい中身の確かめが要るときは、確かめてから準備し直し、書き終えて読み込むまで前の絵を出す
+// （確かめる間に、タイルに分けない 1 枚の絵や読み込み中を挟まない。仕様の「中身が変わったら確かめ直す」。deferred）。
 class SvgFileState extends MarkdownState {
   constructor(options) {
     super(options);
@@ -50,6 +52,8 @@ class SvgFileState extends MarkdownState {
     // 確かめている中身 { content, scanner, elapsed, last }。elapsed は確かめを動かした時間（区切りの時間と、区切りから戻らなかった
     // 時間。区切りの間は数えない: 確かめが要らなくなって止めている間もあるので）、last は今の区切りを始めた時刻。
     this.checking = null;
+    // 前の絵を出したまま、<style> 要素の確かめを待っている今の中身 { text, unchecked }（unchecked: タイルに分けないと書けない）。
+    this.deferred = null;
   }
 
   // 準備の見張りに加えて、<style> 要素の確かめの区切りから戻っていないか。
@@ -64,6 +68,7 @@ class SvgFileState extends MarkdownState {
 
   // 今の中身の <style> 要素を確かめる要があるか（ほかの準備や書き込みが無いときだけ）。
   get styleWanted() {
+    if (this.deferred) return !this.job && this.mode === "formatted" && this.deferred.text === this.text;
     const shown = this.shown;
     if (this.job || this.mode !== "formatted" || !shown || shown.fallback || shown.text !== this.text) return false;
     if (this.styledOf(this.text) !== null) return false;
@@ -78,8 +83,36 @@ class SvgFileState extends MarkdownState {
 
   // 中身が変わったら、前の中身の確かめを忘れる（中身は読むたびに別のものになり、前の中身はもう聞かれない。前の 6 MB の全文を持ち続けない）。
   change(text) {
-    if (text !== this.text) this.checked = this.checking = null;
+    if (text !== this.text) this.checked = this.checking = this.deferred = null;
     super.change(text);
+  }
+
+  // 前の絵を確かめを待って出している中身は、描画のたびに準備し直さない（確かめ終えたら checkedAs が準備する）。
+  sync(text) {
+    if (this.deferred?.text === text && text === this.text && !this.interrupted) return;
+    super.sync(text);
+  }
+
+  // 準備を終えて書く段に入った中身が <style> 要素の確かめを要し、書いた絵を出している（前の中身の）なら、書かずに確かめを待つ。
+  // 前の中身の準備の間にまた変わっていたら（pending）、その中身を準備する。
+  settle(job) {
+    if (!job.restyle && this.waitsForCheck(job)) {
+      this.job = null;
+      const next = this.pending;
+      this.pending = null;
+      if (next !== null && next !== job.text) this.begin(next, false);
+      else this.deferred = { text: job.text, unchecked: Boolean(job.parts[0].unchecked) };
+      return;
+    }
+    super.settle(job);
+  }
+
+  waitsForCheck(job) {
+    const shown = this.shown;
+    if (!shown || shown.fallback || !shown.files.some(Boolean) || shown.text === job.text) return false;
+    const part = job.parts[0];
+    if (part?.unchecked) return true;
+    return part?.layout?.styled === null && this.look !== null && svgStyleWanted(part.layout, this.look);
   }
 
   tick(budget, now) {
@@ -112,23 +145,25 @@ class SvgFileState extends MarkdownState {
     return true;
   }
 
-  // 確かめを 10 秒で打ち切った。出している部分がタイルに分けなければ描けない SVG（unchecked。確かめ終えるまで読み込み中）なら、
-  // 開くときの打ち切りと同じく、打ち切りを理由に開けない案内にする（出している部分は絵を持たないので代わりの整形表示になり、
-  // svgFileView が打ち切りの理由を出す）。タイルに分けない 1 枚で描けるなら、<style> 要素を持つとみなす（タイルに分けない側に倒す）。
+  // 確かめを 10 秒で打ち切った。確かめている中身がタイルに分けなければ描けない SVG（unchecked）なら、打ち切りを理由に失敗にする:
+  // 開くとき（確かめ終えるまで読み込み中）は、開くときの打ち切りと同じ開けない案内（出している部分は絵を持たないので代わりの
+  // 整形表示になり、svgFileView が打ち切りの理由を出す）。前の絵を出したまま確かめていたとき（deferred）は、前の絵のまま知らせる
+  // （fail の keepShown）。タイルに分けない 1 枚で描けるなら、<style> 要素を持つとみなす（タイルに分けない側に倒す）。
   timedOut() {
-    if (!this.shown?.parts[0]?.unchecked) {
+    const unchecked = this.deferred ? this.deferred.unchecked : this.shown?.parts[0]?.unchecked;
+    if (!unchecked) {
       this.checkedAs(true);
       return;
     }
     const { content } = this.checking;
-    this.checking = null;
+    this.checking = this.deferred = null;
     this.fail(content, { kind: "timeout" });
   }
 
   // 確かめている中身の <style> 要素の有無が決まった。その有無で今の中身を準備し直す。
   checkedAs(styled) {
     const { content } = this.checking;
-    this.checking = null;
+    this.checking = this.deferred = null;
     this.checked = { content, styled };
     this.begin(content, false);
   }
