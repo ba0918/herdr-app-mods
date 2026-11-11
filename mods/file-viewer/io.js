@@ -6,7 +6,6 @@ import { createHash, randomUUID } from "crypto";
 import * as fs from "fs/promises";
 import { TEXT_LIMIT, IMAGE_LIMIT } from "./lib/kind.js";
 import { splitForWrite } from "./lib/save.js";
-import { base64ToBytes } from "./lib/image.js";
 import { createDraftStore } from "./lib/draft-store.js";
 import { utf8Checker } from "./lib/utf8.js";
 
@@ -14,7 +13,8 @@ import { OLD_CACHE_DIR } from "./lib/pictures.js";
 import { IMAGES_DIR as SEATS_DIR, TINY_SVG } from "./lib/seats.js";
 
 export const DRAFTS_DIR = "file-viewer-drafts";
-// このコンピュータの大きなテキストを読むときの一時ファイルのフォルダ（app home の下。readLarge）。
+// 一時ファイルのフォルダ（app home の下）。このコンピュータの大きなテキストを読むとき（readLarge）と、ほかの machine の画像を絵の席に
+// 書くとき（writeBase64）に使う。
 const READ_DIR = "file-viewer-read";
 const HEADER_BYTES = 256 * 1024;
 
@@ -238,8 +238,9 @@ printf '%s\\n' "$h"; ${STAT.replace('"$1"', '"$real"')}`;
 
 // 画像を絵の席 seat にコピーする（image() は app home の相対パスしか出せない）。絵の席のファイルを作り直さずにその場で書く（すでにある
 // ファイルの書き換えはフォルダの変化の知らせを出さず、同じフォルダのほかの絵が空白にならない。ガイドの「フォルダの変化の知らせ」）。
-// このコンピュータのファイルは 1 回の PowerShell で読んで書き、ほかの machine のファイルは base64 で受け取って区切りながらバイト列に戻し、
-// fs.writeFile で書く（Uint8Array はそのまま書ける。ガイドの「fs/promises の writeFile」）。
+// このコンピュータのファイルは 1 回の PowerShell で読んで書く。ほかの machine のファイルは base64 で受け取り、文字列のまま app home の
+// 一時ファイルに書いて、PowerShell でバイト列に戻して絵の席に書く（0.1.15 の fs.writeFile は Uint8Array を渡すと 0 バイトのファイルを
+// 書く。ガイドの「fs/promises の writeFile」）。
 // { exists, size, base, cache: "mods/file-viewer-images/<seat>", header64: 先頭のバイトの base64 }。上限超えは cache なし。
 export async function copyImage(path, on, seat) {
   if (!on) {
@@ -258,24 +259,27 @@ export async function copyImage(path, on, seat) {
   const [[stat, hash], data] = splitHead(r.stdout, 2);
   const size = sizeOf(stat);
   if (size > IMAGE_LIMIT) return { exists: true, size };
-  await fs.writeFile(seatPath(seat), await decodeBase64(data, size));
+  await writeBase64(seat, data, size);
   return { exists: true, size, base: { hash, stat }, cache: `${SEATS_DIR}/${seat}`, header64: data.slice(0, Math.ceil(HEADER_BYTES / 3) * 4) };
 }
 
-// base64 の文字列を、区切りながら（区切りごとに入出力を待って）バイト列に戻す（QuickJS は長い同期処理を黙って止めるので。
-// ガイドの「長い同期処理」）。size: 戻したバイト数の見込み。
-const DECODE_CHARS = 256 * 1024;
-async function decodeBase64(text, size) {
-  let out = new Uint8Array(size);
-  let at = 0;
-  for (let i = 0; i < text.length; i += DECODE_CHARS) {
-    const part = base64ToBytes(text.slice(i, i + DECODE_CHARS));
-    if (at + part.length > out.length) { const grown = new Uint8Array(at + part.length); grown.set(out.subarray(0, at)); out = grown; }
-    out.set(part, at);
-    at += part.length;
-    await pauseForApp();
+// base64 の文字列 data を、バイト列に戻して絵の席 seat にその場で書く（作り直さない。copyImage）。文字列を app home の一時ファイル
+// （mods/ の外。mods/ の下にファイルを作ると、出している絵が一瞬空白になる）に書き、PowerShell で戻して書いてから一時ファイルを消す。
+// 戻したバイト数が size と違えば（読んだ途中で変わった・書けなかった）、読み込みの失敗にする。
+async function writeBase64(seat, data, size) {
+  const dir = `${appHome()}/${READ_DIR}`;
+  await fs.mkdir(dir, { recursive: true });
+  const temp = `${dir}/${randomUUID()}.b64`;
+  try {
+    await fs.writeFile(temp, data);
+    const r = await exec("powershell", ["-NoProfile", "-Command",
+      `$ErrorActionPreference='Stop'; $b=[Convert]::FromBase64String([IO.File]::ReadAllText(${psQuote(temp.replace(/\//g, "\\"))})); $f=[IO.File]::Open(${psQuote(seatPath(seat).replace(/\//g, "\\"))}, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write); try { $f.Write($b, 0, $b.Length); $f.SetLength($b.Length) } finally { $f.Close() }; "$($b.Length)"`]);
+    if (r.code !== 0) throw readFailure(r.stderr.trim() || "画像を写せなかった", size);
+    const written = Number(r.stdout.trim());
+    if (written !== size) throw readFailure(`画像を写せなかった（${size} バイトのうち ${written} バイト）`, size);
+  } finally {
+    await fs.unlink(temp).catch(() => {});
   }
-  return at === out.length ? out : out.slice(0, at);
 }
 
 // ---- 前の置き場所（app home 直下の file-viewer-cache/。片付けるだけ） ----
